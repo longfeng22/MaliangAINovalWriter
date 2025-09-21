@@ -322,25 +322,25 @@ class WebTheme {
   );
 
   static const TextStyle titleMedium = TextStyle(
-    fontSize: 16,
+    fontSize: 14, // 从16降低到14，适配1080p显示
     fontWeight: FontWeight.w500,
     letterSpacing: 0.15,
   );
 
   static const TextStyle titleSmall = TextStyle(
-    fontSize: 14,
+    fontSize: 12, // 从14降低到12，适配1080p显示
     fontWeight: FontWeight.w500,
     letterSpacing: 0.1,
   );
 
   static const TextStyle bodyLarge = TextStyle(
-    fontSize: 16,
+    fontSize: 14, // 从16降低到14，适配1080p显示
     fontWeight: FontWeight.w400,
     letterSpacing: 0.5,
   );
 
   static const TextStyle bodyMedium = TextStyle(
-    fontSize: 14,
+    fontSize: 12, // 从14降低到12，适配1080p显示
     fontWeight: FontWeight.w400,
     letterSpacing: 0.25,
   );
@@ -375,6 +375,7 @@ class WebTheme {
       return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
+      fontFamily: 'NotoSansSC',
       colorScheme: ColorScheme.light(
         brightness: Brightness.light,
         primary: p.primary,
@@ -527,6 +528,7 @@ class WebTheme {
       return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
+      fontFamily: 'NotoSansSC',
       colorScheme: ColorScheme.dark(
         brightness: Brightness.dark,
         primary: p.primary,

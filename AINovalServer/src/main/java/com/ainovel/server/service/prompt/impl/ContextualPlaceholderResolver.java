@@ -282,14 +282,41 @@ public class ContextualPlaceholderResolver implements ContentPlaceholderResolver
             enhancedParameters.put("excludedContentTypes", contextTracker.get().getProcessedContentTypes());
         }
         
-        // 获取过滤后的上下文数据
+        // 获取过滤后的上下文数据，并与请求中显式传入的context/previousChaptersContent合并
         return getFilteredContextData(enhancedParameters, userId, novelId)
-            .map(contextContent -> {
+            .map(filteredContext -> {
+                // 合并顺序：显式context → 过滤后的contextSelections上下文 → previousChaptersContent
+                String explicitContext = null;
+                Object ctxObj = parameters.get("context");
+                if (ctxObj instanceof String && !((String) ctxObj).isBlank()) {
+                    explicitContext = (String) ctxObj;
+                }
+
+                String previousChapters = null;
+                Object prevObj = parameters.get("previousChaptersContent");
+                if (prevObj instanceof String && !((String) prevObj).isBlank()) {
+                    previousChapters = (String) prevObj;
+                }
+
+                StringBuilder merged = new StringBuilder();
+                if (explicitContext != null) {
+                    merged.append(explicitContext.trim());
+                }
+                if (filteredContext != null && !filteredContext.isBlank()) {
+                    if (merged.length() > 0) merged.append("\n\n");
+                    merged.append(filteredContext.trim());
+                }
+                if (previousChapters != null) {
+                    if (merged.length() > 0) merged.append("\n\n");
+                    merged.append(previousChapters.trim());
+                }
+
+                String mergedContext = merged.toString();
                 String result = template;
                 for (String placeholder : placeholders) {
-                    result = result.replace("{{" + placeholder + "}}", contextContent);
+                    result = result.replace("{{" + placeholder + "}}", mergedContext);
                 }
-                log.info("✅ 上下文占位符处理完成，内容长度: {} 字符", contextContent.length());
+                log.info("✅ 上下文占位符处理完成，合并内容长度: {} 字符", mergedContext.length());
                 return result;
             });
     }

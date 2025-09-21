@@ -100,7 +100,6 @@ class _AIShimmerPlaceholderState extends State<AIShimmerPlaceholder>
         color: isDark 
             ? const Color(0xFF1F2937).withOpacity(0.3) 
             : const Color(0xFFF9FAFB).withOpacity(0.3),
-        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isDark 
               ? const Color(0xFF374151) 
@@ -119,7 +118,6 @@ class _AIShimmerPlaceholderState extends State<AIShimmerPlaceholder>
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
                   color: const Color(0xFF6366F1).withOpacity(_pulseAnimation.value),
-                  borderRadius: BorderRadius.circular(24),
                   boxShadow: [
                     BoxShadow(
                       color: const Color(0xFF6366F1).withOpacity(0.2),
@@ -193,7 +191,6 @@ class _AIShimmerPlaceholderState extends State<AIShimmerPlaceholder>
           margin: EdgeInsets.only(left: leftPadding),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
             gradient: LinearGradient(
               begin: Alignment.centerLeft,
               end: Alignment.centerRight,
@@ -217,7 +214,6 @@ class _AIShimmerPlaceholderState extends State<AIShimmerPlaceholder>
                 height: 16,
                 decoration: BoxDecoration(
                   color: (isDark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF)).withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
               const SizedBox(width: 12),
@@ -231,7 +227,6 @@ class _AIShimmerPlaceholderState extends State<AIShimmerPlaceholder>
                       width: double.infinity,
                       decoration: BoxDecoration(
                         color: (isDark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF)).withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(4),
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -240,7 +235,6 @@ class _AIShimmerPlaceholderState extends State<AIShimmerPlaceholder>
                       width: MediaQuery.of(context).size.width * 0.6,
                       decoration: BoxDecoration(
                         color: (isDark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF)).withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(4),
                       ),
                     ),
                   ],

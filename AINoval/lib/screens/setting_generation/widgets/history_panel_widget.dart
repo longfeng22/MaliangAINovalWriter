@@ -16,7 +16,6 @@ class HistoryPanelWidget extends StatelessWidget {
       elevation: 0,
       color: Theme.of(context).cardColor.withOpacity(0.5),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
         side: BorderSide(
           color: Theme.of(context).dividerColor,
           width: 1,
@@ -165,14 +164,12 @@ class HistoryPanelWidget extends StatelessWidget {
           );
         }
       },
-      borderRadius: BorderRadius.circular(8),
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: isActive
               ? WebTheme.getPrimaryColor(context).withOpacity(0.1)
               : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
           border: isActive
               ? Border.all(
                   color: WebTheme.getPrimaryColor(context).withOpacity(0.3),

@@ -768,7 +768,7 @@ public class NextOutlineServiceImpl implements NextOutlineService {
                                 .flatMap(updatedNovel -> {
                                     String newChapterId = updatedNovel.getStructure().getActs().get(0).getChapters().get(0).getId();
                                     if (request.isCreateNewScene()) {
-                                        return sceneService.addScene(novelId, newChapterId, outline.getTitle(), outline.getContent(), null)
+                                        return sceneService.addScene(novelId, newChapterId, outline.getTitle(), outline.getContent(), null, null)
                                                 .map(scene -> {
                                                     return NextOutlineDTO.SaveResponse.builder()
                                                             .success(true)
@@ -806,7 +806,7 @@ public class NextOutlineServiceImpl implements NextOutlineService {
                                     }
                                     final String chapterId = newChapterId;
                                     if (request.isCreateNewScene()) {
-                                        return sceneService.addScene(novelId, chapterId, outline.getTitle(), outline.getContent(), null)
+                                        return sceneService.addScene(novelId, chapterId, outline.getTitle(), outline.getContent(), null, null)
                                                 .map(scene -> {
                                                     return NextOutlineDTO.SaveResponse.builder()
                                                             .success(true)
@@ -843,7 +843,7 @@ public class NextOutlineServiceImpl implements NextOutlineService {
         if (request.getTargetChapterId() == null || request.getTargetChapterId().isEmpty()) {
             return Mono.error(new RuntimeException("目标章节ID不能为空"));
         }
-        return sceneService.addScene(novelId, request.getTargetChapterId(), outline.getTitle(), outline.getContent(), null)
+        return sceneService.addScene(novelId, request.getTargetChapterId(), outline.getTitle(), outline.getContent(), null, null)
                 .map(scene -> {
                     return NextOutlineDTO.SaveResponse.builder()
                             .success(true)
@@ -871,7 +871,7 @@ public class NextOutlineServiceImpl implements NextOutlineService {
         return sceneService.findSceneById(request.getTargetSceneId())
                 .flatMap(targetScene -> {
                     int targetPosition = targetScene.getSequence();
-                    return sceneService.addScene(novelId, targetScene.getChapterId(), outline.getTitle(), outline.getContent(), targetPosition)
+                    return sceneService.addScene(novelId, targetScene.getChapterId(), outline.getTitle(), outline.getContent(), null, targetPosition)
                             .map(scene -> {
                                 return NextOutlineDTO.SaveResponse.builder()
                                         .success(true)
@@ -901,7 +901,7 @@ public class NextOutlineServiceImpl implements NextOutlineService {
         return sceneService.findSceneById(request.getTargetSceneId())
                 .flatMap(targetScene -> {
                     int targetPosition = targetScene.getSequence() + 1;
-                    return sceneService.addScene(novelId, targetScene.getChapterId(), outline.getTitle(), outline.getContent(), targetPosition)
+                    return sceneService.addScene(novelId, targetScene.getChapterId(), outline.getTitle(), outline.getContent(), null, targetPosition)
                             .map(scene -> {
                                 return NextOutlineDTO.SaveResponse.builder()
                                         .success(true)

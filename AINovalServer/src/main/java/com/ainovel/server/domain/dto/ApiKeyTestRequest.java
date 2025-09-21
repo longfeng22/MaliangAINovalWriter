@@ -21,4 +21,9 @@ public class ApiKeyTestRequest {
      * API端点（可选）
      */
     private String apiEndpoint;
+    
+    /**
+     * 模型名称（可选，如果不提供则使用默认模型）
+     */
+    private String modelName;
 } 

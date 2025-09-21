@@ -161,10 +161,10 @@ class UniversalAIRequest {
         if (metadata.containsKey('publicModelId') && metadata['publicModelId'] != null) {
           json['publicModelId'] = metadata['publicModelId']; // 兼容旧字段
         }
-        print('🔧 [UniversalAIRequest.toApiJson] 公共模型请求 - 模型: ${modelConfig!.modelName}, 提供商: ${modelConfig!.provider}, 公共模型ID: ${metadata['publicModelId'] ?? metadata['publicModelConfigId']}');
+        //print('🔧 [UniversalAIRequest.toApiJson] 公共模型请求 - 模型: ${modelConfig!.modelName}, 提供商: ${modelConfig!.provider}, 公共模型ID: ${metadata['publicModelId'] ?? metadata['publicModelConfigId']}');
       } else {
         json['isPublicModel'] = false;
-        print('🔧 [UniversalAIRequest.toApiJson] 私有模型请求 - 模型: ${modelConfig!.modelName}, 提供商: ${modelConfig!.provider}, 配置ID: ${modelConfig!.id}');
+        //print('🔧 [UniversalAIRequest.toApiJson] 私有模型请求 - 模型: ${modelConfig!.modelName}, 提供商: ${modelConfig!.provider}, 配置ID: ${modelConfig!.id}');
       }
     }
 
@@ -181,12 +181,12 @@ class UniversalAIRequest {
       json['contextSelections'] = contextList;
       
       // 🚀 添加调试日志
-      print('🔧 [UniversalAIRequest.toApiJson] 添加上下文选择: ${contextList.length}个项目');
+      //print('🔧 [UniversalAIRequest.toApiJson] 添加上下文选择: ${contextList.length}个项目');
       for (var item in contextList) {
-        print('  - ${item['type']}:${item['id']} (${item['title']})');
+        //print('  - ${item['type']}:${item['id']} (${item['title']})');
       }
     } else {
-      print('🔧 [UniversalAIRequest.toApiJson] 没有上下文选择数据');
+      //print('🔧 [UniversalAIRequest.toApiJson] 没有上下文选择数据');
     }
 
     // 请求参数
@@ -211,7 +211,7 @@ class UniversalAIRequest {
     ContextSelectionData? contextSelections;
     if (json['contextSelections'] != null) {
       final contextList = json['contextSelections'] as List<dynamic>;
-      print('🔧 [UniversalAIRequest.fromJson] 解析contextSelections: ${contextList.length}个项目');
+      //print('🔧 [UniversalAIRequest.fromJson] 解析contextSelections: ${contextList.length}个项目');
       
       // 🚀 新增：检查是否需要过滤预设模板上下文
       final isPresetTemplate = json['metadata']?['isPresetTemplate'] == true || 
@@ -219,7 +219,7 @@ class UniversalAIRequest {
                                contextList.any((item) => item['metadata']?['isHardcoded'] == true);
       
       if (isPresetTemplate) {
-        print('🔧 [UniversalAIRequest.fromJson] 检测到预设模板，启用上下文过滤');
+        //print('🔧 [UniversalAIRequest.fromJson] 检测到预设模板，启用上下文过滤');
       }
       
       // 将已选择的项目转换为ContextSelectionItem，并标记为已选择
@@ -232,7 +232,7 @@ class UniversalAIRequest {
         
         // 🚀 预设模板上下文过滤：只保留硬编码的上下文类型
         if (isPresetTemplate && !_isHardcodedContextType(contextType)) {
-          print('  🚫 过滤掉非硬编码上下文: $contextType');
+          //print('  🚫 过滤掉非硬编码上下文: $contextType');
           continue;
         }
         
@@ -252,7 +252,7 @@ class UniversalAIRequest {
         availableItems.add(item);
         flatItems[item.id] = item;
         
-        print('  ✅ ${item.type.displayName}:${item.id} (${item.title})');
+        //print('  ✅ ${item.type.displayName}:${item.id} (${item.title})');
       }
       
       // 创建ContextSelectionData，包含选择状态
@@ -264,9 +264,9 @@ class UniversalAIRequest {
       );
       
       if (isPresetTemplate) {
-        print('🔧 [UniversalAIRequest.fromJson] 预设模板上下文过滤完成: ${contextSelections.selectedCount}个硬编码项目');
+        //print('🔧 [UniversalAIRequest.fromJson] 预设模板上下文过滤完成: ${contextSelections.selectedCount}个硬编码项目');
       } else {
-        print('🔧 [UniversalAIRequest.fromJson] 创建ContextSelectionData: ${contextSelections.selectedCount}个已选择项目');
+        //print('🔧 [UniversalAIRequest.fromJson] 创建ContextSelectionData: ${contextSelections.selectedCount}个已选择项目');
       }
     }
 

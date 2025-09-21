@@ -124,8 +124,10 @@ class DropdownManager {
     required String configId,
     required bool isValidated,
     required bool isDefault,
+    required bool isToolDefault,
     required Future<void> Function(String) onValidate,
     required Future<void> Function(String) onSetDefault,
+    required Future<void> Function(String) onSetToolDefault,
     required Future<void> Function(String) onEdit,
     required Future<void> Function(String) onDelete,
     IconData? icon,
@@ -134,8 +136,10 @@ class DropdownManager {
     final menuItems = ModelMenuDefinitions.getMenuItems(
       isValidated: isValidated,
       isDefault: isDefault,
+      isToolDefault: isToolDefault,
       onValidate: onValidate,
       onSetDefault: onSetDefault,
+      onSetToolDefault: onSetToolDefault,
       onEdit: onEdit,
       onDelete: onDelete,
     );

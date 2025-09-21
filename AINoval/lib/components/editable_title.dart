@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:ainoval/utils/logger.dart';
 
 class Debouncer {
 
@@ -50,6 +51,7 @@ class _EditableTitleState extends State<EditableTitle> {
   late Debouncer _debouncer;
   late FocusNode _focusNode;
   String _lastCommittedText = '';
+  bool _isCommitting = false; // 🚀 新增：标记是否正在提交
 
   @override
   void initState() {
@@ -61,6 +63,7 @@ class _EditableTitleState extends State<EditableTitle> {
 
     _focusNode.addListener(() {
       if (!_focusNode.hasFocus && widget.commitOnBlur) {
+        AppLogger.i('EditableTitle', '📤 失焦触发提交');
         _commitIfChanged();
       }
     });
@@ -70,9 +73,21 @@ class _EditableTitleState extends State<EditableTitle> {
   void didUpdateWidget(EditableTitle oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.initialText != widget.initialText) {
-      _controller.text = widget.initialText;
-      // 外部更新时同步已提交文本基线
-      _lastCommittedText = widget.initialText;
+      AppLogger.i('EditableTitle', 
+          '外部更新: "${oldWidget.initialText}" -> "${widget.initialText}", '
+          '当前输入: "${_controller.text}", 有焦点: ${_focusNode.hasFocus}, 提交中: $_isCommitting');
+          
+      // 🚀 修复：如果用户正在编辑或正在提交，不要覆盖用户的输入
+      if (_focusNode.hasFocus || _isCommitting) {
+        // 用户正在编辑或提交中，不更新文本内容，但更新基线用于后续比较
+        _lastCommittedText = widget.initialText;
+        AppLogger.i('EditableTitle', '保护用户输入，仅更新基线');
+      } else {
+        // 用户没有焦点且未在提交，可以安全更新
+        _controller.text = widget.initialText;
+        _lastCommittedText = widget.initialText;
+        AppLogger.i('EditableTitle', '安全更新文本内容');
+      }
     }
   }
 
@@ -86,11 +101,29 @@ class _EditableTitleState extends State<EditableTitle> {
 
   void _commitIfChanged() {
     final current = _controller.text;
+    AppLogger.i('EditableTitle', 
+        '尝试提交: 当前文本="$current", 上次提交="$_lastCommittedText"');
+        
     if (current != _lastCommittedText) {
+      AppLogger.i('EditableTitle', '✅ 检测到变化，开始提交');
+      // 🚀 修复：标记正在提交，防止在提交期间被外部更新覆盖
+      _isCommitting = true;
       _lastCommittedText = current;
+      
       if (widget.onSubmitted != null) {
+        AppLogger.i('EditableTitle', '📤 调用onSubmitted回调: "$current"');
         widget.onSubmitted!(current);
       }
+      
+      // 🚀 延迟清除提交标记，给外部更新一些时间
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) {
+          _isCommitting = false;
+          AppLogger.i('EditableTitle', '🏁 提交完成，清除标记');
+        }
+      });
+    } else {
+      AppLogger.i('EditableTitle', '⏭️ 无变化，跳过提交');
     }
   }
 
@@ -119,6 +152,7 @@ class _EditableTitleState extends State<EditableTitle> {
         },
         // 按下回车时提交
         onSubmitted: (_) {
+          AppLogger.i('EditableTitle', '⌨️ 回车触发提交');
           _commitIfChanged();
         },
       ),

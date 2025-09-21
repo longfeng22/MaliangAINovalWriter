@@ -19,6 +19,8 @@ import 'package:ainoval/widgets/analytics/analytics_card.dart';
 import 'package:ainoval/widgets/analytics/model_usage_chart.dart';
 import 'package:ainoval/models/analytics_data.dart';
 import 'package:ainoval/models/admin/llm_observability_models.dart';
+import 'package:ainoval/services/api_service/repositories/impl/admin_repository_impl.dart';
+import 'package:ainoval/models/admin/admin_models.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -561,8 +563,98 @@ class AdminSubscriptionScreen extends StatelessWidget {
 }
 
 /// 占位页面 - 系统设置
-class AdminSystemSettingsScreen extends StatelessWidget {
+class AdminSystemSettingsScreen extends StatefulWidget {
   const AdminSystemSettingsScreen({super.key});
+
+  @override
+  State<AdminSystemSettingsScreen> createState() => _AdminSystemSettingsScreenState();
+}
+
+class _AdminSystemSettingsScreenState extends State<AdminSystemSettingsScreen> {
+  final _sinceTimeCtrl = TextEditingController();
+  final _sinceHoursCtrl = TextEditingController();
+  final _repo = AdminRepositoryImpl();
+  bool _loading = false;
+  String? _error;
+  List<AdminSystemConfig> _configs = const [];
+
+  static const String kSinceTime = 'BILLING_PROCESS_SINCE_TIME';
+  static const String kSinceHours = 'BILLING_PROCESS_SINCE_HOURS';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final list = await _repo.getSystemConfigs();
+      setState(() {
+        _configs = list;
+        _sinceTimeCtrl.text = _getValue(kSinceTime) ?? '';
+        _sinceHoursCtrl.text = _getValue(kSinceHours) ?? '';
+      });
+    } catch (e) {
+      setState(() { _error = e.toString(); });
+    } finally {
+      if (mounted) setState(() { _loading = false; });
+    }
+  }
+
+  String? _getValue(String key) {
+    for (final c in _configs) {
+      if (c.configKey == key) return c.configValue;
+    }
+    return null;
+  }
+
+  Future<void> _saveSinceTime() async {
+    final v = _sinceTimeCtrl.text.trim();
+    setState(() { _loading = true; _error = null; });
+    try {
+      await _repo.updateSystemConfig(kSinceTime, v);
+      await _load();
+      if (mounted) _showSnack('已保存开始时间');
+    } catch (e) {
+      setState(() { _error = e.toString(); });
+    } finally {
+      if (mounted) setState(() { _loading = false; });
+    }
+  }
+
+  Future<void> _clearSinceTime() async {
+    _sinceTimeCtrl.clear();
+    await _saveSinceTime();
+  }
+
+  Future<void> _saveSinceHours() async {
+    final v = _sinceHoursCtrl.text.trim();
+    if (v.isNotEmpty && int.tryParse(v) == null) {
+      _showSnack('请输入有效的整数小时数');
+      return;
+    }
+    setState(() { _loading = true; _error = null; });
+    try {
+      await _repo.updateSystemConfig(kSinceHours, v);
+      await _load();
+      if (mounted) _showSnack('已保存最近N小时');
+    } catch (e) {
+      setState(() { _error = e.toString(); });
+    } finally {
+      if (mounted) setState(() { _loading = false; });
+    }
+  }
+
+  Future<void> _clearSinceHours() async {
+    _sinceHoursCtrl.clear();
+    await _saveSinceHours();
+  }
+
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -571,37 +663,92 @@ class AdminSystemSettingsScreen extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: WebTheme.getBackgroundColor(context),
         foregroundColor: WebTheme.getTextColor(context),
-        title: Text(
-          '系统配置',
-          style: TextStyle(color: WebTheme.getTextColor(context)),
-        ),
+        title: Text('系统配置', style: TextStyle(color: WebTheme.getTextColor(context))),
         elevation: 0,
+        actions: [
+          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
+        ],
       ),
-      body: Center(
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1100),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text('加载失败: $_error', style: TextStyle(color: Colors.red[300])),
+                        ),
+                      _buildBillingWindowCard(context),
+                    ],
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBillingWindowCard(BuildContext context) {
+    return Card(
+      color: WebTheme.getCardColor(context),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              Icons.settings_outlined,
-              size: 64,
-              color: WebTheme.getSecondaryTextColor(context),
+            Text('计费处理窗口', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: WebTheme.getTextColor(context))),
+            const SizedBox(height: 12),
+            Text(
+              '优先使用“开始时间(ISO-8601)”；否则使用“最近N小时”。两项都为空表示不限范围。',
+              style: TextStyle(color: WebTheme.getSecondaryTextColor(context)),
             ),
             const SizedBox(height: 16),
-            Text(
-              '系统配置页面',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: WebTheme.getTextColor(context),
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _sinceTimeCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '开始时间(ISO-8601)',
+                      hintText: '例如: 2025-09-17T00:00:00',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ElevatedButton.icon(onPressed: _saveSinceTime, icon: const Icon(Icons.save), label: const Text('保存')),
+                const SizedBox(width: 8),
+                TextButton(onPressed: _clearSinceTime, child: const Text('清空')),
+              ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              '此功能正在开发中...',
-              style: TextStyle(
-                fontSize: 16,
-                color: WebTheme.getSecondaryTextColor(context),
-              ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: TextField(
+                    controller: _sinceHoursCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '最近N小时',
+                      hintText: '整数，例如: 24',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ElevatedButton.icon(onPressed: _saveSinceHours, icon: const Icon(Icons.save), label: const Text('保存')),
+                const SizedBox(width: 8),
+                TextButton(onPressed: _clearSinceHours, child: const Text('清空')),
+              ],
             ),
           ],
         ),

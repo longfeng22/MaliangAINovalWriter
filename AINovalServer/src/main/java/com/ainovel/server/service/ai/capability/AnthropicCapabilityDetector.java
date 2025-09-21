@@ -36,44 +36,84 @@ public class AnthropicCapabilityDetector implements ProviderCapabilityDetector {
 
     @Override
     public Flux<ModelInfo> getDefaultModels() {
-        // 返回默认的Anthropic模型列表
+        // 返回默认的Anthropic模型列表（基于2025年1月最新价格）
         List<ModelInfo> models = new ArrayList<>();
 
+        // Latest Models
         models.add(ModelInfo.builder()
-            .id("claude-3-opus-20240229")
-            .name("Claude 3 Opus")
-            .description("最强大的Claude模型，适用于高度复杂的任务")
+            .id("claude-4.1-opus")
+            .name("Opus 4.1")
+            .description("最智能的模型，适合复杂任务")
             .maxTokens(200000)
             .provider("anthropic")
             .build()
-            .withUnifiedPrice(15.0)); // $15.0 per 1000 tokens
+            .withProperty("supports_prompt_caching", true)
+            .withProperty("tags", List.of("最新", "智能", "复杂任务"))
+            .withInputPrice(15.0)
+            .withOutputPrice(75.0));
 
         models.add(ModelInfo.builder()
-            .id("claude-3-sonnet-20240229")
-            .name("Claude 3 Sonnet")
-            .description("Claude 3 家族中的中等性能模型，在能力和速度之间有良好平衡")
+            .id("claude-4-sonnet")
+            .name("Sonnet 4")
+            .description("智能、成本和速度的最优平衡")
             .maxTokens(200000)
             .provider("anthropic")
             .build()
-            .withUnifiedPrice(3.0)); // $3.0 per 1000 tokens
+            .withProperty("supports_prompt_caching", true)
+            .withProperty("tiered_pricing", true)
+            .withProperty("tier_threshold", 200000)
+            .withProperty("tags", List.of("最新", "平衡", "分层定价"))
+            .withInputPrice(3.0)
+            .withOutputPrice(15.0));
+
+        models.add(ModelInfo.builder()
+            .id("claude-3.5-haiku")
+            .name("Haiku 3.5")
+            .description("最快、最经济高效的模型")
+            .maxTokens(200000)
+            .provider("anthropic")
+            .build()
+            .withProperty("supports_prompt_caching", true)
+            .withProperty("tags", List.of("最新", "快速", "经济"))
+            .withInputPrice(0.80)
+            .withOutputPrice(4.0));
+
+        // Legacy Models
+        models.add(ModelInfo.builder()
+            .id("claude-3-opus-20240229")
+            .name("Opus 3")
+            .description("Claude 3 Opus遗留模型")
+            .maxTokens(200000)
+            .provider("anthropic")
+            .build()
+            .withProperty("supports_prompt_caching", true)
+            .withProperty("tags", List.of("遗留", "智能"))
+            .withInputPrice(15.0)
+            .withOutputPrice(75.0));
+
+        models.add(ModelInfo.builder()
+            .id("claude-3.7-sonnet")
+            .name("Sonnet 3.7")
+            .description("Claude 3.7 Sonnet遗留模型")
+            .maxTokens(200000)
+            .provider("anthropic")
+            .build()
+            .withProperty("supports_prompt_caching", true)
+            .withProperty("tags", List.of("遗留", "平衡"))
+            .withInputPrice(3.0)
+            .withOutputPrice(15.0));
 
         models.add(ModelInfo.builder()
             .id("claude-3-haiku-20240307")
-            .name("Claude 3 Haiku")
-            .description("最快速且经济实惠的Claude 3模型，适合简单任务")
+            .name("Haiku 3")
+            .description("Claude 3 Haiku遗留模型")
             .maxTokens(200000)
             .provider("anthropic")
             .build()
-            .withUnifiedPrice(0.25)); // $0.25 per 1000 tokens
-
-        models.add(ModelInfo.builder()
-            .id("claude-2.1")
-            .name("Claude 2.1")
-            .description("Claude 2的增强版本，具有改进的指令跟随和安全性")
-            .maxTokens(100000)
-            .provider("anthropic")
-            .build()
-            .withUnifiedPrice(8.0)); // $8.0 per 1000 tokens
+            .withProperty("supports_prompt_caching", true)
+            .withProperty("tags", List.of("遗留", "快速"))
+            .withInputPrice(0.25)
+            .withOutputPrice(1.25));
 
         return Flux.fromIterable(models);
     }

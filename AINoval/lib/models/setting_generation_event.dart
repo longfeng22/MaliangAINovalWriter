@@ -14,7 +14,25 @@ abstract class SettingGenerationEvent {
   });
 
   factory SettingGenerationEvent.fromJson(Map<String, dynamic> json) {
-    final eventType = json['eventType'] as String;
+    // 兼容后端 complete 事件的结束信号（无 eventType，但含 isComplete/finishReason）
+    final dynamic rawType = json['eventType'];
+    final String? eventType = rawType is String && rawType.isNotEmpty ? rawType : null;
+    if (eventType == null) {
+      final bool isComplete = (json['isComplete'] == true);
+      final bool hasFinishReason = json['finishReason'] != null && json['finishReason'].toString().isNotEmpty;
+      if (isComplete || hasFinishReason) {
+        // 构造一个完成事件用于驱动前端状态收尾
+        return GenerationCompletedEvent(
+          sessionId: (json['sessionId'] as String?) ?? 'unknown-session',
+          timestamp: DateTime.now(),
+          stage: 'completed',
+          message: '流式生成完成',
+          resultSummary: null,
+          affectedNodeIds: null,
+        );
+      }
+      throw ArgumentError('Unknown event type: null');
+    }
     
     switch (eventType) {
       case 'SESSION_STARTED':

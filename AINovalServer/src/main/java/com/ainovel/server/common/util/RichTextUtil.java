@@ -106,8 +106,8 @@ public class RichTextUtil {
                 return stripHtml(trimmedJson);
             }
 
-            log.debug("Input is not Delta JSON or HTML, returning as is. Input snippet: {}", 
-                      trimmedJson.substring(0, Math.min(trimmedJson.length(), 200)));
+//            log.debug("Input is not Delta JSON or HTML, returning as is. Input snippet: {}",
+//                      trimmedJson.substring(0, Math.min(trimmedJson.length(), 200)));
             return trimmedJson; // Assume plain text or unprocessable format
 
         } catch (Exception e) { // Catch any other unexpected exceptions during processing

@@ -28,32 +28,37 @@ public class AnthropicTokenPricingCalculator extends AbstractTokenPricingCalcula
     
     /**
      * 获取Anthropic模型的默认定价信息
-     * 基于官网公布的价格信息
+     * 基于2025年1月最新官方价格
      * 
      * @return 默认定价信息列表
      */
     public Mono<List<ModelPricing>> getDefaultAnthropicPricing() {
         List<ModelPricing> defaultPricing = List.of(
-                createDefaultPricing("claude-3-haiku-20240307", "Claude 3 Haiku", 
-                        0.00025, 0.00125, 200000, "最快且最经济的Claude 3模型"),
+                // Latest Models
+                createDefaultPricingWithCaching("claude-4.1-opus", "Opus 4.1", 
+                        15.0, 75.0, 200000, "最智能的模型，适合复杂任务",
+                        18.75, 1.50), // Prompt caching prices
                 
-                createDefaultPricing("claude-3-sonnet-20240229", "Claude 3 Sonnet", 
-                        0.003, 0.015, 200000, "智能与速度的平衡，适合企业工作负载"),
+                createDefaultPricingWithTieredCaching("claude-4-sonnet", "Sonnet 4", 
+                        3.0, 15.0, 6.0, 22.50, 200000, "智能、成本和速度的最优平衡",
+                        3.75, 0.30, 7.50, 0.60), // Tiered prompt caching
                 
-                createDefaultPricing("claude-3-opus-20240229", "Claude 3 Opus", 
-                        0.015, 0.075, 200000, "最强大的Claude 3模型，适合复杂任务"),
+                createDefaultPricingWithCaching("claude-3.5-haiku", "Haiku 3.5", 
+                        0.80, 4.0, 200000, "最快、最经济高效的模型",
+                        1.0, 0.08), // Prompt caching prices
                 
-                createDefaultPricing("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", 
-                        0.003, 0.015, 200000, "升级版Sonnet，提供更强的性能"),
+                // Legacy Models
+                createDefaultPricingWithCaching("claude-3-opus-20240229", "Opus 3", 
+                        15.0, 75.0, 200000, "Claude 3 Opus遗留模型",
+                        18.75, 1.50),
                 
-                createDefaultPricing("claude-2.1", "Claude 2.1", 
-                        0.008, 0.024, 200000, "Claude 2.1模型"),
+                createDefaultPricingWithCaching("claude-3.7-sonnet", "Sonnet 3.7", 
+                        3.0, 15.0, 200000, "Claude 3.7 Sonnet遗留模型",
+                        3.75, 0.30),
                 
-                createDefaultPricing("claude-2.0", "Claude 2.0", 
-                        0.008, 0.024, 100000, "Claude 2.0模型"),
-                
-                createDefaultPricing("claude-instant-1.2", "Claude Instant 1.2", 
-                        0.0008, 0.0024, 100000, "快速响应的Claude Instant模型")
+                createDefaultPricingWithCaching("claude-3-haiku-20240307", "Haiku 3", 
+                        0.25, 1.25, 200000, "Claude 3 Haiku遗留模型",
+                        0.30, 0.03)
         );
         
         return Mono.just(defaultPricing);
@@ -61,14 +66,6 @@ public class AnthropicTokenPricingCalculator extends AbstractTokenPricingCalcula
     
     /**
      * 创建默认定价信息
-     * 
-     * @param modelId 模型ID
-     * @param modelName 模型名称
-     * @param inputPrice 输入价格（每1000个token）
-     * @param outputPrice 输出价格（每1000个token）
-     * @param maxTokens 最大token数
-     * @param description 描述
-     * @return 定价信息
      */
     private ModelPricing createDefaultPricing(String modelId, String modelName, 
                                             double inputPrice, double outputPrice, 
@@ -88,6 +85,56 @@ public class AnthropicTokenPricingCalculator extends AbstractTokenPricingCalcula
                 .version(1)
                 .active(true)
                 .build();
+    }
+    
+    /**
+     * 创建带Prompt Caching的定价信息
+     */
+    private ModelPricing createDefaultPricingWithCaching(String modelId, String modelName, 
+                                                       double inputPrice, double outputPrice, 
+                                                       int maxTokens, String description,
+                                                       double cacheWritePrice, double cacheReadPrice) {
+        ModelPricing pricing = createDefaultPricing(modelId, modelName, inputPrice, outputPrice, maxTokens, description);
+        
+        // 添加Prompt Caching价格信息（确保map非空）
+        if (pricing.getAdditionalPricing() == null) {
+            pricing.setAdditionalPricing(new java.util.HashMap<>());
+        }
+        pricing.getAdditionalPricing().put("prompt_cache_write", cacheWritePrice);
+        pricing.getAdditionalPricing().put("prompt_cache_read", cacheReadPrice);
+        pricing.getAdditionalPricing().put("supports_prompt_caching", 1.0); // Use 1.0 for true
+        
+        return pricing;
+    }
+    
+    /**
+     * 创建分层定价信息（Sonnet 4）
+     */
+    private ModelPricing createDefaultPricingWithTieredCaching(String modelId, String modelName,
+                                                             double inputPriceSmall, double outputPriceSmall,
+                                                             double inputPriceLarge, double outputPriceLarge,
+                                                             int maxTokens, String description,
+                                                             double cacheWriteSmall, double cacheReadSmall,
+                                                             double cacheWriteLarge, double cacheReadLarge) {
+        ModelPricing pricing = createDefaultPricing(modelId, modelName, inputPriceSmall, outputPriceSmall, maxTokens, description);
+        
+        // 添加分层定价信息（确保map非空）
+        if (pricing.getAdditionalPricing() == null) {
+            pricing.setAdditionalPricing(new java.util.HashMap<>());
+        }
+        pricing.getAdditionalPricing().put("tiered_pricing", 1.0); // Use 1.0 for true
+        pricing.getAdditionalPricing().put("input_price_large", inputPriceLarge);
+        pricing.getAdditionalPricing().put("output_price_large", outputPriceLarge);
+        pricing.getAdditionalPricing().put("tier_threshold", 200000.0); // 200K tokens as double
+        
+        // Prompt Caching价格
+        pricing.getAdditionalPricing().put("cache_write_small", cacheWriteSmall);
+        pricing.getAdditionalPricing().put("cache_read_small", cacheReadSmall);
+        pricing.getAdditionalPricing().put("cache_write_large", cacheWriteLarge);
+        pricing.getAdditionalPricing().put("cache_read_large", cacheReadLarge);
+        pricing.getAdditionalPricing().put("supports_prompt_caching", 1.0); // Use 1.0 for true
+        
+        return pricing;
     }
     
     /**
@@ -133,9 +180,6 @@ public class AnthropicTokenPricingCalculator extends AbstractTokenPricingCalcula
     
     /**
      * 获取模型类型（Haiku, Sonnet, Opus等）
-     * 
-     * @param modelId 模型ID
-     * @return 模型类型
      */
     public String getModelType(String modelId) {
         if (modelId.contains("haiku")) {
@@ -154,10 +198,22 @@ public class AnthropicTokenPricingCalculator extends AbstractTokenPricingCalcula
     }
     
     /**
+     * 检查模型是否支持Prompt Caching
+     */
+    public boolean supportsPromptCaching(String modelId) {
+        // 所有新模型都支持Prompt Caching
+        return !modelId.contains("claude-2") && !modelId.contains("instant");
+    }
+    
+    /**
+     * 检查模型是否使用分层定价
+     */
+    public boolean usesTieredPricing(String modelId) {
+        return modelId.contains("claude-4-sonnet");
+    }
+    
+    /**
      * 获取模型的建议用途
-     * 
-     * @param modelId 模型ID
-     * @return 建议用途
      */
     public String getModelRecommendation(String modelId) {
         String type = getModelType(modelId);
@@ -169,5 +225,29 @@ public class AnthropicTokenPricingCalculator extends AbstractTokenPricingCalcula
             case "claude-2" -> "通用型模型，适合各种文本任务";
             default -> "通用AI助手模型";
         };
+    }
+    
+    /**
+     * 计算Prompt Caching成本
+     */
+    public Mono<Double> calculatePromptCachingCost(String modelId, int cacheWriteTokens, int cacheReadTokens) {
+        return getDefaultAnthropicPricing()
+                .flatMapMany(reactor.core.publisher.Flux::fromIterable)
+                .filter(pricing -> pricing.getModelId().equals(modelId))
+                .next()
+                .map(pricing -> {
+                    Double writePrice = (Double) pricing.getAdditionalPricing().get("prompt_cache_write");
+                    Double readPrice = (Double) pricing.getAdditionalPricing().get("prompt_cache_read");
+                    
+                    if (writePrice == null || readPrice == null) {
+                        return 0.0;
+                    }
+                    
+                    double writeCost = (cacheWriteTokens / 1000.0) * writePrice;
+                    double readCost = (cacheReadTokens / 1000.0) * readPrice;
+                    
+                    return writeCost + readCost;
+                })
+                .defaultIfEmpty(0.0);
     }
 }

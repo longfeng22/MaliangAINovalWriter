@@ -31,15 +31,13 @@ public class ContinueWritingContentParameters {
     private Integer numberOfChapters;
     
     /**
-     * 摘要生成用的AI配置ID
+     * 摘要生成用的AI配置ID（当使用公共模型时可为空）
      */
-    @NotBlank(message = "摘要AI配置ID不能为空")
     private String aiConfigIdSummary;
     
     /**
-     * 内容生成用的AI配置ID
+     * 内容生成用的AI配置ID（当使用公共模型时可为空）
      */
-    @NotBlank(message = "内容AI配置ID不能为空")
     private String aiConfigIdContent;
     
     /**
@@ -48,6 +46,7 @@ public class ContinueWritingContentParameters {
      * LAST_N_CHAPTERS: 需配合contextChapterCount
      * CUSTOM: 需配合customContext
      */
+    @Builder.Default
     private String startContextMode = "AUTO";
     
     /**
@@ -68,7 +67,45 @@ public class ContinueWritingContentParameters {
     /**
      * 是否需要在生成摘要后暂停，等待用户评审
      */
+    @Builder.Default
     private boolean requiresReview = false;
 
+    @Builder.Default
     private boolean persistChanges = true;
+
+    /**
+     * （可选）用于摘要生成阶段的提示词模板ID
+     */
+    private String summaryPromptTemplateId;
+
+    /**
+     * （可选）用于场景生成阶段（SUMMARY_TO_SCENE）的提示词模板ID
+     */
+    private String contentPromptTemplateId;
+
+    /**
+     * （可选）公共模型配置ID：摘要阶段
+     */
+    private String summaryPublicModelConfigId;
+
+    /**
+     * （可选）公共模型配置ID：内容阶段
+     */
+    private String contentPublicModelConfigId;
+
+    /**
+     * 验证模型配置的有效性
+     * 规则：对于摘要和内容阶段，要么有私人模型配置ID，要么有公共模型配置ID，不能两者都为空
+     */
+    public void validate() {
+        if ((aiConfigIdSummary == null || aiConfigIdSummary.isBlank()) && 
+            (summaryPublicModelConfigId == null || summaryPublicModelConfigId.isBlank())) {
+            throw new IllegalArgumentException("摘要阶段必须选择私人模型或公共模型");
+        }
+        
+        if ((aiConfigIdContent == null || aiConfigIdContent.isBlank()) && 
+            (contentPublicModelConfigId == null || contentPublicModelConfigId.isBlank())) {
+            throw new IllegalArgumentException("内容阶段必须选择私人模型或公共模型");
+        }
+    }
 } 

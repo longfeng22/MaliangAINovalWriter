@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:ainoval/models/editor_content.dart';
-import 'package:ainoval/models/editor_settings.dart';
 import 'package:ainoval/models/novel_structure.dart';
 import 'package:ainoval/models/chapters_for_preload_dto.dart';
 import 'package:ainoval/services/local_storage_service.dart';
@@ -139,6 +138,8 @@ abstract class EditorRepository {
   /// [contextChapterCount] 上下文章节数，仅当startContextMode为LAST_N_CHAPTERS时有效
   /// [customContext] 自定义上下文，仅当startContextMode为CUSTOM时有效
   /// [writingStyle] 写作风格提示，可选
+  /// [summaryPublicModelConfigId] 摘要阶段公共模型配置ID（可选）
+  /// [contentPublicModelConfigId] 内容阶段公共模型配置ID（可选）
   /// 
   /// 返回提交的任务ID
   Future<String> submitContinueWritingTask({
@@ -150,6 +151,12 @@ abstract class EditorRepository {
     int? contextChapterCount,
     String? customContext,
     String? writingStyle,
+    bool? requiresReview,
+    bool? persistChanges,
+    String? summaryPromptTemplateId,
+    String? contentPromptTemplateId,
+    String? summaryPublicModelConfigId,
+    String? contentPublicModelConfigId,
   });
 
   /// 删除场景
@@ -201,8 +208,12 @@ abstract class EditorRepository {
   /// 细粒度添加章节 - 只提供必要信息
   Future<Chapter> addChapterFine(String novelId, String actId, String title, {String? description});
   
+  /// 原子化添加章节和场景 - 在一个事务中同时创建章节和场景，避免数据不一致
+  Future<Map<String, dynamic>> addChapterWithScene(String novelId, String actId, 
+      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent});
+  
   /// 细粒度添加场景 - 只提供必要信息
-  Future<Scene> addSceneFine(String novelId, String chapterId, String title, {String? summary, int? position});
+  Future<Scene> addSceneFine(String novelId, String chapterId, String title, {String? summary, String? content, int? position});
   
   /// 细粒度批量添加场景 - 一次添加多个场景到同一章节
   Future<List<Scene>> addScenesBatchFine(String novelId, String chapterId, List<Map<String, dynamic>> scenes);

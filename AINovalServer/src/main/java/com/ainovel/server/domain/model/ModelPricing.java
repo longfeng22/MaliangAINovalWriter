@@ -76,7 +76,8 @@ public class ModelPricing {
     /**
      * 额外的定价信息（如训练价格、批处理价格等）
      */
-    private Map<String, Double> additionalPricing;
+    @Builder.Default
+    private Map<String, Double> additionalPricing = new java.util.HashMap<>();
     
     /**
      * 定价数据来源

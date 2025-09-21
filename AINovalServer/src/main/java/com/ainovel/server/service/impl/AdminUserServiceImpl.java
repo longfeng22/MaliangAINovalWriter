@@ -4,8 +4,14 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.ainovel.server.controller.AdminUserController.UserStatistics;
@@ -14,6 +20,7 @@ import com.ainovel.server.domain.model.User;
 import com.ainovel.server.domain.model.User.AccountStatus;
 import com.ainovel.server.repository.UserRepository;
 import com.ainovel.server.service.AdminUserService;
+import com.ainovel.server.common.response.PagedResponse;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -25,10 +32,14 @@ import reactor.core.publisher.Mono;
 public class AdminUserServiceImpl implements AdminUserService {
     
     private final UserRepository userRepository;
+    private final ReactiveMongoTemplate mongoTemplate;
+    private final PasswordEncoder passwordEncoder;
     
     @Autowired
-    public AdminUserServiceImpl(UserRepository userRepository) {
+    public AdminUserServiceImpl(UserRepository userRepository, ReactiveMongoTemplate mongoTemplate, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
+        this.mongoTemplate = mongoTemplate;
+        this.passwordEncoder = passwordEncoder;
     }
     
     @Override
@@ -147,5 +158,115 @@ public class AdminUserServiceImpl implements AdminUserService {
                     return userRepository.save(user);
                 })
                 .then();
+    }
+
+    @Override
+    public Mono<PagedResponse<User>> findUsersPaged(
+            String keyword,
+            AccountStatus status,
+            Long minCredits,
+            LocalDateTime createdStart,
+            LocalDateTime createdEnd,
+            LocalDateTime lastLoginStart,
+            LocalDateTime lastLoginEnd,
+            String sortBy,
+            String sortDir,
+            int page,
+            int size) {
+        // 构建查询条件
+        Criteria combined = new Criteria();
+        boolean hasAny = false;
+
+        // 关键词：用户名/邮箱/手机号 模糊
+        if (keyword != null && !keyword.trim().isEmpty()) {
+            String like = ".*" + java.util.regex.Pattern.quote(keyword.trim()) + ".*";
+            Criteria or = new Criteria().orOperator(
+                    Criteria.where("username").regex(like, "i"),
+                    Criteria.where("email").regex(like, "i"),
+                    Criteria.where("phone").regex(like, "i")
+            );
+            combined = combined.andOperator(or);
+            hasAny = true;
+        }
+
+        if (status != null) {
+            combined = hasAny ? combined.andOperator(Criteria.where("accountStatus").is(status)) : Criteria.where("accountStatus").is(status);
+            hasAny = true;
+        }
+
+        if (minCredits != null) {
+            Criteria c = Criteria.where("credits").gte(minCredits);
+            combined = hasAny ? combined.andOperator(c) : c;
+            hasAny = true;
+        }
+
+        if (createdStart != null || createdEnd != null) {
+            Criteria c = Criteria.where("createdAt");
+            if (createdStart != null && createdEnd != null) {
+                c = c.gte(createdStart).lte(createdEnd);
+            } else if (createdStart != null) {
+                c = c.gte(createdStart);
+            } else {
+                c = c.lte(createdEnd);
+            }
+            combined = hasAny ? combined.andOperator(c) : c;
+            hasAny = true;
+        }
+
+        if (lastLoginStart != null || lastLoginEnd != null) {
+            Criteria c = Criteria.where("lastLoginAt");
+            if (lastLoginStart != null && lastLoginEnd != null) {
+                c = c.gte(lastLoginStart).lte(lastLoginEnd);
+            } else if (lastLoginStart != null) {
+                c = c.gte(lastLoginStart);
+            } else {
+                c = c.lte(lastLoginEnd);
+            }
+            combined = hasAny ? combined.andOperator(c) : c;
+            hasAny = true;
+        }
+
+        Query query = new Query();
+        if (hasAny) {
+            query.addCriteria(combined);
+        }
+
+        // 排序
+        String sortField = (sortBy == null || sortBy.isBlank()) ? "createdAt" : sortBy;
+        Sort.Direction direction = ("asc".equalsIgnoreCase(sortDir)) ? Sort.Direction.ASC : Sort.Direction.DESC;
+        query.with(Sort.by(direction, sortField));
+
+        // 分页
+        Pageable pageable = PageRequest.of(Math.max(0, page), Math.max(1, Math.min(size, 200)));
+        query.skip(pageable.getOffset());
+        query.limit(pageable.getPageSize());
+
+        Mono<List<User>> contentMono = mongoTemplate.find(query, User.class).collectList();
+
+        // 统计总数
+        Query countQuery = new Query();
+        if (hasAny) {
+            countQuery.addCriteria(combined);
+        }
+        Mono<Long> countMono = mongoTemplate.count(countQuery, User.class);
+
+        return Mono.zip(contentMono, countMono)
+                .map(tuple -> PagedResponse.of(tuple.getT1(), page, pageable.getPageSize(), tuple.getT2()));
+    }
+
+    @Override
+    @Transactional
+    public Mono<User> resetUserPassword(String id, String rawPassword) {
+        if (rawPassword == null || rawPassword.trim().isEmpty()) {
+            return Mono.error(new IllegalArgumentException("新密码不能为空"));
+        }
+        final String encoded = passwordEncoder.encode(rawPassword.trim());
+        return userRepository.findById(id)
+                .switchIfEmpty(Mono.error(new IllegalArgumentException("用户不存在: " + id)))
+                .flatMap(user -> {
+                    user.setPassword(encoded);
+                    user.setUpdatedAt(LocalDateTime.now());
+                    return userRepository.save(user);
+                });
     }
 }

@@ -15,6 +15,7 @@ import java.util.stream.Collectors;
 import com.ainovel.server.common.util.PromptUtil;
 import com.ainovel.server.common.util.RichTextUtil;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -1547,6 +1548,106 @@ public class NovelServiceImpl implements NovelService {
                         novelId, actId, chapter.getId(), title))
                 .doOnError(e -> log.error("添加新章节失败: novelId={}, actId={}, title={}, error={}", 
                         novelId, actId, title, e.getMessage()));
+    }
+    
+    @Override
+    @Transactional
+    public Mono<Map<String, Object>> addChapterWithScene(String novelId, String actId, 
+            String chapterTitle, String sceneTitle, String sceneSummary, String sceneContent) {
+        return novelRepository.findById(novelId)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("小说", novelId)))
+                .flatMap(novel -> {
+                    // 获取小说结构
+                    Structure structure = novel.getStructure();
+                    if (structure == null || structure.getActs() == null) {
+                        return Mono.error(new ResourceNotFoundException("小说结构不存在", novelId));
+                    }
+                    
+                    // 查找指定的卷
+                    Act targetAct = null;
+                    for (Act act : structure.getActs()) {
+                        if (act.getId().equals(actId)) {
+                            targetAct = act;
+                            break;
+                        }
+                    }
+                    
+                    if (targetAct == null) {
+                        return Mono.error(new ResourceNotFoundException("卷", actId));
+                    }
+                    
+                    // 确保章节列表已初始化
+                    if (targetAct.getChapters() == null) {
+                        targetAct.setChapters(new ArrayList<>());
+                    }
+                    
+                    // 第1步：创建新章节
+                    String chapterId = UUID.randomUUID().toString();
+                    Chapter newChapter = Chapter.builder()
+                            .id(chapterId)
+                            .title(chapterTitle)
+                            .sceneIds(new ArrayList<>())
+                            .build();
+                    
+                    // 添加到章节列表末尾
+                    targetAct.getChapters().add(newChapter);
+                    
+                    // 第2步：创建新场景
+                    String sceneId = UUID.randomUUID().toString();
+                    
+                    // 设置内容：如果提供了content则使用，否则使用空Quill格式
+                    String finalContent;
+                    int wordCount;
+                    if (sceneContent != null && !sceneContent.trim().isEmpty()) {
+                        finalContent = sceneContent;
+                        wordCount = sceneContent.length();
+                    } else {
+                        finalContent = "[{\"insert\":\"\\n\"}]"; // 标准空Quill格式
+                        wordCount = 0;
+                    }
+                    
+                    Scene newScene = Scene.builder()
+                            .id(sceneId)
+                            .novelId(novelId) // 添加缺失的novelId字段
+                            .chapterId(chapterId)
+                            .title(sceneTitle)
+                            .content(finalContent)
+                            .summary(sceneSummary != null ? sceneSummary : "")
+                            .wordCount(wordCount)
+                            .sequence(1)
+                            .version(1)
+                            .createdAt(LocalDateTime.now())
+                            .updatedAt(LocalDateTime.now())
+                            .build();
+                    
+                    // 将场景ID添加到章节的sceneIds列表
+                    newChapter.getSceneIds().add(sceneId);
+                    
+                    // 更新时间戳
+                    novel.setUpdatedAt(LocalDateTime.now());
+                    
+                    // 第3步：原子化保存（先保存小说结构，再保存场景内容）
+                    return novelRepository.save(novel)
+                            .doOnSuccess(savedNovel -> log.info("原子化操作：小说结构已保存，novelId={}, 新章节={}", 
+                                    savedNovel.getId(), chapterId))
+                            .then(sceneRepository.save(newScene))
+                            .doOnSuccess(savedScene -> log.info("原子化操作：场景已保存，sceneId={}, novelId={}, chapterId={}", 
+                                    savedScene.getId(), savedScene.getNovelId(), savedScene.getChapterId()))
+                            .then(Mono.fromCallable(() -> {
+                                Map<String, Object> result = new HashMap<>();
+                                result.put("chapterId", chapterId);
+                                result.put("chapter", newChapter);
+                                result.put("sceneId", sceneId);
+                                result.put("scene", newScene);
+                                log.info("原子化操作完成：chapterId={}, sceneId={}, 场景内容长度={}", 
+                                        chapterId, sceneId, finalContent.length());
+                                return result;
+                            }));
+                })
+                .doOnSuccess(result -> log.info("成功原子化创建章节和场景: novelId={}, chapterId={}, sceneId={}", 
+                        novelId, result.get("chapterId"), result.get("sceneId")))
+                .doOnError(e -> log.error("原子化创建章节和场景失败: novelId={}, actId={}, error={}", 
+                        novelId, actId, e.getMessage()));
     }
     
     @Override

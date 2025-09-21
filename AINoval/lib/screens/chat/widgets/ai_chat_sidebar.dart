@@ -710,7 +710,7 @@ class _AIChatSidebarState extends State<AIChatSidebar> {
                     onContextChanged: (newContextData) {
                       // 🚀 如果需要通知EditorScreenController级联菜单数据变化，可以在这里处理
                       // 但通常不需要，因为EditorScreenController维护的是结构数据，不是选择状态
-                      print('🔧 [AIChatSidebar] 级联菜单数据变化通知: ${newContextData.selectedCount}个选择');
+                      //print('🔧 [AIChatSidebar] 级联菜单数据变化通知: ${newContextData.selectedCount}个选择');
                     },
                     settings: state.cachedSettings.cast<NovelSettingItem>(),
                     settingGroups: state.cachedSettingGroups.cast<SettingGroup>(),
@@ -718,8 +718,8 @@ class _AIChatSidebarState extends State<AIChatSidebar> {
                     // 🚀 添加聊天配置支持，确保设置对话框能够同步
                     chatConfig: currentConfig,
                     onConfigChanged: (updatedConfig) {
-                      print('🔧 [AIChatSidebar] 聊天配置已更新，发送到ChatBloc');
-                      print('🔧 [AIChatSidebar] 更新后配置上下文: ${updatedConfig.contextSelections?.selectedCount ?? 0}');
+                      //print('🔧 [AIChatSidebar] 聊天配置已更新，发送到ChatBloc');
+                      //print('🔧 [AIChatSidebar] 更新后配置上下文: ${updatedConfig.contextSelections?.selectedCount ?? 0}');
                       
                       // 发送配置更新事件到ChatBloc
                       context.read<ChatBloc>().add(UpdateChatConfiguration(

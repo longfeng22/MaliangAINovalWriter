@@ -1,14 +1,11 @@
 package com.ainovel.server.service.ai.langchain4j;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
@@ -28,23 +25,12 @@ import reactor.core.publisher.Mono;
  * OpenAI的LangChain4j实现
  */
 @Slf4j
-public class OpenAILangChain4jModelProvider extends LangChain4jModelProvider {
+public class OpenAILangChain4jModelProvider extends AbstractUnifiedModelProvider {
+
+    @Autowired
+    private ApplicationContext applicationContext;
 
     private static final String DEFAULT_API_ENDPOINT = "https://api.openai.com/v1";
-    private static final Map<String, Double> TOKEN_PRICES;
-
-
-
-    static {
-        Map<String, Double> prices = new HashMap<>();
-        prices.put("gpt-3.5-turbo", 0.0015);
-        prices.put("gpt-3.5-turbo-16k", 0.003);
-        prices.put("gpt-4", 0.03);
-        prices.put("gpt-4-32k", 0.06);
-        prices.put("gpt-4-turbo", 0.01);
-        prices.put("gpt-4o", 0.01);
-        TOKEN_PRICES = Collections.unmodifiableMap(prices);
-    }
 
     /**
      * 构造函数
@@ -118,25 +104,36 @@ public class OpenAILangChain4jModelProvider extends LangChain4jModelProvider {
 
     @Override
     public Mono<Double> estimateCost(AIRequest request) {
-        // 获取模型价格（每1000个令牌的美元价格）
-        double pricePerThousandTokens = TOKEN_PRICES.getOrDefault(modelName, 0.01);
-
-        // 估算输入令牌数
         int inputTokens = estimateInputTokens(request);
-
-        // 估算输出令牌数
         int outputTokens = request.getMaxTokens() != null ? request.getMaxTokens() : 1000;
-
-        // 计算总令牌数
+        
+        try {
+            var pricingCalculator = getPricingCalculator();
+            if (pricingCalculator != null) {
+                return pricingCalculator.calculateTotalCost(modelName, inputTokens, outputTokens)
+                        .map(cost -> cost.doubleValue() * 7.2);
+            }
+        } catch (Exception e) {
+            log.debug("使用PricingCalculator失败: {}", e.getMessage());
+        }
+        
+        double defaultPrice = 0.01;
         int totalTokens = inputTokens + outputTokens;
-
-        // 计算成本（美元）
-        double costInUSD = (totalTokens / 1000.0) * pricePerThousandTokens;
-
-        // 转换为人民币（假设汇率为7.2）
-        double costInCNY = costInUSD * 7.2;
-
-        return Mono.just(costInCNY);
+        double costInUSD = (totalTokens / 1000.0) * defaultPrice;
+        return Mono.just(costInUSD * 7.2);
+    }
+    
+    private com.ainovel.server.service.ai.pricing.TokenPricingCalculator getPricingCalculator() {
+        try {
+            return applicationContext.getBeansOfType(
+                com.ainovel.server.service.ai.pricing.TokenPricingCalculator.class)
+                .values().stream()
+                .filter(calc -> "openai".equals(calc.getProviderName()))
+                .findFirst()
+                .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Override
@@ -188,29 +185,12 @@ public class OpenAILangChain4jModelProvider extends LangChain4jModelProvider {
                 });
     }
 
-    /**
-     * OpenAI需要API密钥才能获取模型列表
-     * 覆盖基类的listModelsWithApiKey方法
-     *
-     * @param apiKey API密钥
-     * @param apiEndpoint 可选的API端点
-     * @return 模型信息列表
-     */
     @Override
-    public Flux<ModelInfo> listModelsWithApiKey(String apiKey, String apiEndpoint) {
-        if (isApiKeyEmpty(apiKey)) {
-            return Flux.error(new RuntimeException("API密钥不能为空"));
-        }
-
+    protected Flux<ModelInfo> callApiForModels(String apiKey, String apiEndpoint) {
         log.info("获取OpenAI模型列表");
 
-        // 获取API端点
         String baseUrl = apiEndpoint != null && !apiEndpoint.trim().isEmpty() ?
                 apiEndpoint : DEFAULT_API_ENDPOINT;
-
-        // NOTE: 部分兼容 OpenAI API 的代理服务(如 OpenRouter)会返回较大的模型列表，
-        // 超过 WebClient 默认 256KB 的内存限制，导致 DataBufferLimitException。
-        // 为避免该问题，这里显式提升 maxInMemorySize 至 5MB。
 
         ExchangeStrategies strategies = ExchangeStrategies.builder()
                 .codecs(cfg -> cfg.defaultCodecs().maxInMemorySize(5 * 1024 * 1024)) // 5MB
@@ -221,7 +201,6 @@ public class OpenAILangChain4jModelProvider extends LangChain4jModelProvider {
                 .exchangeStrategies(strategies)
                 .build();
 
-        // 调用OpenAI API获取模型列表
         return webClient.get()
                 .uri("/models")
                 .header("Authorization", "Bearer " + apiKey)
@@ -230,68 +209,15 @@ public class OpenAILangChain4jModelProvider extends LangChain4jModelProvider {
                 .bodyToMono(String.class)
                 .flatMapMany(response -> {
                     try {
-                        // 解析响应
                         log.debug("OpenAI模型列表响应: {}", response);
-
-                        // 这里应该使用JSON解析库来解析响应
-                        // 简化起见，返回预定义的模型列表
-                        return Flux.fromIterable(getDefaultOpenAIModels());
+                        // 简化起见，返回空让基类使用统一的默认列表
+                        return Flux.<ModelInfo>empty();
                     } catch (Exception e) {
                         log.error("解析OpenAI模型列表时出错", e);
-                        return Flux.fromIterable(getDefaultOpenAIModels());
+                        return Flux.<ModelInfo>empty();
                     }
                 })
-                .onErrorResume(e -> {
-                    log.error("获取OpenAI模型列表时出错", e);
-                    // 出错时返回预定义的模型列表
-                    return Flux.fromIterable(getDefaultOpenAIModels());
-                });
+                .onErrorResume(e -> Flux.<ModelInfo>empty());
     }
 
-    /**
-     * 获取默认的OpenAI模型列表
-     *
-     * @return 模型信息列表
-     */
-    private List<ModelInfo> getDefaultOpenAIModels() {
-        List<ModelInfo> models = new ArrayList<>();
-
-        models.add(ModelInfo.basic("gpt-3.5-turbo", "GPT-3.5 Turbo", "openai")
-                .withDescription("OpenAI的GPT-3.5 Turbo模型")
-                .withMaxTokens(16385)
-                .withInputPrice(0.0015)
-                .withOutputPrice(0.002));
-
-        models.add(ModelInfo.basic("gpt-3.5-turbo-16k", "GPT-3.5 Turbo 16K", "openai")
-                .withDescription("OpenAI的GPT-3.5 Turbo 16K模型")
-                .withMaxTokens(16385)
-                .withInputPrice(0.003)
-                .withOutputPrice(0.004));
-
-        models.add(ModelInfo.basic("gpt-4", "GPT-4", "openai")
-                .withDescription("OpenAI的GPT-4模型")
-                .withMaxTokens(8192)
-                .withInputPrice(0.03)
-                .withOutputPrice(0.06));
-
-        models.add(ModelInfo.basic("gpt-4-32k", "GPT-4 32K", "openai")
-                .withDescription("OpenAI的GPT-4 32K模型")
-                .withMaxTokens(32768)
-                .withInputPrice(0.06)
-                .withOutputPrice(0.12));
-
-        models.add(ModelInfo.basic("gpt-4-turbo", "GPT-4 Turbo", "openai")
-                .withDescription("OpenAI的GPT-4 Turbo模型")
-                .withMaxTokens(128000)
-                .withInputPrice(0.01)
-                .withOutputPrice(0.03));
-
-        models.add(ModelInfo.basic("gpt-4o", "GPT-4o", "openai")
-                .withDescription("OpenAI的GPT-4o模型")
-                .withMaxTokens(128000)
-                .withInputPrice(0.01)
-                .withOutputPrice(0.03));
-
-        return models;
-    }
 }

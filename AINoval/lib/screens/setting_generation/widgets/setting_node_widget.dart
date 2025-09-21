@@ -131,7 +131,6 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
             scale: 0.95 + (_renderingAnimation.value * 0.05),
             child: Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
                 boxShadow: [
                   BoxShadow(
                     color: const Color(0xFF3B82F6).withOpacity(0.15 * _renderingAnimation.value),
@@ -212,7 +211,6 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
     
     return InkWell(
       onTap: () => widget.onTap(widget.node.id),
-      borderRadius: BorderRadius.circular(6),
       child: Container(
         width: double.infinity,
         padding: EdgeInsets.only(
@@ -223,7 +221,6 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
         ),
         decoration: BoxDecoration(
           color: _getBackgroundColor(),
-          borderRadius: BorderRadius.circular(6),
           border: isCurrentNodeSelected
               ? Border.all(
                   color: const Color(0xFF6366F1), // indigo-500
@@ -257,7 +254,6 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
             // Expand/collapse icon
             InkWell(
               onTap: _toggleExpanded,
-              borderRadius: BorderRadius.circular(4),
               child: Container(
                 width: 16,
                 height: 16,
@@ -337,7 +333,7 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
                               : const Color(0xFF6B7280), // gray-500
                           height: 1.5,
                         ),
-                        maxLines: 3,
+                        maxLines: 20,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -395,7 +391,6 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: WebTheme.getPrimaryColor(context).withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: WebTheme.getPrimaryColor(context).withOpacity(0.3),
           width: 1,

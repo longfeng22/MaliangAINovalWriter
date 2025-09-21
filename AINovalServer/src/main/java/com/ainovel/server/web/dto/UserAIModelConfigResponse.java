@@ -17,6 +17,7 @@ public record UserAIModelConfigResponse(
         String apiEndpoint,
         Boolean isValidated,
         Boolean isDefault,
+        Boolean isToolDefault,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
         String apiKey // 添加apiKey字段，用于保存解密后的密钥
@@ -35,6 +36,7 @@ public record UserAIModelConfigResponse(
                 entity.getApiEndpoint() != null ? entity.getApiEndpoint() : "", // 空字符串作为默认值
                 entity.getIsValidated(),
                 entity.isDefault(),
+                entity.isToolDefault(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt(),
                 null // API密钥默认不返回
@@ -54,6 +56,7 @@ public record UserAIModelConfigResponse(
                 this.apiEndpoint,
                 this.isValidated,
                 this.isDefault,
+                this.isToolDefault,
                 this.createdAt,
                 this.updatedAt,
                 apiKey

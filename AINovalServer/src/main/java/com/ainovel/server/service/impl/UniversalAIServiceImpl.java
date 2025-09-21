@@ -1320,7 +1320,8 @@ public class UniversalAIServiceImpl implements UniversalAIService {
                     return novelAIService.getAIModelProviderByConfigId(aiRequest.getUserId(), requestedModelConfigId)
                             .flatMapMany(provider -> {
                                 log.info("获取到指定配置的AI模型提供商: {}, 开始流式生成", provider.getModelName());
-                                return provider.generateContentStream(aiRequest);
+                                return provider.generateContentStream(aiRequest)
+                                        .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk));
                             });
                 }
                 // 如果指定了模型名称，使用指定的模型
@@ -1329,18 +1330,21 @@ public class UniversalAIServiceImpl implements UniversalAIService {
                     return novelAIService.getAIModelProvider(aiRequest.getUserId(), requestedModelName)
                             .flatMapMany(provider -> {
                                 log.info("获取到指定模型的AI模型提供商: {}, 开始流式生成", provider.getModelName());
-                                return provider.generateContentStream(aiRequest);
+                                return provider.generateContentStream(aiRequest)
+                                        .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk));
                             })
                             .onErrorResume(error -> {
                                 log.error("使用指定模型名称 {} 失败，回退到默认流程: {}", requestedModelName, error.getMessage());
                                 // 回退到默认的流式生成方法
-                                return novelAIService.generateNovelContentStream(aiRequest);
+                                return novelAIService.generateNovelContentStream(aiRequest)
+                                        .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk));
                             });
                 }
                 // 使用默认的流式生成方法
                 else {
                     log.info("未指定特定模型，使用默认流式生成方法");
-                    return novelAIService.generateNovelContentStream(aiRequest);
+                    return novelAIService.generateNovelContentStream(aiRequest)
+                            .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk));
                 }
             }
         });

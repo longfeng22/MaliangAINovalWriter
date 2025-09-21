@@ -3,14 +3,12 @@ package com.ainovel.server.service.ai.capability;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import com.ainovel.server.domain.model.ModelInfo;
 import com.ainovel.server.domain.model.ModelListingCapability;
-import com.ainovel.server.repository.ModelPricingRepository;
 
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
@@ -24,9 +22,6 @@ import reactor.core.publisher.Mono;
 public class OpenAICapabilityDetector implements ProviderCapabilityDetector {
 
     private static final String DEFAULT_API_ENDPOINT = "https://api.openai.com/v1";
-    
-    @Autowired
-    private ModelPricingRepository modelPricingRepository;
 
     @Override
     public String getProviderName() {
@@ -41,48 +36,263 @@ public class OpenAICapabilityDetector implements ProviderCapabilityDetector {
 
     @Override
     public Flux<ModelInfo> getDefaultModels() {
-        // 首先尝试从数据库获取最新定价信息
-        return modelPricingRepository.findByProviderAndActiveTrue("openai")
-                .map(pricing -> pricing.toModelInfo())
-                .switchIfEmpty(getStaticDefaultModels())
-                .doOnNext(model -> log.debug("Loaded OpenAI model: {} with pricing", model.getId()));
-    }
-    
-    /**
-     * 获取静态默认模型列表（作为备用）
-     */
-    private Flux<ModelInfo> getStaticDefaultModels() {
+        // 直接返回静态模型列表（与OpenAITokenPricingCalculator保持一致）
         List<ModelInfo> models = new ArrayList<>();
 
-        models.add(ModelInfo.basic("gpt-3.5-turbo", "GPT-3.5 Turbo", "openai")
-                .withDescription("OpenAI的GPT-3.5 Turbo模型")
-                .withMaxTokens(16385)
-                .withInputPrice(0.0005)
-                .withOutputPrice(0.0015));
+        // GPT-5 family
+        models.add(ModelInfo.builder()
+            .id("gpt-5")
+            .name("GPT-5")
+            .description("OpenAI GPT-5 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00125)
+            .withOutputPrice(0.01000));
 
-        models.add(ModelInfo.basic("gpt-4", "GPT-4", "openai")
-                .withDescription("OpenAI的GPT-4模型")
-                .withMaxTokens(81920)
-                .withInputPrice(0.03)
-                .withOutputPrice(0.06));
+        models.add(ModelInfo.builder()
+            .id("gpt-5-mini")
+            .name("GPT-5 Mini")
+            .description("OpenAI GPT-5 Mini 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00025)
+            .withOutputPrice(0.00200));
 
-        models.add(ModelInfo.basic("gpt-4-turbo", "GPT-4 Turbo", "openai")
-                .withDescription("OpenAI的GPT-4 Turbo模型")
-                .withMaxTokens(128000)
-                .withInputPrice(0.01)
-                .withOutputPrice(0.03));
+        models.add(ModelInfo.builder()
+            .id("gpt-5-nano")
+            .name("GPT-5 Nano")
+            .description("OpenAI GPT-5 Nano 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00005)
+            .withOutputPrice(0.00040));
 
-        models.add(ModelInfo.basic("gpt-4o", "GPT-4o", "openai")
-                .withDescription("OpenAI的GPT-4o模型")
-                .withMaxTokens(128000)
-                .withInputPrice(0.005)
-                .withOutputPrice(0.015));
+        models.add(ModelInfo.builder()
+            .id("gpt-5-chat-latest")
+            .name("GPT-5 Chat Latest")
+            .description("OpenAI GPT-5 Chat Latest 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00125)
+            .withOutputPrice(0.01000));
 
-        models.add(ModelInfo.basic("gpt-4o-mini", "GPT-4o Mini", "openai")
-                .withDescription("OpenAI的GPT-4o Mini模型")
-                .withMaxTokens(128000)
-                .withInputPrice(0.00015)
-                .withOutputPrice(0.0006));
+        // GPT-4.1 family
+        models.add(ModelInfo.builder()
+            .id("gpt-4.1")
+            .name("GPT-4.1")
+            .description("OpenAI GPT-4.1 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00200)
+            .withOutputPrice(0.00800));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-4.1-mini")
+            .name("GPT-4.1 Mini")
+            .description("OpenAI GPT-4.1 Mini 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00040)
+            .withOutputPrice(0.00160));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-4.1-nano")
+            .name("GPT-4.1 Nano")
+            .description("OpenAI GPT-4.1 Nano 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00010)
+            .withOutputPrice(0.00040));
+
+        // GPT-4o family
+        models.add(ModelInfo.builder()
+            .id("gpt-4o")
+            .name("GPT-4o")
+            .description("OpenAI GPT-4o 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00250)
+            .withOutputPrice(0.01000));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-4o-2024-05-13")
+            .name("GPT-4o 2024-05-13")
+            .description("OpenAI GPT-4o 2024-05-13 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00500)
+            .withOutputPrice(0.01500));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-4o-mini")
+            .name("GPT-4o Mini")
+            .description("OpenAI GPT-4o Mini 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00015)
+            .withOutputPrice(0.00060));
+
+        // Realtime / Audio
+        models.add(ModelInfo.builder()
+            .id("gpt-realtime")
+            .name("GPT Realtime")
+            .description("OpenAI GPT Realtime 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00400)
+            .withOutputPrice(0.01600));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-4o-realtime-preview")
+            .name("GPT-4o Realtime Preview")
+            .description("OpenAI GPT-4o Realtime Preview 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00500)
+            .withOutputPrice(0.02000));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-4o-mini-realtime-preview")
+            .name("GPT-4o Mini Realtime Preview")
+            .description("OpenAI GPT-4o Mini Realtime Preview 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00060)
+            .withOutputPrice(0.00240));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-audio")
+            .name("GPT Audio")
+            .description("OpenAI GPT Audio 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00250)
+            .withOutputPrice(0.01000));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-4o-audio-preview")
+            .name("GPT-4o Audio Preview")
+            .description("OpenAI GPT-4o Audio Preview 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00250)
+            .withOutputPrice(0.01000));
+
+        models.add(ModelInfo.builder()
+            .id("gpt-4o-mini-audio-preview")
+            .name("GPT-4o Mini Audio Preview")
+            .description("OpenAI GPT-4o Mini Audio Preview 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00015)
+            .withOutputPrice(0.00060));
+
+        // o family
+        models.add(ModelInfo.builder()
+            .id("o1")
+            .name("o1")
+            .description("OpenAI o1 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.01500)
+            .withOutputPrice(0.06000));
+
+        models.add(ModelInfo.builder()
+            .id("o1-pro")
+            .name("o1 Pro")
+            .description("OpenAI o1 Pro 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.15000)
+            .withOutputPrice(0.60000));
+
+        models.add(ModelInfo.builder()
+            .id("o3-pro")
+            .name("o3 Pro")
+            .description("OpenAI o3 Pro 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.02000)
+            .withOutputPrice(0.08000));
+
+        models.add(ModelInfo.builder()
+            .id("o3")
+            .name("o3")
+            .description("OpenAI o3 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00200)
+            .withOutputPrice(0.00800));
+
+        models.add(ModelInfo.builder()
+            .id("o3-deep-research")
+            .name("o3 Deep Research")
+            .description("OpenAI o3 Deep Research 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.01000)
+            .withOutputPrice(0.04000));
+
+        models.add(ModelInfo.builder()
+            .id("o4-mini")
+            .name("o4 Mini")
+            .description("OpenAI o4 Mini 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00110)
+            .withOutputPrice(0.00440));
+
+        models.add(ModelInfo.builder()
+            .id("o4-mini-deep-research")
+            .name("o4 Mini Deep Research")
+            .description("OpenAI o4 Mini Deep Research 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00200)
+            .withOutputPrice(0.00800));
+
+        models.add(ModelInfo.builder()
+            .id("o3-mini")
+            .name("o3 Mini")
+            .description("OpenAI o3 Mini 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00110)
+            .withOutputPrice(0.00440));
+
+        models.add(ModelInfo.builder()
+            .id("o1-mini")
+            .name("o1 Mini")
+            .description("OpenAI o1 Mini 模型")
+            .maxTokens(128000)
+            .provider("openai")
+            .build()
+            .withInputPrice(0.00110)
+            .withOutputPrice(0.00440));
 
         return Flux.fromIterable(models);
     }

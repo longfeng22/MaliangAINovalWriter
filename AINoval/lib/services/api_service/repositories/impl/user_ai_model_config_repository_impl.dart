@@ -82,21 +82,28 @@ class UserAIModelConfigRepositoryImpl implements UserAIModelConfigRepository {
     bool? validatedOnly,
   }) async {
     AppLogger.i('UserAIModelConfigRepoImpl',
-        '列出配置(包含API密钥): userId=$userId, validatedOnly=$validatedOnly');
+        '列出配置(富信息): userId=$userId, validatedOnly=$validatedOnly');
     try {
-      // 调用新的API端点，获取包含解密后API密钥的配置列表
-      final configs = await apiClient.listAIConfigurationsWithDecryptedKeys(
-        userId: userId,
-        validatedOnly: validatedOnly,
-      );
+      // 优先使用富信息接口（包含价格与标签，不返回解密API Key）
+      final configs = await apiClient.listAIConfigurationsEnriched(
+          userId: userId, validatedOnly: validatedOnly);
       AppLogger.i('UserAIModelConfigRepoImpl',
-          '列出配置(包含API密钥)成功: userId=$userId, count=${configs.length}');
+          '列出配置(富信息)成功: userId=$userId, count=${configs.length}');
       return configs;
     } catch (e, stackTrace) {
       AppLogger.e(
-          'UserAIModelConfigRepoImpl', '列出配置(包含API密钥)失败: userId=$userId', e, stackTrace);
-      // 直接重新抛出
-      rethrow;
+          'UserAIModelConfigRepoImpl', '列出配置(富信息)失败，降级到旧接口: userId=$userId', e, stackTrace);
+      // 回退到旧接口（含解密API Key），避免前端无数据
+      try {
+        final fallback = await apiClient.listAIConfigurationsWithDecryptedKeys(
+          userId: userId,
+          validatedOnly: validatedOnly,
+        );
+        return fallback;
+      } catch (e2, st2) {
+        AppLogger.e('UserAIModelConfigRepoImpl', '旧接口回退也失败: userId=$userId', e2, st2);
+        rethrow;
+      }
     }
   }
 
@@ -281,6 +288,52 @@ class UserAIModelConfigRepositoryImpl implements UserAIModelConfigRepository {
       return models;
     } catch (e, stackTrace) {
       AppLogger.e('UserAIModelConfigRepoImpl', '使用API密钥获取提供商 $provider 的模型信息列表失败', e, stackTrace);
+      rethrow;
+    }
+  }
+
+  @override
+  Future<UserAIModelConfigModel> setToolDefaultConfiguration({
+    required String userId,
+    required String configId,
+  }) async {
+    AppLogger.i('UserAIModelConfigRepoImpl',
+        '设置工具默认配置: userId=$userId, configId=$configId');
+    try {
+      final config = await apiClient.setToolDefaultAIConfiguration(
+        userId: userId,
+        configId: configId,
+      );
+      AppLogger.i('UserAIModelConfigRepoImpl',
+          '设置工具默认配置成功: userId=$userId, configId=${config.id}, isToolDefault=${config.isToolDefault}');
+      return config;
+    } catch (e, stackTrace) {
+      AppLogger.e('UserAIModelConfigRepoImpl',
+          '设置工具默认配置失败: userId=$userId, configId=$configId', e, stackTrace);
+      // 直接重新抛出
+      rethrow;
+    }
+  }
+
+  @override
+  Future<bool> testApiKey({
+    required String provider,
+    required String apiKey,
+    String? apiEndpoint,
+    String? modelName,
+  }) async {
+    AppLogger.i('UserAIModelConfigRepoImpl', '测试API密钥: provider=$provider${modelName != null ? ", model=$modelName" : ""}');
+    try {
+      final ok = await apiClient.testProviderApiKey(
+        provider: provider,
+        apiKey: apiKey,
+        apiEndpoint: apiEndpoint,
+        modelName: modelName, // 传递模型名称
+      );
+      AppLogger.i('UserAIModelConfigRepoImpl', '测试API密钥完成: provider=$provider${modelName != null ? ", model=$modelName" : ""}, result=$ok');
+      return ok;
+    } catch (e, stackTrace) {
+      AppLogger.e('UserAIModelConfigRepoImpl', '测试API密钥失败: provider=$provider${modelName != null ? ", model=$modelName" : ""}', e, stackTrace);
       rethrow;
     }
   }

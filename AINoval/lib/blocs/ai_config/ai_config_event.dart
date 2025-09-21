@@ -98,6 +98,15 @@ class SetDefaultAiConfig extends AiConfigEvent {
   List<Object?> get props => [userId, configId];
 }
 
+/// 设置工具调用默认配置
+class SetToolDefaultAiConfig extends AiConfigEvent {
+  final String userId;
+  final String configId;
+  const SetToolDefaultAiConfig({required this.userId, required this.configId});
+  @override
+  List<Object?> get props => [userId, configId];
+}
+
 /// 清除提供商/模型列表(例如，关闭对话框时)
 class ClearProviderModels extends AiConfigEvent {
   const ClearProviderModels();
@@ -137,12 +146,26 @@ class TestApiKey extends AiConfigEvent {
   final String providerName;
   final String apiKey;
   final String? apiEndpoint;
+  final String? modelName; // 新增：可选的模型名称，用于精确验证
 
   const TestApiKey({
     required this.providerName,
     required this.apiKey,
     this.apiEndpoint,
+    this.modelName,
   });
+
+  @override
+  List<Object?> get props => [providerName, apiKey, apiEndpoint, modelName];
+}
+
+/// 直连获取模型（绕过后端）
+class LoadModelsDirect extends AiConfigEvent {
+  final String providerName;
+  final String? apiKey;
+  final String? apiEndpoint;
+
+  const LoadModelsDirect({required this.providerName, this.apiKey, this.apiEndpoint});
 
   @override
   List<Object?> get props => [providerName, apiKey, apiEndpoint];

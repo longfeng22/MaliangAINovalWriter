@@ -97,35 +97,35 @@ public class SystemConfigServiceImpl implements SystemConfigService {
     @Override
     public Mono<String> getStringValue(String configKey, String defaultValue) {
         return getConfigValue(configKey)
-                .defaultIfEmpty(defaultValue);
+                .switchIfEmpty(defaultValue != null ? Mono.just(defaultValue) : Mono.empty());
     }
     
     @Override
     public Mono<Double> getNumericValue(String configKey, Double defaultValue) {
         return getConfig(configKey)
                 .map(SystemConfig::getNumericValue)
-                .defaultIfEmpty(defaultValue);
+                .switchIfEmpty(defaultValue != null ? Mono.just(defaultValue) : Mono.empty());
     }
     
     @Override
     public Mono<Integer> getIntegerValue(String configKey, Integer defaultValue) {
         return getConfig(configKey)
                 .map(SystemConfig::getIntegerValue)
-                .defaultIfEmpty(defaultValue);
+                .switchIfEmpty(defaultValue != null ? Mono.just(defaultValue) : Mono.empty());
     }
     
     @Override
     public Mono<Long> getLongValue(String configKey, Long defaultValue) {
         return getConfig(configKey)
                 .map(SystemConfig::getLongValue)
-                .defaultIfEmpty(defaultValue);
+                .switchIfEmpty(defaultValue != null ? Mono.just(defaultValue) : Mono.empty());
     }
     
     @Override
     public Mono<Boolean> getBooleanValue(String configKey, Boolean defaultValue) {
         return getConfig(configKey)
                 .map(SystemConfig::getBooleanValue)
-                .defaultIfEmpty(defaultValue);
+                .switchIfEmpty(defaultValue != null ? Mono.just(defaultValue) : Mono.empty());
     }
     
     @Override

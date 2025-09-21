@@ -10,6 +10,10 @@ import 'package:ainoval/services/api_service/repositories/editor_repository.dart
 import 'package:ainoval/services/api_service/repositories/novel_ai_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:ainoval/utils/web_theme.dart';
+import 'package:ainoval/widgets/common/top_toast.dart';
+import 'package:ainoval/utils/logger.dart';
+import 'package:ainoval/utils/event_bus.dart';
+// imports for task events handled in AITaskCenterPanel removed
 
 /// 多AI面板视图组件
 /// 支持以卡片形式并排显示多个AI辅助面板，可拖拽调整大小和顺序
@@ -49,13 +53,22 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
   Widget build(BuildContext context) {
     final visiblePanels = widget.layoutManager.visiblePanels;
     final screenWidth = MediaQuery.of(context).size.width;
-    final bool isNarrow = screenWidth < 1280;
-    final bool isVeryNarrow = screenWidth < 900;
+    // 优化屏幕尺寸判断：考虑1080p和更小屏幕的实际使用情况
+    final bool isNarrow = screenWidth < 1600; // 提高阈值，包含1080p显示器
+    final bool isVeryNarrow = screenWidth < 1200; // 调整极小屏幕阈值
+    final bool isMobile = screenWidth < 900; // 移动设备阈值保持不变
     
-    // 小屏策略：仅允许显示一个面板，其余通过顺序切换（保留顺序，限制数量）
-    final List<String> effectivePanels = isNarrow && visiblePanels.isNotEmpty
-        ? [visiblePanels.last] // 取最近一个打开的
-        : visiblePanels;
+    // 小屏策略：根据屏幕大小限制面板数量
+    final List<String> effectivePanels;
+    if (isMobile && visiblePanels.isNotEmpty) {
+      effectivePanels = [visiblePanels.last]; // 移动设备只显示最新面板
+    } else if (isVeryNarrow && visiblePanels.length > 1) {
+      effectivePanels = [visiblePanels.last]; // 1200px以下只显示一个面板
+    } else if (isNarrow && visiblePanels.length > 2) {
+      effectivePanels = visiblePanels.take(2).toList(); // 1600px以下最多显示2个面板
+    } else {
+      effectivePanels = visiblePanels; // 大屏幕显示所有面板
+    }
     
     if (effectivePanels.isEmpty) {
       return _buildToggleAllPanelsButton();
@@ -65,8 +78,8 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
       children: [
         // 添加面板之间的拖拽分隔线和面板内容
         for (int i = 0; i < effectivePanels.length; i++) ...[
-          if (i > 0 && !isNarrow) _buildDraggableDivider(effectivePanels[i]),
-          _buildPanelContent(effectivePanels[i], i, isNarrow: isNarrow, isVeryNarrow: isVeryNarrow),
+          if (i > 0 && !isMobile) _buildDraggableDivider(effectivePanels[i]),
+          _buildPanelContent(effectivePanels[i], i, isNarrow: isNarrow, isVeryNarrow: isVeryNarrow, isMobile: isMobile),
         ],
         
         // 全局隐藏/显示控制按钮
@@ -158,13 +171,26 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
     );
   }
   
-  Widget _buildPanelContent(String panelId, int index, {required bool isNarrow, required bool isVeryNarrow}) {
+  Widget _buildPanelContent(String panelId, int index, {required bool isNarrow, required bool isVeryNarrow, required bool isMobile}) {
     final screenWidth = MediaQuery.of(context).size.width;
-    // 在小屏上将面板宽度限定为屏宽的35%，其余按原逻辑
-    final double maxResponsiveWidth = (screenWidth * 0.35).clamp(
+    
+    // 优化响应式宽度计算：根据屏幕大小动态调整
+    double responsiveWidthRatio;
+    if (isMobile) {
+      responsiveWidthRatio = 0.9; // 移动设备使用90%宽度
+    } else if (isVeryNarrow) {
+      responsiveWidthRatio = 0.6; // 小屏幕使用60%宽度（适合1080p）
+    } else if (isNarrow) {
+      responsiveWidthRatio = 0.4; // 中等屏幕使用40%宽度
+    } else {
+      responsiveWidthRatio = 0.35; // 大屏幕保持原有35%
+    }
+    
+    final double maxResponsiveWidth = (screenWidth * responsiveWidthRatio).clamp(
       EditorLayoutManager.minPanelWidth,
       EditorLayoutManager.maxPanelWidth,
     );
+    
     double width = widget.layoutManager.panelWidths[panelId] ?? EditorLayoutManager.minPanelWidth;
     if (isNarrow) {
       width = width.clamp(EditorLayoutManager.minPanelWidth, maxResponsiveWidth);
@@ -199,7 +225,7 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // 可拖动的顶部把手（小屏禁用重排序，改为显示标题行）
-              _buildDragHandle(panelId, index, isNarrow: isNarrow),
+              _buildDragHandle(panelId, index, isMobile: isMobile),
               
               // 面板内容
               Expanded(
@@ -212,7 +238,7 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
     );
   }
 
-  Widget _buildDragHandle(String panelId, int index, {required bool isNarrow}) {
+  Widget _buildDragHandle(String panelId, int index, {required bool isMobile}) {
     final colorScheme = Theme.of(context).colorScheme;
     
     // 面板类型标题映射
@@ -227,8 +253,8 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
     final panelTitle = panelTitles[panelId] ?? '未知面板 ($panelId)';
     
     return GestureDetector(
-      // 实现拖拽重排序（小屏禁用）
-      onPanStart: (!isNarrow && widget.layoutManager.visiblePanels.length > 1) ? (details) {
+      // 实现拖拽重排序（移动设备禁用）
+      onPanStart: (!isMobile && widget.layoutManager.visiblePanels.length > 1) ? (details) {
         if (mounted) {
           setState(() {
             _draggedPanelId = panelId;
@@ -237,7 +263,7 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
           });
         }
       } : null,
-      onPanUpdate: (!isNarrow && widget.layoutManager.visiblePanels.length > 1) ? (details) {
+      onPanUpdate: (!isMobile && widget.layoutManager.visiblePanels.length > 1) ? (details) {
         if (_isDragging && _draggedPanelId == panelId && mounted) {
           setState(() {
             _draggedPanelOffset += details.delta.dx;
@@ -247,7 +273,7 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
           _updatePanelOrder(details.globalPosition.dx);
         }
       } : null,
-      onPanEnd: (!isNarrow && widget.layoutManager.visiblePanels.length > 1) ? (details) {
+      onPanEnd: (!isMobile && widget.layoutManager.visiblePanels.length > 1) ? (details) {
         if (_isDragging && _draggedPanelId == panelId && mounted) {
           setState(() {
             _isDragging = false;
@@ -308,7 +334,7 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
             Row(
               children: [
                 // Drag handle icon
-                if (!isNarrow && widget.layoutManager.visiblePanels.length > 1)
+                if (!isMobile && widget.layoutManager.visiblePanels.length > 1)
                   Tooltip(
                     message: '拖动调整顺序',
                     child: Icon(
@@ -476,8 +502,83 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
       userId: widget.userId!,
       userAiModelConfigRepository: widget.userAiModelConfigRepository,
       onCancel: widget.layoutManager.toggleAIContinueWritingPanel,
-      onSubmit: widget.onContinueWritingSubmit,
+      onSubmit: _handleContinueWritingSubmit,
     );
+  }
+
+  /// 提交自动续写任务到后端
+  Future<void> _handleContinueWritingSubmit(Map<String, dynamic> parameters) async {
+    try {
+      // 参数提取与兜底
+      final String novelId = (parameters['novelId']?.toString() ?? widget.novelId);
+      final int numberOfChapters = (parameters['numberOfChapters'] is int)
+          ? parameters['numberOfChapters'] as int
+          : int.tryParse(parameters['numberOfChapters']?.toString() ?? '1') ?? 1;
+      final String aiConfigIdSummary = parameters['aiConfigIdSummary']?.toString() ?? '';
+      final String aiConfigIdContent = parameters['aiConfigIdContent']?.toString() ?? '';
+      final String startContextMode = parameters['startContextMode']?.toString() ?? 'AUTO';
+      final int? contextChapterCount = parameters['contextChapterCount'] == null
+          ? null
+          : (parameters['contextChapterCount'] is int
+              ? parameters['contextChapterCount'] as int
+              : int.tryParse(parameters['contextChapterCount'].toString()));
+      final String? customContext = parameters['customContext']?.toString();
+      final String? writingStyle = parameters['writingStyle']?.toString();
+      final bool requiresReview = false; // 默认不需要评审
+      final bool persistChanges = false; // 默认不直接持久化，走预览合并
+      final String? summaryPromptTemplateId = parameters['summaryPromptTemplateId']?.toString();
+      final String? contentPromptTemplateId = parameters['contentPromptTemplateId']?.toString();
+      final String? summaryPublicModelConfigId = parameters['summaryPublicModelConfigId']?.toString();
+      final String? contentPublicModelConfigId = parameters['contentPublicModelConfigId']?.toString();
+
+      // 调用后端
+      final taskId = await widget.editorRepository.submitContinueWritingTask(
+        novelId: novelId,
+        numberOfChapters: numberOfChapters,
+        aiConfigIdSummary: aiConfigIdSummary,
+        aiConfigIdContent: aiConfigIdContent,
+        startContextMode: startContextMode,
+        contextChapterCount: contextChapterCount,
+        customContext: customContext,
+        writingStyle: writingStyle,
+        requiresReview: requiresReview,
+        persistChanges: persistChanges,
+        summaryPromptTemplateId: summaryPromptTemplateId,
+        contentPromptTemplateId: contentPromptTemplateId,
+        summaryPublicModelConfigId: summaryPublicModelConfigId,
+        contentPublicModelConfigId: contentPublicModelConfigId,
+      );
+
+      AppLogger.i('MultiAIPanelView', 'Continue Writing Submitted: taskId=$taskId, params=$parameters');
+      if (mounted) {
+        TopToast.success(context, '自动续写任务已提交 (ID: $taskId)');
+      }
+
+      // 继续调用外部回调以保持原有行为（日志/提示等）
+      try {
+        widget.onContinueWritingSubmit(parameters);
+      } catch (_) {}
+
+      // 立即广播占位提交事件，保障任务中心能立刻显示该任务（后续由SSE更新覆盖）
+      try {
+        final Map<String, dynamic> placeholder = {
+          'type': 'TASK_SUBMITTED',
+          'taskId': taskId,
+          'taskType': 'CONTINUE_WRITING_CONTENT',
+          'novelId': novelId,
+          'ts': DateTime.now().millisecondsSinceEpoch,
+        };
+        EventBus.instance.fire(TaskEventReceived(event: placeholder));
+        // 按需启动全局监听
+        EventBus.instance.fire(const StartTaskEventsListening());
+      } catch (_) {}
+      // 完成由“AI任务中心”统一订阅与提示
+    } catch (e, st) {
+      AppLogger.e('MultiAIPanelView', '提交自动续写任务失败', e, st);
+      if (mounted) {
+        TopToast.error(context, '提交续写任务失败: ${e.toString()}');
+      }
+    }
   }
 
   Widget _buildAISettingGenerationPanel() {

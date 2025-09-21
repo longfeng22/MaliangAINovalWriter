@@ -2290,7 +2290,11 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           AppLogger.e('Blocs/editor/editor_bloc', '更新Chapter标题失败');
         }
         
-        emit(currentState.copyWith(isDirty: false));
+        // 修复：不能基于旧的 currentState 再次 emit，否则会把 updatedNovel 覆盖回旧状态
+        // 使用最新的 state 作为基准仅更新 isDirty 标记
+        if (state is EditorLoaded) {
+          emit((state as EditorLoaded).copyWith(isDirty: false));
+        }
       } catch (e) {
         AppLogger.e('Blocs/editor/editor_bloc', '更新Chapter标题失败', e);
         emit(currentState.copyWith(
@@ -2336,7 +2340,11 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
           AppLogger.e('Blocs/editor/editor_bloc', '更新Act标题失败');
         }
         
-        emit(currentState.copyWith(isDirty: false));
+        // 修复：不能基于旧的 currentState 再次 emit，否则会把 updatedNovel 覆盖回旧状态
+        // 使用最新的 state 作为基准仅更新 isDirty 标记
+        if (state is EditorLoaded) {
+          emit((state as EditorLoaded).copyWith(isDirty: false));
+        }
       } catch (e) {
         AppLogger.e('Blocs/editor/editor_bloc', '更新Act标题失败', e);
         emit(currentState.copyWith(

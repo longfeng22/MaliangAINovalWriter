@@ -178,7 +178,6 @@ class SettingsTreeWidget extends StatelessWidget {
         color: isDark 
             ? const Color(0xFF1F2937).withOpacity(0.3) 
             : const Color(0xFFF9FAFB).withOpacity(0.3),
-        borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: isDark 
               ? const Color(0xFF1F2937) 
@@ -338,7 +337,6 @@ class SettingsTreeWidget extends StatelessWidget {
         color: isDark 
             ? const Color(0xFF1F2937).withOpacity(0.3) 
             : const Color(0xFFF9FAFB).withOpacity(0.3),
-        borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: isDark 
               ? const Color(0xFF1F2937) 
@@ -392,7 +390,6 @@ class SettingsTreeWidget extends StatelessWidget {
         color: isDark 
             ? const Color(0xFF1F2937).withOpacity(0.3) 
             : const Color(0xFFF9FAFB).withOpacity(0.3),
-        borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: isDark 
               ? const Color(0xFF1F2937) 

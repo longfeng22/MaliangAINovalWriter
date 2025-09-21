@@ -1,12 +1,10 @@
 package com.ainovel.server.task.executor;
 
-import com.ainovel.server.domain.model.Novel; // Import Novel
 import com.ainovel.server.domain.model.Novel.Act; // Import Act
-import com.ainovel.server.domain.model.Novel.Chapter; // Import Chapter
 import com.ainovel.server.domain.model.Scene; // Import Scene
 import com.ainovel.server.service.NovelService;
 import com.ainovel.server.service.NovelAIService; // Import NovelAIService
-import com.ainovel.server.service.SceneService; // Import SceneService
+// import com.ainovel.server.service.SceneService; // Import SceneService
 import com.ainovel.server.task.BackgroundTaskExecutable;
 import com.ainovel.server.task.TaskContext;
 import com.ainovel.server.task.dto.continuecontent.GenerateSingleChapterParameters;
@@ -15,11 +13,8 @@ import com.ainovel.server.web.dto.CreatedChapterInfo;
 import com.ainovel.server.web.dto.GenerateSceneFromSummaryRequest; // Import the request DTO
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import lombok.Data; // Import Lombok Data
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
-import java.util.Objects; // Import Objects
-import java.time.Duration; // Import Duration
 // 引入 DTO
 import java.util.concurrent.atomic.AtomicReference; // 用于在lambda中传递sceneId
 import reactor.util.function.Tuple2;
@@ -38,7 +33,7 @@ public class GenerateSingleChapterTaskExecutable implements BackgroundTaskExecut
 
     private final NovelService novelService;
     private final NovelAIService novelAIService; // Inject NovelAIService
-    private final SceneService sceneService; // Inject SceneService
+    // private final SceneService sceneService; // Inject SceneService (暂未使用)
     // private final ChapterPersistenceService chapterPersistenceService; // Assume a service to handle chapter creation/updates
 
     @Override
@@ -83,9 +78,11 @@ public class GenerateSingleChapterTaskExecutable implements BackgroundTaskExecut
                     log.info("任务 {} 第 {} 章摘要生成完毕，等待评审。章节ID: {}", taskId, params.getChapterIndex(), chapterId);
                     
                     return Mono.just(GenerateSingleChapterResult.builder()
+                            .novelId(params.getNovelId())
                             .generatedChapterId(chapterId)
                             .generatedInitialSceneId(chapterInfo.getSceneId())
                             .generatedSummary(generatedSummary)
+                            .generatedContent(null)
                             .chapterIndex(params.getChapterIndex())
                             .contentGenerated(false)
                             .contentPersisted(false)
@@ -127,14 +124,19 @@ public class GenerateSingleChapterTaskExecutable implements BackgroundTaskExecut
     private Mono<CreatedChapterInfo> generateSummaryAndInitialChapter(String userId, GenerateSingleChapterParameters params, TaskContext<?> context) {
         log.info("任务 {}: 正在为第 {} 章生成摘要...", context.getTaskId(), params.getChapterIndex());
 
-        Mono<String> summaryMono = novelAIService.generateNextSingleSummary(
+        Mono<String> summaryMono = novelAIService.generateNextSingleSummaryStream(
                 userId,
                 params.getNovelId(),
                 params.getCurrentContext(),
                 params.getAiConfigIdSummary(),
-                params.getWritingStyle()
+                params.getWritingStyle(),
+                params.getSummaryPromptTemplateId(),
+                params.getSummaryPublicModelConfigId()
             )
-            .doOnError(e -> log.error("为章节 {} 生成摘要时出错: {}", params.getChapterIndex(), e.getMessage(), e));
+            .filter(chunk -> chunk != null && !chunk.equals("[DONE]") && !chunk.equalsIgnoreCase("heartbeat"))
+            .collect(StringBuilder::new, StringBuilder::append)
+            .map(StringBuilder::toString)
+            .doOnError(e -> log.error("为章节 {} 生成摘要(流式)时出错: {}", params.getChapterIndex(), e.getMessage(), e));
 
         return summaryMono
             .flatMap((String summary) -> {
@@ -203,26 +205,32 @@ public class GenerateSingleChapterTaskExecutable implements BackgroundTaskExecut
         log.info("任务 {}: 正在为章节 {} (场景 {}, 索引 {}) 生成内容... Persist={}", 
                 context.getTaskId(), chapterId, sceneId, params.getChapterIndex(), canPersist);
         
-        String contentContext = params.getCurrentContext() + "\n\n章节摘要:\n" + summary;
+        // 当前将上下文拼接作为AI输入由 NovelAIService 内部处理，无需在此变量中复用
 
         GenerateSceneFromSummaryRequest aiRequestDto = new GenerateSceneFromSummaryRequest();
         aiRequestDto.setChapterId(chapterId);
         aiRequestDto.setSceneId(sceneId);
         aiRequestDto.setSummary(summary);
         aiRequestDto.setAdditionalInstructions(params.getWritingStyle());
+        // 指定内容阶段的模型配置
+        aiRequestDto.setAiConfigId(params.getAiConfigIdContent());
+        // 指定内容阶段的提示词模板ID（可选）
+        if (params.getContentPromptTemplateId() != null && !params.getContentPromptTemplateId().isBlank()) {
+            aiRequestDto.setPromptTemplateId(params.getContentPromptTemplateId());
+        }
+        // 设置内容阶段的公共模型配置ID（如果有）
+        if (params.getContentPublicModelConfigId() != null && !params.getContentPublicModelConfigId().isBlank()) {
+            aiRequestDto.setPublicModelConfigId(params.getContentPublicModelConfigId());
+        }
 
         Mono<String> contentMono = novelAIService.generateSceneFromSummaryStream(userId, params.getNovelId(), aiRequestDto)
             .filter(chunk -> !"[DONE]".equals(chunk) && !"heartbeat".equals(chunk))
             .collect(StringBuilder::new, StringBuilder::append)
             .map(StringBuilder::toString)
             .doOnNext(content -> {
-                // 添加详细日志显示生成的内容长度和开头部分
+                // 仅打印长度，避免正文泄露
                 if (content != null && !content.isEmpty()) {
-                    String previewContent = content.length() > 50 
-                        ? content.substring(0, 50) + "..." 
-                        : content;
-                    log.info("任务 {}: AI成功生成内容，总长度: {} 字符，开头: '{}'", 
-                            context.getTaskId(), content.length(), previewContent);
+                    log.info("任务 {}: AI成功生成内容，总长度: {} 字符", context.getTaskId(), content.length());
                 } else {
                     log.warn("任务 {}: AI生成的内容为空或null", context.getTaskId());
                 }
@@ -255,11 +263,17 @@ public class GenerateSingleChapterTaskExecutable implements BackgroundTaskExecut
                     .map(savedScene -> true)
                     .defaultIfEmpty(false)
                     .map(contentWasPersisted -> {
+                        try {
+                            log.info("[BUILD RESULT] taskId={} chapterId={} sceneId={} persisted={} contentLen={}",
+                                    context.getTaskId(), chapterId, sceneId, contentWasPersisted, content != null ? content.length() : -1);
+                        } catch (Throwable ignore) {}
                         // 构建结果DTO + 生成的内容作为元组返回
                         GenerateSingleChapterResult result = GenerateSingleChapterResult.builder()
+                            .novelId(params.getNovelId())
                             .generatedChapterId(chapterId)
                             .generatedInitialSceneId(sceneId)
                             .generatedSummary(summary)
+                            .generatedContent(content)
                             .contentGenerated(true)
                             .contentPersisted(contentWasPersisted)
                             .chapterIndex(params.getChapterIndex())

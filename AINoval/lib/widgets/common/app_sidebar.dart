@@ -165,6 +165,19 @@ class _AppSidebarState extends State<AppSidebar> with SingleTickerProviderStateM
                         widget.onNavigate?.call('novels');
                       },
                     ),
+                    _buildNavItem(
+                      context,
+                      icon: Icons.auto_awesome,
+                      label: '提示词与预设',
+                      isSelected: widget.currentRoute == 'unified_management',
+                      onTap: () {
+                        if (!widget.isAuthed) {
+                          widget.onRequireAuth?.call();
+                          return;
+                        }
+                        widget.onNavigate?.call('unified_management');
+                      },
+                    ),
 
                     // _buildNavItem(
                     //   context,

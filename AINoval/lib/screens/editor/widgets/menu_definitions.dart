@@ -2,8 +2,6 @@ import 'package:ainoval/blocs/editor/editor_bloc.dart';
 import 'package:ainoval/utils/logger.dart';
 import 'package:ainoval/screens/editor/widgets/dialogs.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:ainoval/screens/editor/controllers/editor_screen_controller.dart';
 
 /// 通用菜单项数据模型
 class MenuItemData {
@@ -70,8 +68,10 @@ class ModelMenuDefinitions {
   static List<dynamic> getMenuItems({
     required bool isValidated,
     required bool isDefault,
+    required bool isToolDefault,
     required Future<void> Function(String) onValidate,
     required Future<void> Function(String) onSetDefault,
+    required Future<void> Function(String) onSetToolDefault,
     required Future<void> Function(String) onEdit,
     required Future<void> Function(String) onDelete,
   }) {
@@ -89,6 +89,14 @@ class ModelMenuDefinitions {
           icon: Icons.star,
           label: '设为默认',
           onTap: onSetDefault,
+        ),
+
+      // 设为工具调用默认（仅在已验证且当前不是工具默认时显示）
+      if (isValidated && !isToolDefault)
+        ModelMenuItemData(
+          icon: Icons.build_circle_outlined,
+          label: '设为工具调用',
+          onTap: onSetToolDefault,
         ),
       
       // 编辑操作

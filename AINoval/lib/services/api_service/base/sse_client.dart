@@ -141,6 +141,7 @@ class SseClient {
         body: body,
       ).listen(
         (event) {
+          AppLogger.v(_tag, '[SSE] Raw Event: ID=${event.id}, Event=${event.event}, DataLen=${event.data?.length ?? 0}');
           //TODO调试
           //AppLogger.v(_tag, '[SSE] Raw Event: ID=${event.id}, Event=${event.event}, Data=${event.data}');
 
@@ -173,12 +174,12 @@ class SseClient {
                 final parsedEndSignal = parser(endSignal);
                 if (!controller.isClosed) {
                   controller.add(parsedEndSignal);
-                  // 先主动取消底层连接，避免插件层自动重连
-                  try { sseSubscription.cancel(); } catch (_) {}
-                  _activeConnections.remove(cid);
-                  if (shouldGlobalUnsubscribe) {
-                    try { flutter_sse.SSEClient.unsubscribeFromSSE(); } catch (_) {}
-                  }
+                  // 🚀 修复：不再主动取消底层连接，避免插件层自动重连
+                  // try { sseSubscription.cancel(); } catch (_) {}
+                  // _activeConnections.remove(cid);
+                  // if (shouldGlobalUnsubscribe) {
+                  //   try { flutter_sse.SSEClient.unsubscribeFromSSE(); } catch (_) {}
+                  // }
                   // 延迟关闭，确保下游能收到结束信号
                   Future.delayed(const Duration(milliseconds: 100), () {
                     if (!controller.isClosed) {
@@ -204,11 +205,12 @@ class SseClient {
               final parsedEndSignal = parser(endSignal);
               if (!controller.isClosed) {
                 controller.add(parsedEndSignal);
-                try { sseSubscription.cancel(); } catch (_) {}
-                _activeConnections.remove(cid);
-                if (shouldGlobalUnsubscribe) {
-                  try { flutter_sse.SSEClient.unsubscribeFromSSE(); } catch (_) {}
-                }
+                // 🚀 修复：不再主动取消底层连接，避免插件层自动重连
+                // try { sseSubscription.cancel(); } catch (_) {}
+                // _activeConnections.remove(cid);
+                // if (shouldGlobalUnsubscribe) {
+                //   try { flutter_sse.SSEClient.unsubscribeFromSSE(); } catch (_) {}
+                // }
                 Future.delayed(const Duration(milliseconds: 100), () {
                   if (!controller.isClosed) {
                     controller.close();
@@ -254,6 +256,7 @@ class SseClient {
           try {
             final json = jsonDecode(data);
             if (json is Map<String, dynamic>) {
+              AppLogger.v(_tag, '[SSE] JSON Map keys: ${json.keys.join(',')}');
               // 检查JSON对象中是否包含特殊结束标记
               if (json['content'] == '}' || 
                   (json['finishReason'] != null && json['finishReason'].toString().isNotEmpty)) {
@@ -298,12 +301,8 @@ class SseClient {
           final bool isPostMethod = method == SSERequestType.POST;
           bool shouldStopRetry;
           if (isPostMethod && shouldGlobalUnsubscribe) {
-            _resetRetryIfWindowPassed();
-            final current = _retryStates[retryKey] ?? _RetryState(errorCount: 0, firstErrorAt: DateTime.now());
-            current.errorCount += 1;
-            _retryStates[retryKey] = current;
-            AppLogger.w(_tag, '[SSE] ${retryKey} 错误次数: ${current.errorCount}');
-            shouldStopRetry = current.errorCount >= maxRetries || _shouldStopRetryOnError(error);
+            // ✅ 设定生成类POST流属于一次性短流，收到错误（包括 AbortError）后不应重连
+            shouldStopRetry = true;
           } else {
             shouldStopRetry = _shouldStopRetryOnError(error);
           }
@@ -446,6 +445,12 @@ class SseClient {
     
     if (errorString.contains('clientexception') && errorString.contains('network error')) {
       AppLogger.i(_tag, '[SSE] 检测到通用network error，停止重试以避免后端重启期间重复请求');
+      return true;
+    }
+    
+    // ✅ 将 AbortError 视为期望的终止（例如收到 complete 后主动取消底层连接）
+    if (errorString.contains('aborterror') || errorString.contains('body stream buffer was aborted')) {
+      AppLogger.i(_tag, '[SSE] 检测到 AbortError/BodyStreamBuffer aborted，停止重试');
       return true;
     }
 

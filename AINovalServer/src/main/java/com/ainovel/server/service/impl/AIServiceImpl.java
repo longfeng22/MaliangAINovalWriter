@@ -28,6 +28,7 @@ import com.ainovel.server.service.ai.capability.ToolCallCapable;
 import com.ainovel.server.service.ai.tools.ToolExecutionService;
 import com.ainovel.server.service.ai.factory.AIModelProviderFactory;
 import com.ainovel.server.service.ai.capability.ProviderCapabilityService;
+import com.ainovel.server.service.ai.capability.ProviderCapabilityDetector;
 
 
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -68,6 +69,7 @@ public class AIServiceImpl implements AIService {
     private final ToolExecutionService toolExecutionService;
     private final ToolFallbackRegistry toolFallbackRegistry;
     private final ObjectMapper objectMapper;
+    private final List<ProviderCapabilityDetector> capabilityDetectors;
 
     @Autowired
     public AIServiceImpl(
@@ -77,7 +79,8 @@ public class AIServiceImpl implements AIService {
             ProviderCapabilityService capabilityService,
             ToolExecutionService toolExecutionService,
             ToolFallbackRegistry toolFallbackRegistry,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            List<ProviderCapabilityDetector> capabilityDetectors) {
         this.novelService = novelService;
         this.providerRegistryService = providerRegistryService;
         this.providerFactory = providerFactory;
@@ -85,67 +88,62 @@ public class AIServiceImpl implements AIService {
         this.toolExecutionService = toolExecutionService;
         this.toolFallbackRegistry = toolFallbackRegistry;
         this.objectMapper = objectMapper;
+        this.capabilityDetectors = capabilityDetectors;
         initializeModelGroups();
     }
 
     /**
-     * 初始化模型分组信息
+     * 动态初始化模型分组信息 - 从CapabilityDetector获取最新模型列表
      */
     private void initializeModelGroups() {
-        modelGroups.put("openai", List.of(
-                "gpt-3.5-turbo",
-                "gpt-4",
-                "gpt-4o-mini",
-                "gpt-5",
-                "gpt-4o"
-        ));
-
-        modelGroups.put("anthropic", List.of(
-                "claude-3-opus",
-                "claude-3-sonnet",
-                "claude-3-haiku"
-        ));
-
-        modelGroups.put("gemini", List.of(
-                "gemini-2.5-flash",
-                "gemini-2.0-flash",
-                "gemini-2.5-pro-preview-06-05",
-                "gemini-2.5-pro",
-                "gemini-2.5-pro-preview-03-25"
-        ));
-
-        modelGroups.put("siliconflow", List.of(
-                "deepseek-ai/DeepSeek-V3",
-                "Qwen/Qwen2.5-32B-Instruct",
-                "Qwen/Qwen1.5-110B-Chat",
-                "google/gemma-2-9b-it",
-                "meta-llama/Meta-Llama-3.1-70B-Instruct",
-                "meta-llama/Meta-Llama-3.1-70B-Instruct"
-        ));
+        log.info("开始动态初始化模型分组，共找到 {} 个CapabilityDetector", capabilityDetectors.size());
         
-        // 更新X.AI的modelGroups，添加所有Grok模型
-        modelGroups.put("x-ai", List.of(
-                "x-ai/grok-3-beta",
-                "x-ai/grok-3",
-                "x-ai/grok-3-fast-beta",
-                "x-ai/grok-3-mini-beta",
-                "x-ai/grok-3-mini-fast-beta",
-                "x-ai/grok-2-vision-1212"
-        ));
-
-        modelGroups.put("openrouter", List.of(
-                "openai/gpt-3.5-turbo",
-                "openai/gpt-4",
-                "openai/gpt-4-turbo",
-                "openai/gpt-4o",
-                "anthropic/claude-3-opus",
-                "anthropic/claude-3-sonnet",
-                "anthropic/claude-3-haiku",
-                "google/gemini-pro",
-                "google/gemini-1.5-pro",
-                "meta-llama/llama-3-70b-instruct",
-                "meta-llama/llama-3-8b-instruct"
-        ));
+        for (ProviderCapabilityDetector detector : capabilityDetectors) {
+            String providerName = detector.getProviderName();
+            try {
+                List<String> modelIds = detector.getDefaultModels()
+                        .map(ModelInfo::getId)
+                        .collectList()
+                        .block(); // 由于是启动时初始化，可以使用阻塞调用
+                
+                if (modelIds != null && !modelIds.isEmpty()) {
+                    modelGroups.put(providerName, modelIds);
+                    log.info("为提供商 '{}' 加载了 {} 个模型: {}", providerName, modelIds.size(), 
+                            modelIds.size() > 5 ? modelIds.subList(0, 5) + "..." : modelIds);
+                } else {
+                    log.warn("提供商 '{}' 没有返回任何默认模型", providerName);
+                }
+            } catch (Exception e) {
+                log.error("无法从CapabilityDetector获取提供商 '{}' 的模型列表: {}", providerName, e.getMessage(), e);
+                // 添加基本的后备模型，避免完全失败
+                addFallbackModels(providerName);
+            }
+        }
+        
+        log.info("模型分组初始化完成，共支持 {} 个提供商: {}", modelGroups.size(), modelGroups.keySet());
+    }
+    
+    /**
+     * 为特定提供商添加后备模型
+     */
+    private void addFallbackModels(String providerName) {
+        switch (providerName.toLowerCase()) {
+            case "openai" -> modelGroups.put(providerName, List.of("gpt-3.5-turbo", "gpt-4", "gpt-4o"));
+            case "anthropic" -> modelGroups.put(providerName, List.of("claude-3-opus", "claude-3-sonnet", "claude-3-haiku"));
+            case "gemini" -> modelGroups.put(providerName, List.of("gemini-2.5-flash", "gemini-2.5-pro"));
+            case "zhipu" -> modelGroups.put(providerName, List.of("glm-4", "glm-4-flash"));
+            case "doubao" -> modelGroups.put(providerName, List.of("ep-2025-01-ark"));
+            case "qwen" -> modelGroups.put(providerName, List.of("qwen-plus", "qwen-turbo"));
+            case "siliconflow" -> modelGroups.put(providerName, List.of("deepseek-ai/DeepSeek-V3"));
+            case "x-ai", "grok" -> modelGroups.put(providerName, List.of("x-ai/grok-3"));
+            case "togetherai" -> modelGroups.put(providerName, List.of("meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"));
+            case "openrouter" -> modelGroups.put(providerName, List.of("openai/gpt-4o"));
+            default -> {
+                log.warn("未知提供商 '{}' 没有后备模型配置", providerName);
+                modelGroups.put(providerName, List.of("default-model"));
+            }
+        }
+        log.info("为提供商 '{}' 使用后备模型配置", providerName);
     }
 
     @Override

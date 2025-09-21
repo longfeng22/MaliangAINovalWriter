@@ -36,13 +36,13 @@ class EditorLayoutManager extends ChangeNotifier {
   double editorSidebarWidth = 400;
   double chatSidebarWidth = 380;
   
-  // 多面板模式下的单个面板宽度
+  // 多面板模式下的单个面板宽度（优化1080p显示）
   Map<String, double> panelWidths = {
-    aiChatPanel: 600, // 聊天侧边栏默认最大宽度打开
-    aiSummaryPanel: 350, // 其他侧边栏保持当前宽度
-    aiScenePanel: 350,
-    aiContinueWritingPanel: 350,
-    aiSettingGenerationPanel: 350,
+    aiChatPanel: 480, // 聊天侧边栏减小默认宽度以适配1080p
+    aiSummaryPanel: 320, // 其他侧边栏减小宽度，确保1080p下按钮可见
+    aiScenePanel: 320,
+    aiContinueWritingPanel: 320,
+    aiSettingGenerationPanel: 320,
   };
 
   // 侧边栏宽度限制

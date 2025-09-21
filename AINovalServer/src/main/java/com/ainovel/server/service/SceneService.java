@@ -200,10 +200,11 @@ public interface SceneService {
      * @param chapterId 章节ID
      * @param title 场景标题
      * @param summary 场景摘要
+     * @param content 场景内容（可选）
      * @param position 插入位置（如果为null则添加到末尾）
      * @return 创建的场景
      */
-    Mono<Scene> addScene(String novelId, String chapterId, String title, String summary, Integer position);
+    Mono<Scene> addScene(String novelId, String chapterId, String title, String summary, String content, Integer position);
 
     /**
      * 根据ID获取场景，简化版findSceneById

@@ -10,6 +10,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -264,11 +265,39 @@ public class TaskStateServiceImpl implements TaskStateService {
     
     @Override
     public Flux<BackgroundTask> getUserTasks(String userId, TaskStatus status, int page, int size) {
+        // 排除摘要相关任务类型
+        List<String> excludeTypes = Arrays.asList("GENERATE_SUMMARY", "BATCH_GENERATE_SUMMARY");
+        
+        // 按创建时间倒序排列
+        PageRequest pageRequest = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "timestamps.createdAt"));
+        
+        Flux<BackgroundTask> parentTasksFlux;
         if (status != null) {
-            return taskRepository.findByUserIdAndStatus(userId, status, PageRequest.of(page, size));
+            parentTasksFlux = taskRepository.findParentTasksByUserIdAndStatusExcludingTypes(userId, status, excludeTypes, pageRequest);
         } else {
-            return taskRepository.findByUserId(userId, PageRequest.of(page, size));
+            parentTasksFlux = taskRepository.findParentTasksByUserIdExcludingTypes(userId, excludeTypes, pageRequest);
         }
+        
+        // 为每个父任务查询并附加其子任务
+        return parentTasksFlux
+            .concatMap(parentTask -> {
+                // 首先返回父任务
+                Flux<BackgroundTask> parentFlux = Flux.just(parentTask);
+                
+                // 然后查询并返回该父任务的所有子任务
+                Flux<BackgroundTask> childrenFlux = taskRepository.findByParentTaskId(parentTask.getId())
+                    .sort((a, b) -> {
+                        Instant aTime = a.getTimestamps().getCreatedAt();
+                        Instant bTime = b.getTimestamps().getCreatedAt();
+                        if (aTime == null && bTime == null) return 0;
+                        if (aTime == null) return 1;
+                        if (bTime == null) return -1;
+                        return bTime.compareTo(aTime); // 倒序
+                    });
+                
+                // 合并父任务和子任务
+                return parentFlux.concatWith(childrenFlux);
+            });
     }
     
     @Override

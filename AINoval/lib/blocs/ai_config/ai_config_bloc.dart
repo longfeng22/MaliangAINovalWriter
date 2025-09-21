@@ -2,6 +2,7 @@ import 'package:ainoval/models/user_ai_model_config_model.dart';
 import 'package:ainoval/models/ai_model_group.dart';
 import 'package:ainoval/models/model_info.dart'; // Import ModelInfo
 import 'package:ainoval/services/api_service/repositories/user_ai_model_config_repository.dart';
+import 'package:ainoval/services/model_listing/model_listing_service.dart';
 import 'package:ainoval/utils/logger.dart';
 import 'package:bloc/bloc.dart';
 import 'package:collection/collection.dart'; // For firstWhereOrNull
@@ -32,6 +33,8 @@ class AiConfigBloc extends Bloc<AiConfigEvent, AiConfigState> {
     on<ClearApiKeyTestError>(_onClearApiKeyTestError);
     on<ClearModelsCache>(_onClearModelsCache);
     on<AddCustomModelAndValidate>(_onAddCustomModelAndValidate);
+    on<SetToolDefaultAiConfig>(_onSetToolDefaultAiConfig);
+    on<LoadModelsDirect>(_onLoadModelsDirect);
   }
   final UserAIModelConfigRepository _repository;
   
@@ -433,6 +436,47 @@ class AiConfigBloc extends Bloc<AiConfigEvent, AiConfigState> {
     }
   }
 
+  Future<void> _onSetToolDefaultAiConfig(
+      SetToolDefaultAiConfig event, Emitter<AiConfigState> emit) async {
+    emit(state.copyWith(
+        actionStatus: AiConfigActionStatus.loading,
+        actionErrorMessage: () => null));
+    try {
+      AppLogger.i('AiConfigBloc', '开始设置工具默认配置: configId=${event.configId}');
+
+      // 调用仓库设置工具默认
+      await _repository.setToolDefaultConfiguration(
+          userId: event.userId, configId: event.configId);
+
+      // 更新所有配置的工具默认状态
+      final currentConfigs = List<UserAIModelConfigModel>.from(state.configs);
+      for (int i = 0; i < currentConfigs.length; i++) {
+        if (currentConfigs[i].id == event.configId) {
+          currentConfigs[i] = currentConfigs[i].copyWith(isToolDefault: true);
+        } else if (currentConfigs[i].isToolDefault) {
+          currentConfigs[i] = currentConfigs[i].copyWith(isToolDefault: false);
+        }
+      }
+
+      // 重新构建providerDefaultConfigs（不影响该映射，但保持一致流程）
+      final providerDefaultConfigs = _buildProviderDefaultConfigs(currentConfigs);
+
+      _lastConfigsLoadTime = null;
+
+      emit(state.copyWith(
+        actionStatus: AiConfigActionStatus.success,
+        configs: currentConfigs,
+        providerDefaultConfigs: providerDefaultConfigs,
+      ));
+      AppLogger.i('AiConfigBloc', '工具默认配置设置成功');
+    } catch (e, stackTrace) {
+      AppLogger.e('AiConfigBloc', '设置工具默认配置失败', e, stackTrace);
+      emit(state.copyWith(
+          actionStatus: AiConfigActionStatus.error,
+          actionErrorMessage: () => '设置工具默认失败: ${e.toString()}'));
+    }
+  }
+
   void _onClearProviderModels(
       ClearProviderModels event, Emitter<AiConfigState> emit) {
     // 清除模型列表和当前选中的提供商
@@ -447,24 +491,24 @@ class AiConfigBloc extends Bloc<AiConfigEvent, AiConfigState> {
   Future<void> _onGetProviderDefaultConfig(
       GetProviderDefaultConfig event, Emitter<AiConfigState> emit) async {
     final provider = event.provider;
-    print('⚠️ 开始处理GetProviderDefaultConfig事件，provider=$provider');
+    //print('⚠️ 开始处理GetProviderDefaultConfig事件，provider=$provider');
     
     // 获取当前状态的providerDefaultConfigs副本
     final providerDefaultConfigs = Map<String, UserAIModelConfigModel>.from(state.providerDefaultConfigs);
     
     // 从已加载的配置中查找
     final providerConfigs = state.configs.where((c) => c.provider == provider).toList();
-    print('⚠️ 查找provider=$provider的配置，找到${providerConfigs.length}个配置');
+    //print('⚠️ 查找provider=$provider的配置，找到${providerConfigs.length}个配置');
     
     if (providerConfigs.isEmpty) {
-      print('⚠️ 没有找到provider=$provider的配置');
+      //print('⚠️ 没有找到provider=$provider的配置');
       // 没有找到该提供商的配置，从Map中移除这个提供商的配置（如果有）
       if (providerDefaultConfigs.containsKey(provider)) {
         providerDefaultConfigs.remove(provider);
         emit(state.copyWith(
           providerDefaultConfigs: providerDefaultConfigs,
         ));
-        print('⚠️ 已从providerDefaultConfigs中移除provider=$provider的配置');
+        //print('⚠️ 已从providerDefaultConfigs中移除provider=$provider的配置');
       }
       return;
     }
@@ -478,7 +522,7 @@ class AiConfigBloc extends Bloc<AiConfigEvent, AiConfigState> {
       ),
     );
     
-    print('⚠️ 找到provider=$provider的默认配置，id=${defaultConfig.id}，apiEndpoint=${defaultConfig.apiEndpoint}，hasApiKey=${defaultConfig.apiKey != null}');
+    //print('⚠️ 找到provider=$provider的默认配置，id=${defaultConfig.id}，apiEndpoint=${defaultConfig.apiEndpoint}，hasApiKey=${defaultConfig.apiKey != null}');
     
     // 更新或添加该提供商的默认配置
     providerDefaultConfigs[provider] = defaultConfig;
@@ -488,7 +532,7 @@ class AiConfigBloc extends Bloc<AiConfigEvent, AiConfigState> {
       providerDefaultConfigs: providerDefaultConfigs,
     ));
     
-    print('⚠️ 已更新状态中的providerDefaultConfigs，当前包含的提供商：${providerDefaultConfigs.keys.join(", ")}');
+    //print('⚠️ 已更新状态中的providerDefaultConfigs，当前包含的提供商：${providerDefaultConfigs.keys.join(", ")}');
   }
 
   // 处理加载API密钥的事件
@@ -503,20 +547,20 @@ class AiConfigBloc extends Bloc<AiConfigEvent, AiConfigState> {
       if (config != null && config.apiKey != null) {
         // 如果已加载的配置中有API密钥，直接使用
         // event.onApiKeyLoaded(config.apiKey!); // Commenting out: ValueGetter<void> takes no arguments
-        print("API Key found in state for ${event.configId}");
+        //print("API Key found in state for ${event.configId}");
         // TODO: Decide how to actually return/use this key - maybe emit a state?
         return;
       }
       
       // 如果没有找到配置或者没有API密钥，提示用户手动输入
       // event.onApiKeyLoaded("请手动输入API密钥"); // Commenting out: ValueGetter<void> takes no arguments
-      print("API Key NOT found in state for ${event.configId}");
+      //print("API Key NOT found in state for ${event.configId}");
        // TODO: Decide how to handle missing key - maybe emit an error state?
     } catch (e, stackTrace) {
       AppLogger.e('AiConfigBloc', '获取API密钥失败', e, stackTrace);
       // 如果失败，返回一个错误提示
       // event.onApiKeyLoaded("获取失败，请手动输入"); // Commenting out: ValueGetter<void> takes no arguments
-      print("Error loading API Key for ${event.configId}: $e");
+      //print("Error loading API Key for ${event.configId}: $e");
        // TODO: Decide how to handle error - maybe emit an error state?
     }
   }
@@ -602,39 +646,35 @@ class AiConfigBloc extends Bloc<AiConfigEvent, AiConfigState> {
       TestApiKey event, Emitter<AiConfigState> emit) async {
     emit(state.copyWith(
       isTestingApiKey: true,
-      apiKeyTestSuccessProviderClearable: () => null, 
-      apiKeyTestErrorClearable: () => null, 
+      apiKeyTestSuccessProviderClearable: () => null,
+      apiKeyTestErrorClearable: () => null,
     ));
     try {
-      final models = await _repository.listModelsWithApiKey(
+      final ok = await _repository.testApiKey(
         provider: event.providerName,
         apiKey: event.apiKey,
         apiEndpoint: event.apiEndpoint,
+        modelName: event.modelName, // 传递模型名称
       );
 
-      AppLogger.i('AiConfigBloc', '测试 API Key 成功 for ${event.providerName}, 获取到 ${models.length} 个模型');
-      
-      // 更新缓存时间
-      _modelsCacheTime[event.providerName] = DateTime.now();
-      
-      // Use the new factory for ModelInfo list
-      final modelGroup = AIModelGroup.fromModelInfoList(event.providerName, models);
-      final updatedModelGroups = Map<String, AIModelGroup>.from(state.modelGroups);
-      updatedModelGroups[event.providerName] = modelGroup;
-
-      emit(state.copyWith(
-        isTestingApiKey: false,
-        apiKeyTestSuccessProvider: event.providerName, 
-        modelsForProviderInfo: models, 
-        modelGroups: updatedModelGroups, // Update model groups
-        selectedProviderForModels: event.providerName, 
-      ));
+      if (ok) {
+        AppLogger.i('AiConfigBloc', 'API Key 测试通过 for ${event.providerName}${event.modelName != null ? " 模型: ${event.modelName}" : ""}');
+        emit(state.copyWith(
+          isTestingApiKey: false,
+          apiKeyTestSuccessProvider: event.providerName,
+        ));
+      } else {
+        AppLogger.w('AiConfigBloc', 'API Key 测试未通过 for ${event.providerName}${event.modelName != null ? " 模型: ${event.modelName}" : ""}');
+        emit(state.copyWith(
+          isTestingApiKey: false,
+          apiKeyTestError: 'API Key 无效或无权限',
+        ));
+      }
     } catch (e, stackTrace) {
-      AppLogger.e('AiConfigBloc', '测试 API Key 异常 for ${event.providerName}', e, stackTrace);
+      AppLogger.e('AiConfigBloc', '测试 API Key 异常 for ${event.providerName}${event.modelName != null ? " 模型: ${event.modelName}" : ""}', e, stackTrace);
       emit(state.copyWith(
         isTestingApiKey: false,
         apiKeyTestError: 'API Key 测试失败: ${e.toString()}',
-        modelsForProviderInfo: [], 
       ));
     }
   }
@@ -741,6 +781,43 @@ class AiConfigBloc extends Bloc<AiConfigEvent, AiConfigState> {
       // 清除所有模型缓存
       _modelsCacheTime.clear();
       AppLogger.i('AiConfigBloc', '已清除所有模型缓存');
+    }
+  }
+
+  // 直连获取模型列表（前端直连供应商/中转服务）
+  Future<void> _onLoadModelsDirect(
+      LoadModelsDirect event, Emitter<AiConfigState> emit) async {
+    emit(state.copyWith(
+      modelsForProviderInfo: [],
+      selectedProviderForModels: event.providerName,
+      apiKeyTestSuccessProviderClearable: () => null,
+      apiKeyTestErrorClearable: () => null,
+    ));
+    try {
+      final svc = ModelListingService();
+      final models = await svc.listModelsDirect(
+        provider: event.providerName,
+        apiKey: event.apiKey,
+        apiEndpoint: event.apiEndpoint,
+      );
+
+      // 更新缓存时间（沿用后端路径的缓存字段）
+      _modelsCacheTime[event.providerName] = DateTime.now();
+
+      final modelGroup = AIModelGroup.fromModelInfoList(event.providerName, models);
+      final updatedModelGroups = Map<String, AIModelGroup>.from(state.modelGroups);
+      updatedModelGroups[event.providerName] = modelGroup;
+
+      emit(state.copyWith(
+        modelsForProviderInfo: models,
+        modelGroups: updatedModelGroups,
+        selectedProviderForModels: event.providerName,
+        errorMessage: () => null,
+      ));
+    } catch (e, s) {
+      AppLogger.e('AiConfigBloc', '直连获取模型失败 for ${event.providerName}', e, s);
+      // 失败时不抛出，回退到后端拉取
+      add(LoadModelsForProvider(provider: event.providerName));
     }
   }
 }

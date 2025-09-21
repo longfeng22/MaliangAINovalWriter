@@ -262,6 +262,8 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
     required String modificationPrompt,
     required String modelConfigId,
     String scope = 'self',
+    bool? isPublicModel,
+    String? publicModelConfigId,
   }) {
     try {
       AppLogger.info(_tag, '修改设定节点: $nodeId');
@@ -271,6 +273,8 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
         'modificationPrompt': modificationPrompt,
         'modelConfigId': modelConfigId,
         'scope': scope,
+        if (isPublicModel == true) 'publicModel': true,
+        if (publicModelConfigId != null) 'publicModelConfigId': publicModelConfigId,
       };
 
       return _sseClient.streamEvents<SettingGenerationEvent>(
@@ -392,11 +396,21 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
         '/setting-generation/$sessionId/save',
         data: requestBody,
       );
-      
-      final message = novelId != null ? '设定保存成功，历史记录已自动创建' : '独立快照保存成功';
+      // 后端可能返回包裹结构 { success, data: { rootSettingIds, historyId } }
+      Map<String, dynamic> resultMap = (result is Map<String, dynamic>) ? result : <String, dynamic>{};
+      final Map<String, dynamic> payload = (resultMap['data'] is Map<String, dynamic>)
+          ? (resultMap['data'] as Map<String, dynamic>)
+          : resultMap;
+
+      String message;
+      if (updateExisting) {
+        message = '历史记录已成功更新';
+      } else {
+        message = (novelId != null) ? '设定保存成功，历史记录已自动创建' : '独立快照保存成功';
+      }
       AppLogger.info(_tag, message);
-      
-      return SaveResult.fromJson(result as Map<String, dynamic>);
+
+      return SaveResult.fromJson(payload);
     } catch (e) {
       AppLogger.error(_tag, '保存生成设定失败', e);
       String userFriendlyMessage = _getUserFriendlyErrorMessage(e);

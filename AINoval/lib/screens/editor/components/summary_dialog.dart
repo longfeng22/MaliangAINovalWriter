@@ -260,9 +260,7 @@ class _SummaryDialogState extends State<SummaryDialog> with AIDialogCommonLogic 
         _tempOverlay = null;
       },
     );
-    
-    // 将overlay插入到当前上下文
-    Overlay.of(context).insert(_tempOverlay!);
+    // 由 UnifiedAIModelDropdown.show 内部负责插入 OverlayEntry
   }
 
   OverlayEntry? _tempOverlay;

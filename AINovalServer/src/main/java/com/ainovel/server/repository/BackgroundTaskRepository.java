@@ -70,4 +70,25 @@ public interface BackgroundTaskRepository extends ReactiveMongoRepository<Backgr
      * @return 符合条件的任务流
      */
     Flux<BackgroundTask> findByStatusAndExecutionNodeId(TaskStatus status, String executionNodeId);
+    
+    /**
+     * 查找用户的父任务（排除摘要相关任务），按创建时间倒序
+     * @param userId 用户ID
+     * @param excludeTypes 排除的任务类型列表
+     * @param pageable 分页参数
+     * @return 符合条件的父任务流
+     */
+    @org.springframework.data.mongodb.repository.Query("{ 'userId': ?0, 'parentTaskId': null, 'taskType': { $nin: ?1 } }")
+    Flux<BackgroundTask> findParentTasksByUserIdExcludingTypes(String userId, java.util.List<String> excludeTypes, Pageable pageable);
+    
+    /**
+     * 查找用户指定状态的父任务（排除摘要相关任务），按创建时间倒序
+     * @param userId 用户ID
+     * @param status 任务状态
+     * @param excludeTypes 排除的任务类型列表
+     * @param pageable 分页参数
+     * @return 符合条件的父任务流
+     */
+    @org.springframework.data.mongodb.repository.Query("{ 'userId': ?0, 'status': ?1, 'parentTaskId': null, 'taskType': { $nin: ?2 } }")
+    Flux<BackgroundTask> findParentTasksByUserIdAndStatusExcludingTypes(String userId, TaskStatus status, java.util.List<String> excludeTypes, Pageable pageable);
 } 

@@ -57,6 +57,7 @@ import 'package:ainoval/utils/web_theme.dart';
 import 'package:ainoval/utils/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ainoval/l10n/app_localizations.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -64,6 +65,10 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ainoval/services/api_service/repositories/prompt_repository.dart';
 import 'package:ainoval/services/api_service/repositories/impl/prompt_repository_impl.dart';
+import 'package:ainoval/services/api_service/repositories/impl/task_repository_impl.dart';
+import 'package:ainoval/services/api_service/repositories/task_repository.dart';
+import 'package:ainoval/utils/event_bus.dart';
+import 'package:ainoval/services/task_event_cache.dart';
 // 重复导入清理（下方已存在这些导入）
 import 'package:ainoval/blocs/universal_ai/universal_ai_bloc.dart';
 import 'package:ainoval/utils/navigation_logger.dart';
@@ -81,6 +86,9 @@ import 'package:ainoval/screens/unified_management/unified_management_screen.dar
 void main() {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
+
+    // 预加载中文与英文字体，避免 Web 首次渲染出现“方块/乱码”
+    await _preloadFonts();
 
     // Web 平台下：覆盖 Flutter 全局错误处理，避免 Inspector 在处理 JS 对象时报错
     FlutterError.onError = (FlutterErrorDetails details) {
@@ -225,6 +233,10 @@ void main() {
         RepositoryProvider<SettingGenerationRepository>.value(
           value: settingGenerationRepository,
         ),
+        // 提供 TaskRepository 以供全局任务订阅
+        RepositoryProvider<TaskRepository>(
+          create: (_) => TaskRepositoryImpl(apiClient: apiClient),
+        ),
       ],
       child: MultiBlocProvider(
         providers: [
@@ -309,6 +321,26 @@ void main() {
   });
 }
 
+// 预加载项目使用的关键字体，降低 Web 首渲出现中文方块/乱码的概率
+Future<void> _preloadFonts() async {
+  try {
+    final noto = await rootBundle.load('assets/fonts/NotoSansSC-Regular.ttf');
+    final notoBold = await rootBundle.load('assets/fonts/NotoSansSC-Bold.ttf');
+    final roboto = await rootBundle.load('assets/fonts/Roboto-Regular.ttf');
+
+    final loader = FontLoader('NotoSansSC')
+      ..addFont(Future.value(ByteData.view(noto.buffer)))
+      ..addFont(Future.value(ByteData.view(notoBold.buffer)));
+    await loader.load();
+
+    final loader2 = FontLoader('Roboto')
+      ..addFont(Future.value(ByteData.view(roboto.buffer)));
+    await loader2.load();
+  } catch (e) {
+    debugPrint('字体预加载失败: $e');
+  }
+}
+
 // 初始化注册配置
 Future<void> _initializeRegistrationConfig() async {
   try {
@@ -369,6 +401,16 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   bool _postLoginBootstrapped = false;
+  // 新增：主题加载去重标记，避免每次重建都请求并覆盖本地预览
+  bool _themeBootstrapped = false;
+  String? _themeBootstrappedUserId;
+  StreamSubscription<Map<String, dynamic>>? _taskEventSub;
+  StreamSubscription<AppEvent>? _taskControlSub;
+  // 任务事件监听“单飞”与节流控制，避免并发多连
+  bool _isStartingTaskListener = false;
+  String? _taskListenerUserId;
+  DateTime? _lastTaskListenerStartAt;
+  static const Duration _taskListenerRestartDebounce = Duration(seconds: 3);
   @override
   void initState() {
     super.initState();
@@ -379,6 +421,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     ImageCacheService().clearCache();
+    // 清理任务监听
+    _taskEventSub?.cancel();
+    _taskControlSub?.cancel();
     super.dispose();
   }
 
@@ -443,6 +488,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                   context.read<PresetBloc>().add(const LoadAllPresetData());
                   context.read<PromptNewBloc>().add(const LoadAllPromptPackages());
                   _postLoginBootstrapped = true;
+                  // 登录时先不强制开启监听，改为按需：监听事件总线的开始/停止指令
+                  _ensureTaskControlBusHook(userId);
+                  // 确保全局任务事件监听已启动（幂等触发）
+                  try { EventBus.instance.fire(const StartTaskEventsListening()); } catch (_) {}
                 }
               } else {
                 AppLogger.e('MyApp',
@@ -451,6 +500,18 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             } else if (state is AuthUnauthenticated) {
               AppLogger.i('MyApp', '✅ 用户已退出登录，清理所有BLoC状态');
               _postLoginBootstrapped = false;
+              // 重置主题加载去重，允许下次登录重新拉取一次主题
+              _themeBootstrapped = false;
+              _themeBootstrappedUserId = null;
+              // 退出时取消任务监听
+              _taskEventSub?.cancel();
+              _taskEventSub = null;
+              _taskControlSub?.cancel();
+              _taskControlSub = null;
+              // 重置监听状态
+              _isStartingTaskListener = false;
+              _taskListenerUserId = null;
+              _lastTaskListenerStartAt = null;
               
               // 清理所有BLoC状态，停止进行中的请求
               try {
@@ -497,12 +558,29 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                   'MyApp', '📚 显示小说列表界面');
               // 🚀 登录成功后异步加载并应用用户的主题变体，确保全局组件使用保存的主题色
               final userId = AppConfig.userId;
-              if (userId != null) {
+              if (userId != null && (!_themeBootstrapped || _themeBootstrappedUserId != userId)) {
                 () async {
                   try {
+                    // 捕获启动请求时的当前本地主题，用于避免覆盖用户正在预览的主题
+                    final String startVariant = WebTheme.currentVariant;
                     final settings = await NovelRepositoryImpl.getInstance().getUserEditorSettings(userId);
-                    WebTheme.applyVariant(settings.themeVariant);
-                    AppLogger.i('MyApp', '🎨 已应用用户主题变体: ${settings.themeVariant}');
+                    // 仅当用户期间没有本地切换过主题时，才应用服务端主题，避免覆盖未保存的预览
+                    if (WebTheme.currentVariant == startVariant) {
+                      WebTheme.applyVariant(settings.themeVariant);
+                      AppLogger.i('MyApp', '🎨 已应用用户主题变体: ${settings.themeVariant}');
+                    } else {
+                      AppLogger.i('MyApp', '⏭️ 用户在加载期间已变更主题，跳过覆盖服务端主题');
+                    }
+                    // 标记本次用户已完成主题引导加载，避免重复覆盖本地预览
+                    if (mounted) {
+                      setState(() {
+                        _themeBootstrapped = true;
+                        _themeBootstrappedUserId = userId;
+                      });
+                    } else {
+                      _themeBootstrapped = true;
+                      _themeBootstrappedUserId = userId;
+                    }
                   } catch (e) {
                     AppLogger.w('MyApp', '无法应用用户主题变体: $e');
                   }
@@ -563,6 +641,160 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         );
       },
     );
+  }
+}
+
+extension _TaskEventBootstrap on _MyAppState {
+  void _startGlobalTaskEventListener(String userId) {
+    try {
+      // 若已存在对同一用户的有效监听，跳过重复启动
+      if (_taskEventSub != null && _taskListenerUserId == userId) {
+        AppLogger.i('MyApp', '全局任务事件监听已在运行(userId=$userId)，跳过重复启动');
+        return;
+      }
+
+      // 单飞：正在启动中则跳过并发触发
+      if (_isStartingTaskListener) {
+        AppLogger.i('MyApp', '全局任务事件监听正在启动中，跳过并发触发');
+        return;
+      }
+
+      // 节流：短时间内多次触发则忽略（避免空指针，使用局部快照）
+      final now = DateTime.now();
+      final lastStartAt = _lastTaskListenerStartAt;
+      if (lastStartAt != null &&
+          now.difference(lastStartAt) < _MyAppState._taskListenerRestartDebounce) {
+        AppLogger.i('MyApp', '全局任务事件监听启动过于频繁，已节流');
+        return;
+      }
+
+      _isStartingTaskListener = true;
+      _lastTaskListenerStartAt = now;
+      _taskListenerUserId = userId;
+
+      final taskRepo = context.read<TaskRepository>();
+      
+      // 🚀 启动SSE监听前先加载历史任务数据
+      _loadHistoryTasksAndStartSSE(userId, taskRepo).whenComplete(() {
+        _isStartingTaskListener = false;
+      });
+    } catch (e) {
+      AppLogger.e('MyApp', '启动全局任务事件监听失败', e);
+      _isStartingTaskListener = false;
+    }
+  }
+  
+  /// 加载历史任务数据并启动SSE监听
+  Future<void> _loadHistoryTasksAndStartSSE(String userId, TaskRepository taskRepo) async {
+    try {
+      AppLogger.i('MyApp', '开始加载用户历史任务数据...');
+      
+      // 使用 TaskRepository 获取历史任务（架构更清晰）
+      final historyTasks = await taskRepo.getUserHistoryTasks(size: 50);
+      
+      if (historyTasks.isNotEmpty) {
+        AppLogger.i('MyApp', '加载到 ${historyTasks.length} 条历史任务，正在初始化缓存...');
+        TaskEventCache.instance.initializeHistoryTasks(historyTasks);
+        AppLogger.i('MyApp', '历史任务缓存初始化完成');
+      } else {
+        AppLogger.i('MyApp', '未发现历史任务数据');
+      }
+    } catch (e) {
+      AppLogger.w('MyApp', '加载历史任务数据失败，将仅依赖SSE获取新任务: $e');
+    }
+    
+    // 无论历史任务加载成功与否，都要启动SSE监听
+    _startSSEListener(userId, taskRepo);
+  }
+  
+  /// 启动SSE监听器
+  void _startSSEListener(String userId, TaskRepository taskRepo) {
+    // 二次幂等防护：创建前再检查一次
+    if (_taskEventSub != null) {
+      AppLogger.i('MyApp', '检测到已有任务事件订阅，跳过重复创建');
+      return;
+    }
+    _taskEventSub = taskRepo.streamUserTaskEvents(userId: userId).listen((ev) {
+      // 心跳也要向下游分发，用于面板刷新 _lastEventTs，避免误触发降级轮询
+      final t = (ev['type'] ?? '').toString();
+      if (t == 'HEARTBEAT') {
+        try { TaskEventCache.instance.onEvent(ev); } catch (_) {}
+        EventBus.instance.fire(TaskEventReceived(event: ev));
+        return;
+      }
+      
+      // 🚀 自动续写任务完成时刷新积分（全局处理，确保即使面板未打开也能刷新）
+      if (t == 'TASK_COMPLETED') {
+        final taskType = (ev['taskType'] ?? '').toString();
+        if (taskType == 'CONTINUE_WRITING_CONTENT') {
+          AppLogger.i('MyApp', '自动续写任务完成，全局刷新用户积分');
+          try {
+            context.read<CreditBloc>().add(const RefreshUserCredits());
+          } catch (e) {
+            AppLogger.w('MyApp', '全局刷新积分失败', e);
+          }
+        }
+      }
+      
+      // 广播到全局事件总线，供任意界面消费（如 AITaskCenterPanel）
+      try { TaskEventCache.instance.onEvent(ev); } catch (_) {}
+      try {
+        final id = (ev['taskId'] ?? '').toString();
+        final pid = (ev['parentTaskId'] ?? '').toString();
+        final hasResult = ev.containsKey('result');
+        AppLogger.i('MyApp', 'SSE事件: type=$t id=$id parent=$pid hasResult=$hasResult');
+      } catch (_) {}
+      EventBus.instance.fire(TaskEventReceived(event: ev));
+    }, onError: (e, st) {
+      AppLogger.w('MyApp', '任务事件流错误: $e');
+      _taskEventSub = null; // 允许后续重新启动
+      // 延迟重连（受单飞与节流保护）
+      Future.delayed(const Duration(seconds: 5), () {
+        if (!mounted) return;
+        final uid = AppConfig.userId;
+        if (uid != null && uid == _taskListenerUserId) {
+          AppLogger.i('MyApp', '准备在错误后重连任务事件SSE');
+          _startGlobalTaskEventListener(uid);
+        }
+      });
+    }, onDone: () {
+      AppLogger.i('MyApp', '任务事件流已结束');
+      _taskEventSub = null; // 允许后续重新启动
+      // 延迟重连（受单飞与节流保护）
+      Future.delayed(const Duration(seconds: 5), () {
+        if (!mounted) return;
+        final uid = AppConfig.userId;
+        if (uid != null && uid == _taskListenerUserId) {
+          AppLogger.i('MyApp', '准备在结束后重连任务事件SSE');
+          _startGlobalTaskEventListener(uid);
+        }
+      });
+    });
+    AppLogger.i('MyApp', '全局任务事件监听已启动 (userId=$userId)');
+  }
+
+  void _stopGlobalTaskEventListener() {
+    try {
+      _taskEventSub?.cancel();
+      _taskEventSub = null;
+      AppLogger.i('MyApp', '全局任务事件监听已停止');
+      _isStartingTaskListener = false;
+    } catch (e) {
+      AppLogger.w('MyApp', '停止全局任务事件监听失败', e);
+    }
+  }
+
+  void _ensureTaskControlBusHook(String userId) {
+    // 已有则不重复挂钩
+    if (_taskControlSub != null) return;
+    _taskControlSub = EventBus.instance.eventStream.listen((evt) {
+      if (evt is StartTaskEventsListening) {
+        _startGlobalTaskEventListener(userId);
+      } else if (evt is StopTaskEventsListening) {
+        _stopGlobalTaskEventListener();
+      }
+    });
+    AppLogger.i('MyApp', '任务监听控制总线已挂接');
   }
 }
 

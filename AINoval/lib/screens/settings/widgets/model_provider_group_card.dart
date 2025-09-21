@@ -18,6 +18,7 @@ class ModelProviderGroupCard extends StatelessWidget {
     required this.onToggleExpanded,
     required this.onAddModel,
     required this.onSetDefault,
+    required this.onSetToolDefault,
     required this.onValidate,
     required this.onEdit,
     required this.onDelete,
@@ -33,6 +34,7 @@ class ModelProviderGroupCard extends StatelessWidget {
   final VoidCallback onToggleExpanded;
   final VoidCallback onAddModel;
   final Function(String) onSetDefault;
+  final Function(String) onSetToolDefault;
   final Function(String) onValidate;
   final Function(String) onEdit;
   final Function(String) onDelete;
@@ -52,8 +54,17 @@ class ModelProviderGroupCard extends StatelessWidget {
       orElse: () => UserAIModelConfigModel.empty(),
     );
     
-    // 只有当默认模型真正在当前组内时才显示
+    // 查找在当前提供商组内的工具默认模型
+    final toolDefaultConfig = configs.firstWhere(
+      (c) => c.isToolDefault,
+      orElse: () => UserAIModelConfigModel.empty(),
+    );
+    
+    // 只有当默认/工具默认真正在当前组内时才显示
     final hasDefaultInThisGroup = defaultConfig.id.isNotEmpty;
+    final hasToolDefaultInThisGroup = toolDefaultConfig.id.isNotEmpty;
+    // keep references for readability
+    final _ = hasToolDefaultInThisGroup;
 
     return Container(
       decoration: BoxDecoration(
@@ -228,7 +239,7 @@ class ModelProviderGroupCard extends StatelessWidget {
                     const SizedBox(width: 12),
                     
                     // 默认模型显示（只有当前组有默认模型时才显示）
-                     if (hasDefaultInThisGroup)
+                    if (hasDefaultInThisGroup)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
@@ -241,6 +252,30 @@ class ModelProviderGroupCard extends StatelessWidget {
                         ),
                         child: Text(
                           '默认: ${defaultConfig.alias}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: theme.colorScheme.onSurface,
+                          ),
+                        ),
+                      ),
+
+                    if (hasDefaultInThisGroup) const SizedBox(width: 8),
+
+                    // 工具默认模型显示（只有当前组有工具默认时才显示）
+                    if (configs.any((c) => c.isToolDefault))
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: theme.colorScheme.outline.withOpacity(0.3),
+                            width: 1,
+                          ),
+                          borderRadius: BorderRadius.circular(20),
+                          color: theme.colorScheme.surface,
+                        ),
+                        child: Text(
+                          '工具默认: ${configs.firstWhere((c) => c.isToolDefault).alias}',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -352,6 +387,32 @@ class ModelProviderGroupCard extends StatelessWidget {
                         ),
                       ),
                     ],
+
+                    if (config.isToolDefault) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.secondary,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.build, size: 10, color: theme.colorScheme.onSecondary),
+                            const SizedBox(width: 4),
+                            Text(
+                              '工具默认',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: theme.colorScheme.onSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -362,11 +423,60 @@ class ModelProviderGroupCard extends StatelessWidget {
                     fontFamily: 'monospace',
                   ),
                 ),
+                // 描述（来自后端富信息）
+                if (config.modelDescription != null && config.modelDescription!.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    config.modelDescription!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.65),
+                    ),
+                  ),
+                ],
+                // 标签（来自properties.tags）
+                Builder(builder: (context) {
+                  final List<String> tags = () {
+                    final p = config.properties;
+                    if (p == null) return const <String>[];
+                    final t = p['tags'];
+                    if (t is List) {
+                      return t.whereType<String>().toList();
+                    }
+                    return const <String>[];
+                  }();
+                  if (tags.isEmpty) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: tags.take(4).map((tag) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: theme.colorScheme.outline.withOpacity(0.2), width: 1),
+                          ),
+                          child: Text(
+                            tag,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              fontSize: 10,
+                              color: theme.colorScheme.onSurface.withOpacity(0.75),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  );
+                }),
               ],
             ),
           ),
 
-          // 价格信息（模拟数据）
+          // 价格信息（来自后端富信息或旧接口字段）
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
@@ -377,7 +487,11 @@ class ModelProviderGroupCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  '\$0.03',
+                  () {
+                    final v = config.inputPricePerThousandTokens;
+                    if (v != null) return '\$${v.toStringAsFixed(4)}';
+                    return '-';
+                  }(),
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: theme.colorScheme.onSurface,
@@ -404,14 +518,21 @@ class ModelProviderGroupCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  '\$0.06',
+                  () {
+                    final v = config.outputPricePerThousandTokens;
+                    if (v != null) return '\$${v.toStringAsFixed(4)}';
+                    // 若有统一价也展示
+                    final u = config.unifiedPricePerThousandTokens;
+                    if (u != null) return '\$${u.toStringAsFixed(4)}';
+                    return '-';
+                  }(),
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: theme.colorScheme.onSurface,
                   ),
                 ),
                 Text(
-                  '输出',
+                  config.outputPricePerThousandTokens != null ? '输出' : (config.unifiedPricePerThousandTokens != null ? '统一' : '输出'),
                   style: theme.textTheme.bodySmall?.copyWith(
                     fontSize: 10,
                     color: theme.colorScheme.onSurface.withOpacity(0.6),
@@ -444,8 +565,10 @@ class ModelProviderGroupCard extends StatelessWidget {
             configId: config.id,
             isValidated: config.isValidated,
             isDefault: config.isDefault,
+            isToolDefault: config.isToolDefault,
             onValidate: (configId) async => onValidate(configId),
             onSetDefault: (configId) async => onSetDefault(configId),
+            onSetToolDefault: (configId) async => onSetToolDefault(configId),
             onEdit: (configId) async => onEdit(configId),
             onDelete: (configId) async => onDelete(configId),
             width: 180,

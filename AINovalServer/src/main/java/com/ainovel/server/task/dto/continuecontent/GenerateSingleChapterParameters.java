@@ -20,4 +20,10 @@ public class GenerateSingleChapterParameters {
     private boolean requiresReview; // Flag for review step
     private String parentTaskId; // Keep track of the parent
     private boolean persistChanges; // Added field
+    // Optional prompt template IDs
+    private String summaryPromptTemplateId;
+    private String contentPromptTemplateId;
+    // Optional: public model config IDs
+    private String summaryPublicModelConfigId;
+    private String contentPublicModelConfigId;
 } 

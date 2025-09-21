@@ -12,9 +12,18 @@ import java.io.Serializable;
 @NoArgsConstructor
 @AllArgsConstructor
 public class GenerateSingleChapterResult implements Serializable {
+    /**
+     * 归属小说ID，便于前端定位与聚合
+     */
+    private String novelId;
+
     private String generatedChapterId;
     private String generatedInitialSceneId;
     private String generatedSummary;
+    /**
+     * 本次生成的正文内容（persist=false 时通过事件直接下发，避免前端再查库拉空）
+     */
+    private String generatedContent;
     private boolean contentGenerated;
     private boolean contentPersisted;
     private int chapterIndex;

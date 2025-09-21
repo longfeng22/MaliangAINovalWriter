@@ -36,6 +36,11 @@ import 'package:ainoval/screens/editor/managers/editor_state_manager.dart';
 import 'package:ainoval/config/app_config.dart';
 import 'package:ainoval/models/editor_settings.dart';
 import 'package:ainoval/widgets/common/notice_ticker.dart';
+import 'package:ainoval/blocs/prompt_new/prompt_new_bloc.dart';
+import 'package:ainoval/blocs/prompt_new/prompt_new_event.dart';
+import 'package:ainoval/blocs/preset/preset_bloc.dart';
+import 'package:ainoval/blocs/preset/preset_event.dart';
+import 'package:ainoval/screens/unified_management/unified_management_screen.dart' deferred as unified_mgmt;
 
 // 提供匿名模式下的登录弹窗与鉴权工具方法
 Future<void> showLoginDialog(BuildContext context) async {
@@ -147,6 +152,21 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
         }
         setState(() { _currentRoute = 'analytics'; });
         break;
+      case 'unified_management':
+        // 需要登录
+        if (!(context.read<AuthBloc>().state is AuthAuthenticated)) {
+          showLoginDialog(context);
+          return;
+        }
+        setState(() { _currentRoute = 'unified_management'; });
+        // 进入统一管理时，确保数据加载到位
+        try {
+          context.read<PresetBloc>().add(const LoadAllPresetData());
+        } catch (_) {}
+        try {
+          context.read<PromptNewBloc>().add(const LoadAllPromptPackages());
+        } catch (_) {}
+        break;
       case 'my_subscription':
         // 需要登录
         if (!(context.read<AuthBloc>().state is AuthAuthenticated)) {
@@ -164,7 +184,6 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
           showLoginDialog(context);
           return;
         }
-        // 跳转到小说设定生成器页面
         Navigator.push(
           context,
           MaterialPageRoute(
@@ -194,6 +213,8 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
   void _showSettingsDialog() {
     final userId = AppConfig.userId;
     if (userId == null || userId.isEmpty) return;
+    // 预先获取所需的 BLoC 实例，避免在对话框 builder 内访问已卸载的 State.context
+    final aiConfigBloc = context.read<AiConfigBloc>();
 
     showDialog(
       context: context,
@@ -201,7 +222,7 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
       builder: (dialogContext) {
         return MultiBlocProvider(
           providers: [
-            BlocProvider.value(value: context.read<AiConfigBloc>()),
+            BlocProvider.value(value: aiConfigBloc),
           ],
           child: Dialog(
             insetPadding: const EdgeInsets.all(16),
@@ -292,12 +313,22 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                   )
-                                : NoticeTicker(
-                                    initialMessages: const [
+                                : (_currentRoute == 'unified_management'
+                                    ? Text(
+                                        '提示词与预设管理',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w500,
+                                          color: WebTheme.getTextColor(context),
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      )
+                                    : NoticeTicker(
+                                        initialMessages: const [
             '当前小说网站属于测试状态，欢迎大家加入qq群1062403092',
             '如果有报错和bug或者改进建议，欢迎大家在群里反馈'
-                                    ],
-                                  )),
+                                        ],
+                                      ))),
                       ),
                       const Spacer(),
                       // Theme Toggle
@@ -318,6 +349,7 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
                         onTap: () async {
                           if (!(context.read<AuthBloc>().state is AuthAuthenticated)) {
                             await showLoginDialog(context);
+                            if (!mounted) return;
                             if (!(context.read<AuthBloc>().state is AuthAuthenticated)) return;
                           }
                           Navigator.push(
@@ -354,76 +386,166 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
                         ? const AnalyticsDashboard()
                         : _currentRoute == 'novels'
                             ? const NovelGridRealData()
-                            : Row(
-                               crossAxisAlignment: CrossAxisAlignment.start,
-                               children: [
-                                 // Left Panel - Input Area (保持原样的mock界面)
-                                 Expanded(
-                                   child: Container(
-                                     margin: const EdgeInsets.only(right: 24),
-                                     padding: const EdgeInsets.all(24),
-                                     decoration: BoxDecoration(
-                                       color: isDark 
-                                         ? WebTheme.darkGrey100.withOpacity(0.2)
-                                         : WebTheme.grey100.withOpacity(0.2),
-                                       borderRadius: BorderRadius.circular(12),
-                                       border: Border.all(
-                                         color: WebTheme.getBorderColor(context).withOpacity(0.3),
-                                         width: 1,
-                                       ),
-                                     ),
-                                     child: SingleChildScrollView(
-                                       child: Column(
-                                         crossAxisAlignment: CrossAxisAlignment.stretch,
-                                         children: [
-                                           NovelInputNew(
-                                             prompt: _prompt,
-                                             onPromptChanged: _handlePromptChanged,
-                                             selectedModel: _selectedModel,
-                                             onModelSelected: _handleModelSelected,
-                                           ),
-                                           const SizedBox(height: 24),
-                                           CategoryTagsNew(
-                                             onTagClick: _handleTagClick,
-                                           ),
-                                           const SizedBox(height: 24),
-                                           CommunityFeedNew(
-                                             onApplyPrompt: _handlePromptChanged,
-                                           ),
-                                         ],
-                                       ),
-                                     ),
-                                   ),
-                                 ),
-                         // Right Panel - Novel Management / My Subscription
-                                 Container(
-                                   width: 520,
-                                   height: MediaQuery.of(context).size.height - 60 - 48, // 减去顶栏和padding
-                                   padding: const EdgeInsets.all(24),
-                                   decoration: BoxDecoration(
-                                     color: WebTheme.getCardColor(context),
-                                     borderRadius: BorderRadius.circular(12),
-                                     border: Border.all(
-                                       color: WebTheme.getBorderColor(context),
-                                       width: 1,
-                                     ),
-                                   ),
-                           child: BlocProvider(
-                                     create: (context) => NovelImportBloc(
-                                       novelRepository: RepositoryProvider.of<NovelRepository>(context),
-                                     ),
-                                     child: BlocListener<NovelImportBloc, NovelImportState>(
-                                       listener: (context, importState) {
-                                         if (importState is NovelImportSuccess && mounted) {
-                                           context.read<NovelListBloc>().add(RefreshNovels());
-                                         }
-                                       },
-                                       child: const NovelGridRealData(),
-                                     ),
-                                   ),
-                                 ),
-                               ],
-                             ),
+                            : _currentRoute == 'unified_management'
+                                ? FutureBuilder(
+                                    future: unified_mgmt.loadLibrary(),
+                                    builder: (context, snapshot) {
+                                      if (snapshot.connectionState == ConnectionState.done) {
+                                        return unified_mgmt.UnifiedManagementScreen();
+                                      }
+                                      return const Center(child: CircularProgressIndicator());
+                                    },
+                                  )
+                                : LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final width = constraints.maxWidth;
+                                  final bool isNarrow = width < 1024;
+                                  final bool isMedium = width >= 1024 && width < 1400;
+                                  final double rightPanelWidth = width >= 1600 ? 520 : (isMedium ? 440 : 520);
+                                  final EdgeInsetsGeometry panelPadding = EdgeInsets.all(isNarrow ? 16 : 24);
+
+                                  if (isNarrow) {
+                                    return Column(
+                                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                                      children: [
+                                        // Left Panel - Input Area (小屏改为上方)
+                                        Container(
+                                          margin: const EdgeInsets.only(bottom: 16),
+                                          padding: panelPadding,
+                                          decoration: BoxDecoration(
+                                            color: isDark
+                                              ? WebTheme.darkGrey100.withOpacity(0.2)
+                                              : WebTheme.grey100.withOpacity(0.2),
+                                            borderRadius: BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: WebTheme.getBorderColor(context).withOpacity(0.3),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: SingleChildScrollView(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                                              children: [
+                                                NovelInputNew(
+                                                  prompt: _prompt,
+                                                  onPromptChanged: _handlePromptChanged,
+                                                  selectedModel: _selectedModel,
+                                                  onModelSelected: _handleModelSelected,
+                                                ),
+                                                const SizedBox(height: 16),
+                                                CategoryTagsNew(
+                                                  onTagClick: _handleTagClick,
+                                                ),
+                                                const SizedBox(height: 16),
+                                                CommunityFeedNew(
+                                                  onApplyPrompt: _handlePromptChanged,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        // Right Panel - 下方自适应宽度与高度
+                                        Container(
+                                          padding: panelPadding,
+                                          decoration: BoxDecoration(
+                                            color: WebTheme.getCardColor(context),
+                                            borderRadius: BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: WebTheme.getBorderColor(context),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: BlocProvider(
+                                            create: (context) => NovelImportBloc(
+                                              novelRepository: RepositoryProvider.of<NovelRepository>(context),
+                                            ),
+                                            child: BlocListener<NovelImportBloc, NovelImportState>(
+                                              listener: (context, importState) {
+                                                if (importState is NovelImportSuccess && mounted) {
+                                                  context.read<NovelListBloc>().add(RefreshNovels());
+                                                }
+                                              },
+                                              child: const NovelGridRealData(),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }
+
+                                  // 宽屏/中屏：维持左右布局，右栏宽度按断点缩放
+                                  return Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      // Left Panel - Input Area
+                                      Expanded(
+                                        child: Container(
+                                          margin: const EdgeInsets.only(right: 24),
+                                          padding: panelPadding,
+                                          decoration: BoxDecoration(
+                                            color: isDark
+                                              ? WebTheme.darkGrey100.withOpacity(0.2)
+                                              : WebTheme.grey100.withOpacity(0.2),
+                                            borderRadius: BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: WebTheme.getBorderColor(context).withOpacity(0.3),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: SingleChildScrollView(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                                              children: [
+                                                NovelInputNew(
+                                                  prompt: _prompt,
+                                                  onPromptChanged: _handlePromptChanged,
+                                                  selectedModel: _selectedModel,
+                                                  onModelSelected: _handleModelSelected,
+                                                ),
+                                                const SizedBox(height: 24),
+                                                CategoryTagsNew(
+                                                  onTagClick: _handleTagClick,
+                                                ),
+                                                const SizedBox(height: 24),
+                                                CommunityFeedNew(
+                                                  onApplyPrompt: _handlePromptChanged,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      // Right Panel - Novel Management / My Subscription
+                                      Container(
+                                        width: rightPanelWidth,
+                                        height: MediaQuery.of(context).size.height - 60 - 48, // 减去顶栏和padding
+                                        padding: panelPadding,
+                                        decoration: BoxDecoration(
+                                          color: WebTheme.getCardColor(context),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: WebTheme.getBorderColor(context),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: BlocProvider(
+                                          create: (context) => NovelImportBloc(
+                                            novelRepository: RepositoryProvider.of<NovelRepository>(context),
+                                          ),
+                                          child: BlocListener<NovelImportBloc, NovelImportState>(
+                                            listener: (context, importState) {
+                                              if (importState is NovelImportSuccess && mounted) {
+                                                context.read<NovelListBloc>().add(RefreshNovels());
+                                              }
+                                            },
+                                            child: const NovelGridRealData(),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
                   ),
                 ),
                 // ICP备案信息
@@ -880,21 +1002,22 @@ class _NovelGridRealDataState extends State<NovelGridRealData> {
   }
 
   void _showDeleteDialog(NovelSummary novel) {
+    final parentContext = context;
     showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
+      context: parentContext,
+      builder: (dialogContext) => AlertDialog(
         title: const Text('删除小说'),
         content: Text('确定要删除小说《${novel.title}》吗？此操作无法撤销。'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('取消'),
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               if (mounted) {
-                context.read<NovelListBloc>().add(DeleteNovel(id: novel.id));
+                parentContext.read<NovelListBloc>().add(DeleteNovel(id: novel.id));
               }
             },
             style: TextButton.styleFrom(
@@ -915,15 +1038,16 @@ class _NovelGridRealDataState extends State<NovelGridRealData> {
     }
     final TextEditingController titleController = TextEditingController();
     final TextEditingController seriesController = TextEditingController();
+    final parentContext = this.context;
 
     showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
+      context: parentContext,
+      builder: (dialogContext) => AlertDialog(
         title: Row(
           children: [
             Icon(
               Icons.create_new_folder_outlined,
-              color: WebTheme.getTextColor(context),
+              color: WebTheme.getTextColor(dialogContext),
               size: 24,
             ),
             const SizedBox(width: 12),
@@ -969,7 +1093,7 @@ class _NovelGridRealDataState extends State<NovelGridRealData> {
                 '添加系列可以更好地组织您的作品',
                 style: TextStyle(
                   fontSize: 12,
-                  color: WebTheme.getSecondaryTextColor(context),
+                  color: WebTheme.getSecondaryTextColor(dialogContext),
                   fontStyle: FontStyle.italic,
                 ),
               ),
@@ -978,7 +1102,7 @@ class _NovelGridRealDataState extends State<NovelGridRealData> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: Text(l10n.cancel),
           ),
           FilledButton.icon(
@@ -987,10 +1111,10 @@ class _NovelGridRealDataState extends State<NovelGridRealData> {
               final series = seriesController.text.trim();
 
               if (title.isNotEmpty) {
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
 
                 if (mounted) {
-                  context.read<NovelListBloc>().add(CreateNovel(
+                  parentContext.read<NovelListBloc>().add(CreateNovel(
                         title: title,
                         seriesName: series.isNotEmpty ? series : null,
                       ));

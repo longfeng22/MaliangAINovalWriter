@@ -88,6 +88,9 @@ class ModelGroupList extends StatelessWidget {
     // final isDark = theme.brightness == Brightness.dark;
 
     String displayName = modelInfo.name.isNotEmpty ? modelInfo.name : modelInfo.id;
+    final inputPrice = modelInfo.inputPricePerThousandTokens;
+    final outputPrice = modelInfo.outputPricePerThousandTokens;
+    final tags = modelInfo.tags;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -168,6 +171,33 @@ class ModelGroupList extends StatelessWidget {
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
+                  // 价格信息（若存在）
+                  if (inputPrice != null || outputPrice != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Row(
+                        children: [
+                          if (inputPrice != null)
+                            Text(
+                              '入: \$${inputPrice.toStringAsFixed(4)}/1K',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: theme.colorScheme.onSurface.withOpacity(0.75),
+                              ),
+                            ),
+                          if (inputPrice != null && outputPrice != null)
+                            const SizedBox(width: 6),
+                          if (outputPrice != null)
+                            Text(
+                              '出: \$${outputPrice.toStringAsFixed(4)}/1K',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: theme.colorScheme.onSurface.withOpacity(0.75),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -200,26 +230,40 @@ class ModelGroupList extends StatelessWidget {
                 
                 const SizedBox(width: 4),
                 
-                // 免费标签
-                if (modelInfo.id.toLowerCase().contains('free'))
-                  Container(
+                // 动态标签：来自 properties.tags
+                ...tags.take(3).map((t) => Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.secondaryContainer,
+                      color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.35),
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(
-                        color: theme.colorScheme.secondary.withOpacity(0.5),
+                        color: theme.colorScheme.outline.withOpacity(0.25),
                         width: 1,
                       ),
                     ),
                     child: Text(
-                      'FREE',
+                      t.toUpperCase(),
                       style: TextStyle(
-                        color: theme.colorScheme.onSecondaryContainer,
+                        color: theme.colorScheme.onSurface,
                         fontSize: 9,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                  ),
+                )),
+                
+                // 特性徽标
+                if (modelInfo.supportsPromptCaching)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Icon(Icons.save_alt, size: 14, color: theme.colorScheme.primary),
+                  ),
+                if (modelInfo.tieredPricing)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 2),
+                    child: Icon(Icons.stacked_line_chart, size: 14, color: theme.colorScheme.primary),
                   ),
               ],
             ),

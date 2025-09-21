@@ -32,16 +32,13 @@ class AppLogger {
 
     hierarchicalLoggingEnabled = true;
 
-    // 在调试模式下显示所有日志，在生产模式下只显示INFO级别以上
-    Logger.root.level = kDebugMode ? Level.ALL : Level.INFO;
+    // 根据编译时定义的LOG_LEVEL或调试模式来设置日志级别
+    Logger.root.level = _getProductionLogLevel();
 
     // 配置日志监听器
     Logger.root.onRecord.listen((record) {
-      // 不在生产环境打印Verbose和Debug日志，即使 Root Level 允许
-      if (!kDebugMode &&
-          (record.level == Level.FINEST ||
-              record.level == Level.FINER ||
-              record.level == Level.FINE)) {
+      // 根据当前设置的根级别进行过滤，避免输出低于设定级别的日志
+      if (record.level < Logger.root.level) {
         return;
       }
 
@@ -134,6 +131,37 @@ class AppLogger {
   static void error(String tag, String message,
       [Object? error, StackTrace? stackTrace]) {
     _log(tag, LogLevel.error, message, error, stackTrace);
+  }
+
+  /// 获取生产环境日志级别
+  static Level _getProductionLogLevel() {
+    // 调试模式显示所有日志
+    if (kDebugMode) {
+      return Level.ALL;
+    }
+    
+    // 检查编译时定义的LOG_LEVEL
+    const String logLevelEnv = String.fromEnvironment('LOG_LEVEL', defaultValue: '');
+    
+    switch (logLevelEnv.toUpperCase()) {
+      case 'VERBOSE':
+        return Level.ALL;
+      case 'DEBUG':
+        return Level.FINE;
+      case 'INFO':
+        return Level.INFO;
+      case 'WARN':
+      case 'WARNING':
+        return Level.WARNING;
+      case 'ERROR':
+        return Level.SEVERE;
+      case 'OFF':
+        return Level.OFF;
+      case '':
+      default:
+        // 默认生产环境使用INFO级别
+        return Level.INFO;
+    }
   }
 
   /// 内部日志记录方法

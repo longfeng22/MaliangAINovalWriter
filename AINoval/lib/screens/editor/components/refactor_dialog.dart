@@ -288,8 +288,7 @@ class _RefactorDialogState extends State<RefactorDialog> with AIDialogCommonLogi
       },
     );
     
-    // 将overlay插入到当前上下文
-    Overlay.of(context).insert(_tempOverlay!);
+    // 由 UnifiedAIModelDropdown.show 内部负责插入 OverlayEntry
   }
 
   /// Tab切换监听器

@@ -40,10 +40,19 @@ public class TaskContinueWritingController {
             @AuthenticationPrincipal CurrentUser currentUser,
             @Valid @RequestBody ContinueWritingContentParameters request) {
         
-        log.info("用户 {} 提交自动续写小说章节内容任务, 小说ID: {}, 章节数量: {}, 摘要AI配置: {}, 内容AI配置: {}, 上下文模式: {}", 
+        log.info("用户 {} 提交自动续写小说章节内容任务, 小说ID: {}, 章节数量: {}, 摘要AI配置: {}, 内容AI配置: {}, 上下文模式: {}, 公共模型(摘要/内容): {}/{}", 
                 currentUser.getId(), request.getNovelId(), request.getNumberOfChapters(),
                 request.getAiConfigIdSummary(), request.getAiConfigIdContent(), 
-                request.getStartContextMode());
+                request.getStartContextMode(), request.getSummaryPublicModelConfigId(), request.getContentPublicModelConfigId());
+        
+        // 自定义验证模型配置
+        try {
+            request.validate();
+        } catch (IllegalArgumentException e) {
+            log.warn("续写任务参数验证失败: {}", e.getMessage());
+            TaskSubmissionResponse errorResponse = new TaskSubmissionResponse(null);
+            return Mono.just(ResponseEntity.badRequest().body(errorResponse));
+        }
         
         // 提交任务
         return taskSubmissionService.submitTask(

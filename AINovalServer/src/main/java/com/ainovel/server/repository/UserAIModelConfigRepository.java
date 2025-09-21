@@ -48,6 +48,14 @@ public interface UserAIModelConfigRepository extends ReactiveMongoRepository<Use
     Mono<UserAIModelConfig> findByUserIdAndIsDefaultIsTrue(String userId);
 
     /**
+     * 查找用户的工具调用默认配置
+     *
+     * @param userId 用户ID
+     * @return 工具调用默认配置，可能为空
+     */
+    Mono<UserAIModelConfig> findByUserIdAndIsToolDefaultIsTrue(String userId);
+
+    /**
      * 查找用户所有非默认的配置
      *
      * @param userId 用户ID

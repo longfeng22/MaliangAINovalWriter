@@ -1,5 +1,5 @@
 import 'package:ainoval/blocs/ai_config/ai_config_bloc.dart';
-import 'package:ainoval/models/ai_model_group.dart';
+// import 'package:ainoval/models/ai_model_group.dart';
 import 'package:ainoval/models/user_ai_model_config_model.dart';
 import 'package:ainoval/screens/settings/widgets/custom_model_dialog.dart';
 import 'package:ainoval/screens/settings/widgets/model_group_list.dart';
@@ -146,19 +146,8 @@ class _AiConfigFormState extends State<AiConfigForm> {
     context.read<AiConfigBloc>().add(const LoadAvailableProviders()); // Corrected call
   }
 
-  void _loadModels(String provider) {
-    if (!mounted) return;
-    print("UI triggered _loadModels for $provider"); // Debug log
-    setState(() {
-      _isLoadingModels = true;
-      // Reset model only if provider actually changes (don't reset in edit mode init)
-      if (_selectedProvider != provider) {
-         _selectedModel = null;
-      }
-      _models = []; // Clear previous models for the dropdown
-    });
-    context.read<AiConfigBloc>().add(LoadModelsForProvider(provider: provider));
-  }
+  // 已由 Bloc 驱动加载模型，保留旧方法注释避免误用
+  // void _loadModels(String provider) {}
 
   void _submitForm() {
     // 清除之前的错误状态
@@ -331,17 +320,8 @@ class _AiConfigFormState extends State<AiConfigForm> {
   }
 
   // 检查是否存在已验证的相同模型
-  bool _isDuplicateValidatedModel() {
-    if (_isEditMode || _selectedProvider == null || _selectedModel == null) {
-      return false;
-    }
-    
-    final existingConfigs = context.read<AiConfigBloc>().state.configs;
-    return existingConfigs.any((config) =>
-        config.provider == _selectedProvider &&
-        config.modelName == _selectedModel &&
-        config.isValidated);
-  }
+  // 重复校验逻辑由提交阶段处理
+  // bool _isDuplicateValidatedModel() { return false; }
 
   // 获取已验证模型列表
   List<String> _getVerifiedModels(String provider) {
@@ -423,11 +403,54 @@ class _AiConfigFormState extends State<AiConfigForm> {
           providerName: _selectedProvider!,
           apiKey: apiKey,
           apiEndpoint: apiEndpoint,
+          modelName: _selectedModel, // 传递当前选择的模型
        ));
     } else {
       // Show feedback if provider or key is missing
        TopToast.warning(context, '请先选择提供商并输入 API 密钥');
     }
+  }
+
+  // 直连获取模型（无需后端）
+  void _directFetchModels() {
+    final provider = _selectedProvider;
+    if (provider == null) {
+      TopToast.warning(context, '请先选择提供商');
+      return;
+    }
+    final apiKey = _apiKeyController.text.trim();
+    final apiEndpoint = _apiEndpointController.text.trim().isEmpty
+        ? null
+        : _apiEndpointController.text.trim();
+
+    // 前置校验：对于大多数提供商，直连需要 API 接口地址
+    if (_needsEndpointForDirectFetch(provider) && (apiEndpoint == null || apiEndpoint.isEmpty)) {
+      TopToast.warning(context, '请先填写 API 接口地址，再进行直连获取模型');
+      return;
+    }
+    // 特例：Gemini 强制需要 API Key
+    if (provider.toLowerCase() == 'gemini' && apiKey.isEmpty) {
+      TopToast.warning(context, 'Gemini 直连需要 API 密钥，请先填写');
+      return;
+    }
+
+    setState(() {
+      _isLoadingModels = true;
+      _models = [];
+    });
+
+    context.read<AiConfigBloc>().add(LoadModelsDirect(
+      providerName: provider,
+      apiKey: apiKey.isEmpty ? null : apiKey,
+      apiEndpoint: apiEndpoint,
+    ));
+  }
+
+  bool _needsEndpointForDirectFetch(String provider) {
+    final p = provider.toLowerCase();
+    // 本地/自托管默认端口可不填
+    if (p == 'lmstudio' || p == 'ollama') return false;
+    return true;
   }
 
   @override
@@ -1068,6 +1091,18 @@ class _AiConfigFormState extends State<AiConfigForm> {
                                                 ),
                                               ),
                                               const SizedBox(width: 4),
+                                              // 直连获取模型
+                                              TextButton.icon(
+                                                icon: const Icon(Icons.cloud_download, size: 14),
+                                                label: const Text('直连获取模型', style: TextStyle(fontSize: 12)),
+                                                style: TextButton.styleFrom(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                  minimumSize: const Size(0, 30),
+                                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                ),
+                                                onPressed: _directFetchModels,
+                                              ),
+                                              const SizedBox(width: 4),
                                               // 添加自定义模型按钮
                                               TextButton.icon(
                                                 icon: const Icon(Icons.add, size: 14),
@@ -1104,7 +1139,7 @@ class _AiConfigFormState extends State<AiConfigForm> {
                                             // NOTE: Assuming AIModelGroup and ModelListingCapability are correctly defined/imported elsewhere
                                             //       after resolving the 'ai_config_repository' dependency.
                                             final modelGroup = _selectedProvider != null ? state.modelGroups[_selectedProvider!] : null;
-                                            final currentCapability = _providerCapability; // Use local capability state
+                                            // final currentCapability = _providerCapability; // local capability (unused)
                                             // 获取该提供商下已经验证的模型列表
                                             final verifiedModels = _selectedProvider != null ? _getVerifiedModels(_selectedProvider!) : <String>[];
 
@@ -1285,21 +1320,7 @@ class _AiConfigFormState extends State<AiConfigForm> {
 }
 
 // Helper function to get model initial (potentially update logic if needed)
-String _getModelInitial(String modelName) {
-  if (modelName.isEmpty) return '?';
-  // Simple initial, might need refinement for complex names
-  return modelName[0].toUpperCase();
-}
+// String _getModelInitial(String modelName) => modelName.isEmpty ? '?' : modelName[0].toUpperCase();
 
 // Helper function to get model color (can stay based on id or name)
-Color _getModelColor(String modelId) {
-  // Use a hash of the model ID to generate a consistent color
-  final int hash = modelId.hashCode;
-  // Use HSLColor for better control over saturation and lightness
-  return HSLColor.fromAHSL(
-    1.0, // Alpha
-    (hash % 360).toDouble(), // Hue (0-360)
-    0.6, // Saturation (adjust as needed, 0.6 is moderately saturated)
-    0.5, // Lightness (adjust as needed, 0.5 is mid-lightness)
-  ).toColor();
-}
+// Color _getModelColor(String modelId) { final hash = modelId.hashCode; return HSLColor.fromAHSL(1.0, (hash % 360).toDouble(), 0.6, 0.5).toColor(); }

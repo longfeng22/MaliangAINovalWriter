@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:ainoval/blocs/editor/editor_bloc.dart' as editor_bloc;
 import 'package:ainoval/blocs/novel_list/novel_list_bloc.dart';
@@ -16,6 +17,8 @@ import 'package:ainoval/services/api_service/repositories/prompt_repository.dart
 import 'package:ainoval/services/local_storage_service.dart';
 import 'package:ainoval/services/sync_service.dart';
 import 'package:ainoval/utils/logger.dart';
+import 'package:ainoval/utils/quill_helper.dart';
+import 'package:ainoval/utils/word_count_analyzer.dart';
 import 'package:ainoval/utils/event_bus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -888,9 +891,14 @@ class EditorScreenController extends ChangeNotifier {
     final sceneId = '${actId}_${chapterId}_${scene.id}';
 
     try {
+      // 🚀 修复：检查是否是新建场景，确保使用正确的空内容
+      String contentToUse = scene.content;
+      
+
+      
       // 创建QuillController
       final controller = QuillController(
-        document: _parseDocumentSafely(scene.content),
+        document: _parseDocumentSafely(contentToUse),
         selection: const TextSelection.collapsed(offset: 0),
       );
 
@@ -976,7 +984,158 @@ class EditorScreenController extends ChangeNotifier {
     _novelStructureSubscription = EventBus.instance.on<NovelStructureUpdatedEvent>().listen((event) {
       if (event.novelId == novel.id) {
         AppLogger.i('EditorScreenController', '收到小说结构更新事件: ${event.updateType}. 此事件现在主要由Sidebar处理，EditorScreenController不再因此刷新主编辑区。');
+        
+        // 对于特定的事件，选择性刷新
+        if (event.updateType == 'MERGE_NEW_CHAPTER' || 
+            event.updateType == 'SCENE_CONTENT_UPDATED') {
+          AppLogger.i('EditorScreenController', '检测到需刷新事件，触发编辑器刷新: ${event.updateType}');
+          editorBloc.add(const editor_bloc.RefreshEditorData(
+            preserveActiveScene: true,
+            source: 'structure_update',
+          ));
+        } else if (event.updateType == 'SCENE_ADDED') {
+          // 场景已添加：若当前状态里已包含该场景，则跳过刷新，避免重复拉取导致锚点短暂失效
+          try {
+            final currentState = editorBloc.state;
+            if (currentState is editor_bloc.EditorLoaded) {
+              final String? chapterId = event.data['chapterId']?.toString();
+              final String? sceneId = event.data['sceneId']?.toString();
+              bool alreadyPresent = false;
+              if (chapterId != null && sceneId != null) {
+                for (final act in currentState.novel.acts) {
+                  for (final chapter in act.chapters) {
+                    if (chapter.id == chapterId) {
+                      for (final scene in chapter.scenes) {
+                        if (scene.id == sceneId) { alreadyPresent = true; break; }
+                      }
+                      break;
+                    }
+                  }
+                  if (alreadyPresent) break;
+                }
+              }
+              if (!alreadyPresent) {
+                AppLogger.i('EditorScreenController', '新增场景未出现在当前状态，触发一次无感刷新');
+                editorBloc.add(const editor_bloc.RefreshEditorData(
+                  preserveActiveScene: true,
+                  source: 'structure_update_scene_added',
+                ));
+              } else {
+                AppLogger.i('EditorScreenController', '新增场景已在当前状态中，跳过刷新');
+              }
+            }
+          } catch (e) {
+            AppLogger.w('EditorScreenController', '处理SCENE_ADDED事件时校验失败，退回刷新', e);
+            editorBloc.add(const editor_bloc.RefreshEditorData(
+              preserveActiveScene: true,
+              source: 'structure_update_scene_added_fallback',
+            ));
+          }
+        } else if (event.updateType == 'NOVEL_STRUCTURE_SAVED' || event.updateType == 'CHAPTER_ADDED') {
+          // 结构保存或新增章节后，校验焦点章节是否仍然存在
+          try {
+            final currentState = editorBloc.state;
+            if (currentState is editor_bloc.EditorLoaded) {
+              final String? focusChapterId = currentState.focusChapterId;
+              bool exists = false;
+              if (focusChapterId != null) {
+                for (final act in currentState.novel.acts) {
+                  for (final chapter in act.chapters) {
+                    if (chapter.id == focusChapterId) { exists = true; break; }
+                  }
+                  if (exists) break;
+                }
+              }
+              if (!exists) {
+                final String? fallback = currentState.activeChapterId ?? currentState.novel.lastEditedChapterId;
+                if (fallback != null) {
+                  AppLogger.i('EditorScreenController', '焦点章节已失效，回退并重设焦点: $fallback');
+                  editorBloc.add(editor_bloc.SetFocusChapter(chapterId: fallback));
+                }
+              }
+            }
+          } catch (e) {
+            AppLogger.w('EditorScreenController', '刷新后焦点章节校验失败', e);
+          }
+        }
         // _refreshNovelStructure(); // 注释掉此行，防止主编辑区刷新
+      }
+    });
+
+    // 监听通用的外部场景内容更新事件：就地更新对应QuillController并保持滚动/焦点
+    EventBus.instance.on<SceneContentExternallyUpdatedEvent>().listen((event) {
+      if (event.novelId != novel.id) return;
+      try {
+        final String compositeId = () {
+          if (event.actId != null) {
+            return '${event.actId}_${event.chapterId}_${event.sceneId}';
+          }
+          // 若缺失actId，从EditorBloc的当前状态定位
+          final currentState = editorBloc.state;
+          if (currentState is editor_bloc.EditorLoaded) {
+            for (final act in currentState.novel.acts) {
+              for (final chapter in act.chapters) {
+                if (chapter.id == event.chapterId) {
+                  return '${act.id}_${event.chapterId}_${event.sceneId}';
+                }
+              }
+            }
+          }
+          // 回退：若未能定位，则使用活动上下文（可能不是目标场景）
+          if (currentState is editor_bloc.EditorLoaded &&
+              currentState.activeActId != null &&
+              currentState.activeChapterId != null) {
+            return '${currentState.activeActId}_${event.chapterId}_${event.sceneId}';
+          }
+          return '';
+        }();
+        if (compositeId.isEmpty) return;
+
+        final controller = sceneControllers[compositeId];
+        if (controller != null) {
+          // 确保内容为标准Quill JSON
+          final doc = _parseDocumentSafely(event.content);
+          controller.document = doc;
+          AppLogger.i('EditorScreenController', '已就地刷新场景内容: $compositeId');
+
+          // 同步更新EditorBloc中的模型（本地，不触发服务器同步），避免对话框作用域下Provider获取失败
+          try {
+            final currentState = editorBloc.state;
+            if (currentState is editor_bloc.EditorLoaded) {
+              // 定位actId（通过chapterId查找所在act）
+              String? actId;
+              for (final act in currentState.novel.acts) {
+                final found = act.chapters.any((c) => c.id == event.chapterId);
+                if (found) { actId = act.id; break; }
+              }
+              if (actId != null) {
+                // 计算字数（基于Quill Delta）
+                final String wc = WordCountAnalyzer.countWords(event.content).toString();
+
+                editorBloc.add(editor_bloc.SaveSceneContent(
+                  novelId: novel.id,
+                  actId: actId,
+                  chapterId: event.chapterId,
+                  sceneId: event.sceneId,
+                  content: event.content,
+                  wordCount: wc,
+                  localOnly: true,
+                ));
+              }
+            }
+          } catch (e) {
+            AppLogger.w('EditorScreenController', '就地刷新后同步本地模型失败（忽略，不影响UI）', e);
+          }
+        } else {
+          // 控制器尚未创建，下一次ensureControllers会加载；也触发一次轻量刷新以稳妥
+          AppLogger.i('EditorScreenController', '未找到控制器，触发无感刷新以创建控制器: $compositeId');
+          editorBloc.add(const editor_bloc.RefreshEditorData(
+            preserveActiveScene: true,
+            source: 'external_scene_update',
+          ));
+        }
+      } catch (e) {
+        AppLogger.w('EditorScreenController', '处理外部场景内容更新事件失败', e);
       }
     });
   }

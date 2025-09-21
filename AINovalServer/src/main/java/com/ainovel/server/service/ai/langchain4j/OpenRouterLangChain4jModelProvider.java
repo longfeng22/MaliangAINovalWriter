@@ -2,16 +2,14 @@ package com.ainovel.server.service.ai.langchain4j;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -34,7 +32,10 @@ import reactor.core.publisher.Mono;
  * 使用OpenAI兼容模式，因为OpenRouter API与OpenAI兼容
  */
 @Slf4j
-public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider {
+public class OpenRouterLangChain4jModelProvider extends AbstractUnifiedModelProvider {
+
+    @Autowired
+    private ApplicationContext applicationContext;
 
     private static final String DEFAULT_API_ENDPOINT = "https://openrouter.ai/api/v1";
     
@@ -52,25 +53,6 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
     // 最大返回的模型数量
     private static final int MAX_MODELS_TO_RETURN = 20;
 
-    // OpenRouter模型价格配置
-    // 注意：这些价格需要根据OpenRouter的实际价格进行调整
-    private static final Map<String, Double> TOKEN_PRICES;
-
-    static {
-        Map<String, Double> prices = new HashMap<>();
-        prices.put("openai/gpt-3.5-turbo", 0.0015);
-        prices.put("openai/gpt-4", 0.03);
-        prices.put("openai/gpt-4-turbo", 0.01);
-        prices.put("openai/gpt-4o", 0.01);
-        prices.put("anthropic/claude-3-opus", 0.015);
-        prices.put("anthropic/claude-3-sonnet", 0.003);
-        prices.put("anthropic/claude-3-haiku", 0.00025);
-        prices.put("google/gemini-pro", 0.0001);
-        prices.put("google/gemini-1.5-pro", 0.0007);
-        prices.put("meta-llama/llama-3-70b-instruct", 0.0009);
-        prices.put("meta-llama/llama-3-8b-instruct", 0.0002);
-        TOKEN_PRICES = Collections.unmodifiableMap(prices);
-    }
 
     /**
      * 构造函数
@@ -145,25 +127,36 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
 
     @Override
     public Mono<Double> estimateCost(AIRequest request) {
-        // 获取模型价格（每1000个令牌的美元价格）
-        double pricePerThousandTokens = TOKEN_PRICES.getOrDefault(modelName, 0.01);
-
-        // 估算输入令牌数
         int inputTokens = estimateInputTokens(request);
-
-        // 估算输出令牌数
         int outputTokens = request.getMaxTokens() != null ? request.getMaxTokens() : 1000;
-
-        // 计算总令牌数
+        
+        try {
+            var pricingCalculator = getPricingCalculator();
+            if (pricingCalculator != null) {
+                return pricingCalculator.calculateTotalCost(modelName, inputTokens, outputTokens)
+                        .map(cost -> cost.doubleValue() * 7.2);
+            }
+        } catch (Exception e) {
+            log.debug("使用PricingCalculator失败: {}", e.getMessage());
+        }
+        
+        double defaultPrice = 0.01;
         int totalTokens = inputTokens + outputTokens;
-
-        // 计算成本（美元）
-        double costInUSD = (totalTokens / 1000.0) * pricePerThousandTokens;
-
-        // 转换为人民币（假设汇率为7.2）
-        double costInCNY = costInUSD * 7.2;
-
-        return Mono.just(costInCNY);
+        double costInUSD = (totalTokens / 1000.0) * defaultPrice;
+        return Mono.just(costInUSD * 7.2);
+    }
+    
+    private com.ainovel.server.service.ai.pricing.TokenPricingCalculator getPricingCalculator() {
+        try {
+            return applicationContext.getBeansOfType(
+                com.ainovel.server.service.ai.pricing.TokenPricingCalculator.class)
+                .values().stream()
+                .filter(calc -> "openrouter".equals(calc.getProviderName()))
+                .findFirst()
+                .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Override
@@ -206,9 +199,7 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
 
     /**
      * OpenRouter不需要API密钥就能获取模型列表
-     * 覆盖基类的listModels方法
-     *
-     * @return 模型信息列表
+     * 覆盖基类的listModels方法，但保持缓存机制
      */
     @Override
     public Flux<ModelInfo> listModels() {
@@ -217,10 +208,32 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
         // 检查缓存是否有效
         if (!isCacheExpired() && !MODEL_CACHE.isEmpty()) {
             log.info("从缓存返回OpenRouter模型列表，共{}个模型", MODEL_CACHE.size());
-            return Flux.fromIterable(MODEL_CACHE.getOrDefault("models", getDefaultOpenRouterModels()));
+            List<ModelInfo> cachedModels = MODEL_CACHE.getOrDefault("models", getUnifiedDefaultModels());
+            return Flux.fromIterable(cachedModels);
         }
 
-        // 创建WebClient，增加缓冲区大小
+        // 尝试从 API 获取，失败时使用统一默认数据
+        return callOpenRouterApi()
+                .switchIfEmpty(Flux.fromIterable(getUnifiedDefaultModels()))
+                .collectList()
+                .flatMapMany(models -> {
+                    if (!models.isEmpty()) {
+                        updateCache(models);
+                    }
+                    return Flux.fromIterable(models);
+                })
+                .onErrorResume(e -> {
+                    log.error("获取OpenRouter模型列表时出错", e);
+                    List<ModelInfo> defaultModels = getUnifiedDefaultModels();
+                    updateCache(defaultModels);
+                    return Flux.fromIterable(defaultModels);
+                });
+    }
+    
+    /**
+     * 调用OpenRouter API获取模型列表
+     */
+    private Flux<ModelInfo> callOpenRouterApi() {
         ExchangeStrategies strategies = ExchangeStrategies.builder()
                 .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(5 * 1024 * 1024)) // 5MB
                 .build();
@@ -230,7 +243,6 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
                 .exchangeStrategies(strategies)
                 .build();
 
-        // 调用OpenRouter API获取模型列表
         return webClient.get()
                 .uri("/v1/models")
                 .accept(MediaType.APPLICATION_JSON)
@@ -238,8 +250,6 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
                 .bodyToMono(String.class)
                 .flatMapMany(response -> {
                     try {
-                        // 解析响应
-                        //log.debug("OpenRouter模型列表响应: {}", response);
                         ObjectMapper mapper = new ObjectMapper();
                         JsonNode root = mapper.readTree(response);
                         JsonNode data = root.path("data");
@@ -261,12 +271,9 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
                                     outputPrice = pricing.path("completion").asDouble(0.0);
                                 }
                                 
-                                // 使用平均价格作为统一价格
                                 double unifiedPrice = (inputPrice + outputPrice) / 2;
-                                
                                 if (unifiedPrice <= 0) {
-                                    // 使用预定义价格，如果有的话
-                                    unifiedPrice = TOKEN_PRICES.getOrDefault(id, 0.001);
+                                    unifiedPrice = 0.001; // 默认价格
                                 }
                                 
                                 ModelInfo modelInfo = ModelInfo.basic(id, id, "openrouter")
@@ -285,24 +292,18 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
                         List<ModelInfo> finalModels = models.size() > MAX_MODELS_TO_RETURN ? 
                                 models.subList(0, MAX_MODELS_TO_RETURN) : models;
                         
-                        // 更新缓存
-                        updateCache(finalModels);
-                        
                         return Flux.fromIterable(finalModels);
                     } catch (Exception e) {
                         log.error("解析OpenRouter模型列表时出错", e);
-                        List<ModelInfo> defaultModels = getDefaultOpenRouterModels();
-                        updateCache(defaultModels);
-                        return Flux.fromIterable(defaultModels);
+                        return Flux.<ModelInfo>empty();
                     }
-                })
-                .onErrorResume(e -> {
-                    log.error("获取OpenRouter模型列表时出错", e);
-                    // 出错时返回预定义的模型列表
-                    List<ModelInfo> defaultModels = getDefaultOpenRouterModels();
-                    updateCache(defaultModels);
-                    return Flux.fromIterable(defaultModels);
                 });
+    }
+    
+    @Override
+    protected Flux<ModelInfo> callApiForModels(String apiKey, String apiEndpoint) {
+        // OpenRouter不需要API密钥，直接调用API
+        return callOpenRouterApi();
     }
     
     /**
@@ -325,73 +326,4 @@ public class OpenRouterLangChain4jModelProvider extends LangChain4jModelProvider
         log.info("更新OpenRouter模型缓存，共{}个模型", models.size());
     }
 
-    /**
-     * 获取默认的OpenRouter模型列表
-     *
-     * @return 模型信息列表
-     */
-    private List<ModelInfo> getDefaultOpenRouterModels() {
-        List<ModelInfo> models = new ArrayList<>();
-
-        // OpenAI模型
-        models.add(ModelInfo.basic("openai/gpt-3.5-turbo", "GPT-3.5 Turbo", "openrouter")
-                .withDescription("OpenAI的GPT-3.5 Turbo模型")
-                .withMaxTokens(16385)
-                .withUnifiedPrice(0.0015));
-
-        models.add(ModelInfo.basic("openai/gpt-4", "GPT-4", "openrouter")
-                .withDescription("OpenAI的GPT-4模型")
-                .withMaxTokens(8192)
-                .withUnifiedPrice(0.03));
-
-        models.add(ModelInfo.basic("openai/gpt-4-turbo", "GPT-4 Turbo", "openrouter")
-                .withDescription("OpenAI的GPT-4 Turbo模型")
-                .withMaxTokens(128000)
-                .withUnifiedPrice(0.01));
-
-        models.add(ModelInfo.basic("openai/gpt-4o", "GPT-4o", "openrouter")
-                .withDescription("OpenAI的GPT-4o模型")
-                .withMaxTokens(128000)
-                .withUnifiedPrice(0.01));
-
-        // Anthropic模型
-        models.add(ModelInfo.basic("anthropic/claude-3-opus", "Claude 3 Opus", "openrouter")
-                .withDescription("Anthropic的Claude 3 Opus模型")
-                .withMaxTokens(200000)
-                .withUnifiedPrice(0.015));
-
-        models.add(ModelInfo.basic("anthropic/claude-3-sonnet", "Claude 3 Sonnet", "openrouter")
-                .withDescription("Anthropic的Claude 3 Sonnet模型")
-                .withMaxTokens(200000)
-                .withUnifiedPrice(0.003));
-
-        models.add(ModelInfo.basic("anthropic/claude-3-haiku", "Claude 3 Haiku", "openrouter")
-                .withDescription("Anthropic的Claude 3 Haiku模型")
-                .withMaxTokens(200000)
-                .withUnifiedPrice(0.00025));
-
-        // Google模型
-        models.add(ModelInfo.basic("google/gemini-pro", "Gemini Pro", "openrouter")
-                .withDescription("Google的Gemini Pro模型")
-                .withMaxTokens(32768)
-                .withUnifiedPrice(0.0001));
-
-        models.add(ModelInfo.basic("google/gemini-1.5-pro", "Gemini 1.5 Pro", "openrouter")
-                .withDescription("Google的Gemini 1.5 Pro模型")
-                .withMaxTokens(1000000)
-                .withUnifiedPrice(0.0007));
-
-        // Meta模型
-        models.add(ModelInfo.basic("meta-llama/llama-3-70b-instruct", "Llama 3 70B Instruct", "openrouter")
-                .withDescription("Meta的Llama 3 70B Instruct模型")
-                .withMaxTokens(8192)
-                .withUnifiedPrice(0.0009));
-
-        models.add(ModelInfo.basic("meta-llama/llama-3-8b-instruct", "Llama 3 8B Instruct", "openrouter")
-                .withDescription("Meta的Llama 3 8B Instruct模型")
-                .withMaxTokens(8192)
-                .withUnifiedPrice(0.0002));
-
-        return models;
-    }
 }

@@ -3,6 +3,11 @@ package com.ainovel.server.task.listener;
 import com.ainovel.server.config.RabbitMQConfig;
 import com.rabbitmq.client.Channel;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Qualifier;
+import java.nio.charset.StandardCharsets;
+import com.ainovel.server.web.controller.TaskStatusController.TaskSseBroker;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
@@ -17,6 +22,15 @@ import java.util.Map;
 @Component
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "task.transport", havingValue = "rabbit", matchIfMissing = true)
 public class TaskEventListener {
+
+    private final TaskSseBroker sseBroker;
+    private final ObjectMapper objectMapper;
+
+    @Autowired
+    public TaskEventListener(TaskSseBroker sseBroker, @Qualifier("taskObjectMapper") ObjectMapper objectMapper) {
+        this.sseBroker = sseBroker;
+        this.objectMapper = objectMapper;
+    }
 
     /**
      * 处理任务事件消息
@@ -38,33 +52,21 @@ public class TaskEventListener {
             eventType = (String) headers.get("x-event-type");
             
             log.info("收到任务事件: taskId={}, eventType={}", taskId, eventType);
-            
-            // 根据事件类型进行不同处理
-            switch (eventType) {
-                case "TASK_SUBMITTED":
-                    // 处理任务提交事件
-                    handleTaskSubmitted(message, taskId);
-                    break;
-                case "TASK_STARTED":
-                    // 处理任务开始事件
-                    handleTaskStarted(message, taskId);
-                    break;
-                case "TASK_COMPLETED":
-                    // 处理任务完成事件
-                    handleTaskCompleted(message, taskId);
-                    break;
-                case "TASK_FAILED":
-                    // 处理任务失败事件
-                    handleTaskFailed(message, taskId);
-                    break;
-                case "TASK_PROGRESS_UPDATED":
-                    // 处理任务进度更新事件
-                    handleTaskProgressUpdated(message, taskId);
-                    break;
-                default:
-                    log.warn("未知的任务事件类型: {}, taskId={}", eventType, taskId);
-                    break;
+
+            // 解析消息体为 Map，并透传到 SSE Broker（跨实例桥接）
+            Map<String, Object> payload;
+            try {
+                String body = new String(message.getBody(), StandardCharsets.UTF_8);
+                payload = objectMapper.readValue(body, Map.class);
+            } catch (Exception parseEx) {
+                log.warn("任务事件消息体解析失败，使用空载荷: {}", parseEx.getMessage());
+                payload = new java.util.HashMap<>();
             }
+            // 补充必要字段，统一成 SSE 事件格式
+            payload.putIfAbsent("type", eventType != null ? eventType : "TASK_UNKNOWN");
+            payload.putIfAbsent("taskId", taskId);
+            // 透传到 SSE Broker
+            sseBroker.publish(payload);
             
             // 确认消息已处理
             channel.basicAck(deliveryTag, false);
@@ -76,45 +78,5 @@ public class TaskEventListener {
             // 拒绝消息并重新入队
             channel.basicNack(deliveryTag, false, true);
         }
-    }
-    
-    /**
-     * 处理任务提交事件
-     */
-    private void handleTaskSubmitted(Message message, String taskId) {
-        // 这里可以实现任务提交事件的具体处理逻辑
-        log.info("处理任务提交事件: taskId={}", taskId);
-    }
-    
-    /**
-     * 处理任务开始事件
-     */
-    private void handleTaskStarted(Message message, String taskId) {
-        // 这里可以实现任务开始事件的具体处理逻辑
-        log.info("处理任务开始事件: taskId={}", taskId);
-    }
-    
-    /**
-     * 处理任务完成事件
-     */
-    private void handleTaskCompleted(Message message, String taskId) {
-        // 这里可以实现任务完成事件的具体处理逻辑
-        log.info("处理任务完成事件: taskId={}", taskId);
-    }
-    
-    /**
-     * 处理任务失败事件
-     */
-    private void handleTaskFailed(Message message, String taskId) {
-        // 这里可以实现任务失败事件的具体处理逻辑
-        log.info("处理任务失败事件: taskId={}", taskId);
-    }
-    
-    /**
-     * 处理任务进度更新事件
-     */
-    private void handleTaskProgressUpdated(Message message, String taskId) {
-        // 这里可以实现任务进度更新事件的具体处理逻辑
-        log.info("处理任务进度更新事件: taskId={}", taskId);
     }
 } 

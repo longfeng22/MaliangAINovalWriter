@@ -26,7 +26,8 @@ public class OpenAITokenPricingCalculator extends AbstractTokenPricingCalculator
     
     private static final String PROVIDER_NAME = "openai";
     private static final String OPENAI_API_BASE = "https://api.openai.com/v1";
-    private static final String PRICING_INFO_URL = OPENAI_API_BASE + "/models";
+    // kept for potential future pricing endpoints
+    // private static final String PRICING_INFO_URL = OPENAI_API_BASE + "/models";
     
     @Override
     public String getProviderName() {
@@ -117,15 +118,48 @@ public class OpenAITokenPricingCalculator extends AbstractTokenPricingCalculator
      */
     private Map<String, Double> getKnownModelPricing(String modelId) {
         return switch (modelId) {
+            // GPT-5 family
+            case "gpt-5", "gpt-5-chat-latest" -> Map.of("input", 0.00125, "output", 0.01000);
+            case "gpt-5-mini" -> Map.of("input", 0.00025, "output", 0.00200);
+            case "gpt-5-nano" -> Map.of("input", 0.00005, "output", 0.00040);
+
+            // GPT-4.1
+            case "gpt-4.1" -> Map.of("input", 0.00200, "output", 0.00800);
+            case "gpt-4.1-mini" -> Map.of("input", 0.00040, "output", 0.00160);
+            case "gpt-4.1-nano" -> Map.of("input", 0.00010, "output", 0.00040);
+
+            // GPT-4o
+            case "gpt-4o" -> Map.of("input", 0.00250, "output", 0.01000);
+            case "gpt-4o-2024-05-13" -> Map.of("input", 0.00500, "output", 0.01500);
+            case "gpt-4o-mini" -> Map.of("input", 0.00015, "output", 0.00060);
+
+            // Realtime / Audio
+            case "gpt-realtime" -> Map.of("input", 0.00400, "output", 0.01600);
+            case "gpt-4o-realtime-preview" -> Map.of("input", 0.00500, "output", 0.02000);
+            case "gpt-4o-mini-realtime-preview" -> Map.of("input", 0.00060, "output", 0.00240);
+            case "gpt-audio" -> Map.of("input", 0.00250, "output", 0.01000);
+            case "gpt-4o-audio-preview" -> Map.of("input", 0.00250, "output", 0.01000);
+            case "gpt-4o-mini-audio-preview" -> Map.of("input", 0.00015, "output", 0.00060);
+
+            // o 系列
+            case "o1" -> Map.of("input", 0.01500, "output", 0.06000);
+            case "o1-pro" -> Map.of("input", 0.15000, "output", 0.60000);
+            case "o3-pro" -> Map.of("input", 0.02000, "output", 0.08000);
+            case "o3" -> Map.of("input", 0.00200, "output", 0.00800);
+            case "o3-deep-research" -> Map.of("input", 0.01000, "output", 0.04000);
+            case "o4-mini" -> Map.of("input", 0.00110, "output", 0.00440);
+            case "o4-mini-deep-research" -> Map.of("input", 0.00200, "output", 0.00800);
+            case "o3-mini" -> Map.of("input", 0.00110, "output", 0.00440);
+            case "o1-mini" -> Map.of("input", 0.00110, "output", 0.00440);
+
+            // Deprecated/legacy fallbacks (kept for compatibility)
             case "gpt-3.5-turbo", "gpt-3.5-turbo-0125" -> Map.of("input", 0.0005, "output", 0.0015);
-            case "gpt-3.5-turbo-instruct" -> Map.of("input", 0.0015, "output", 0.002);
-            case "gpt-4", "gpt-4-0613" -> Map.of("input", 0.03, "output", 0.06);
-            case "gpt-4-32k", "gpt-4-32k-0613" -> Map.of("input", 0.06, "output", 0.12);
-            case "gpt-4-turbo", "gpt-4-turbo-2024-04-09" -> Map.of("input", 0.01, "output", 0.03);
-            case "gpt-4o", "gpt-4o-2024-05-13" -> Map.of("input", 0.005, "output", 0.015);
-            case "gpt-4o-mini", "gpt-4o-mini-2024-07-18" -> Map.of("input", 0.00015, "output", 0.0006);
-            case "gpt-4-vision-preview" -> Map.of("input", 0.01, "output", 0.03);
-            default -> Map.of("input", 0.002, "output", 0.002); // 默认价格
+            case "gpt-3.5-turbo-instruct" -> Map.of("input", 0.0015, "output", 0.0020);
+            case "gpt-4", "gpt-4-0613" -> Map.of("input", 0.0300, "output", 0.0600);
+            case "gpt-4-32k", "gpt-4-32k-0613" -> Map.of("input", 0.0600, "output", 0.1200);
+            case "gpt-4-turbo", "gpt-4-turbo-2024-04-09" -> Map.of("input", 0.0100, "output", 0.0300);
+            case "gpt-4o-vision-preview", "gpt-4-vision-preview" -> Map.of("input", 0.0100, "output", 0.0300);
+            default -> Map.of("input", 0.002, "output", 0.002);
         };
     }
     
@@ -155,13 +189,40 @@ public class OpenAITokenPricingCalculator extends AbstractTokenPricingCalculator
      */
     public Mono<List<ModelPricing>> getDefaultOpenAIPricing() {
         List<ModelPricing> defaultPricing = List.of(
-                createDefaultPricing("gpt-3.5-turbo", "GPT-3.5 Turbo", 0.0005, 0.0015, 16385),
-                createDefaultPricing("gpt-3.5-turbo-instruct", "GPT-3.5 Turbo Instruct", 0.0015, 0.002, 4096),
-                createDefaultPricing("gpt-4", "GPT-4", 0.03, 0.06, 8192),
-                createDefaultPricing("gpt-4-32k", "GPT-4 32K", 0.06, 0.12, 32768),
-                createDefaultPricing("gpt-4-turbo", "GPT-4 Turbo", 0.01, 0.03, 128000),
-                createDefaultPricing("gpt-4o", "GPT-4o", 0.005, 0.015, 128000),
-                createDefaultPricing("gpt-4o-mini", "GPT-4o Mini", 0.00015, 0.0006, 128000)
+                // GPT-5 family
+                createDefaultPricing("gpt-5", "GPT-5", 0.00125, 0.01000, 128000),
+                createDefaultPricing("gpt-5-mini", "GPT-5 Mini", 0.00025, 0.00200, 128000),
+                createDefaultPricing("gpt-5-nano", "GPT-5 Nano", 0.00005, 0.00040, 128000),
+                createDefaultPricing("gpt-5-chat-latest", "GPT-5 Chat Latest", 0.00125, 0.01000, 128000),
+
+                // GPT-4.1
+                createDefaultPricing("gpt-4.1", "GPT-4.1", 0.00200, 0.00800, 128000),
+                createDefaultPricing("gpt-4.1-mini", "GPT-4.1 Mini", 0.00040, 0.00160, 128000),
+                createDefaultPricing("gpt-4.1-nano", "GPT-4.1 Nano", 0.00010, 0.00040, 128000),
+
+                // GPT-4o
+                createDefaultPricing("gpt-4o", "GPT-4o", 0.00250, 0.01000, 128000),
+                createDefaultPricing("gpt-4o-2024-05-13", "GPT-4o 2024-05-13", 0.00500, 0.01500, 128000),
+                createDefaultPricing("gpt-4o-mini", "GPT-4o Mini", 0.00015, 0.00060, 128000),
+
+                // Realtime / Audio
+                createDefaultPricing("gpt-realtime", "GPT Realtime", 0.00400, 0.01600, 128000),
+                createDefaultPricing("gpt-4o-realtime-preview", "GPT-4o Realtime Preview", 0.00500, 0.02000, 128000),
+                createDefaultPricing("gpt-4o-mini-realtime-preview", "GPT-4o Mini Realtime Preview", 0.00060, 0.00240, 128000),
+                createDefaultPricing("gpt-audio", "GPT Audio", 0.00250, 0.01000, 128000),
+                createDefaultPricing("gpt-4o-audio-preview", "GPT-4o Audio Preview", 0.00250, 0.01000, 128000),
+                createDefaultPricing("gpt-4o-mini-audio-preview", "GPT-4o Mini Audio Preview", 0.00015, 0.00060, 128000),
+
+                // o family
+                createDefaultPricing("o1", "o1", 0.01500, 0.06000, 128000),
+                createDefaultPricing("o1-pro", "o1 Pro", 0.15000, 0.60000, 128000),
+                createDefaultPricing("o3-pro", "o3 Pro", 0.02000, 0.08000, 128000),
+                createDefaultPricing("o3", "o3", 0.00200, 0.00800, 128000),
+                createDefaultPricing("o3-deep-research", "o3 Deep Research", 0.01000, 0.04000, 128000),
+                createDefaultPricing("o4-mini", "o4 Mini", 0.00110, 0.00440, 128000),
+                createDefaultPricing("o4-mini-deep-research", "o4 Mini Deep Research", 0.00200, 0.00800, 128000),
+                createDefaultPricing("o3-mini", "o3 Mini", 0.00110, 0.00440, 128000),
+                createDefaultPricing("o1-mini", "o1 Mini", 0.00110, 0.00440, 128000)
         );
         
         return Mono.just(defaultPricing);

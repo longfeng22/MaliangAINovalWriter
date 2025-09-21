@@ -1651,6 +1651,33 @@ class ApiClient {
     }
   }
 
+  /// 获取用户所有AI配置（带价格与标签等富信息，不返回解密API密钥）
+  Future<List<UserAIModelConfigModel>> listAIConfigurationsEnriched({
+    required String userId,
+    bool? validatedOnly,
+  }) async {
+    final path = '$_userAIConfigBasePath/users/$userId/list-enriched';
+    final body = <String, dynamic>{};
+    if (validatedOnly != null) {
+      body['validatedOnly'] = validatedOnly;
+    }
+    try {
+      final responseData = await post(path, data: body.isEmpty ? null : body);
+      if (responseData is List) {
+        final configs = responseData
+            .map((json) => UserAIModelConfigModel.fromJson(json as Map<String, dynamic>))
+            .toList();
+        return configs;
+      } else {
+        AppLogger.e('ApiClient', 'listAIConfigurationsEnriched 响应格式错误: $responseData');
+        throw ApiException(-1, '列出富配置信息响应格式错误');
+      }
+    } catch (e) {
+      AppLogger.e('ApiClient', '列出富配置信息失败 for user $userId', e);
+      rethrow;
+    }
+  }
+
   /// 获取用户所有AI配置，包含解密后的API密钥
   Future<List<UserAIModelConfigModel>> listAIConfigurationsWithDecryptedKeys({
     required String userId,
@@ -1806,7 +1833,7 @@ class ApiClient {
   Future<String> getProviderCapability(String providerName) async {
     try {
       final response = await _dio.get<String>(
-        '/api/models/providers/$providerName/capability',
+        '/providers/$providerName/capability',
       );
       return response.data ?? 'NO_LISTING';
     } on DioException catch (e) {
@@ -1824,7 +1851,7 @@ class ApiClient {
     required String apiKey,
     String? apiEndpoint,
   }) async {
-    final path = '/api/models/providers/$provider/info/auth'; // Correct endpoint for auth models
+    final path = '/models/providers/$provider/info/auth'; // Correct endpoint for auth models
     try {
       Map<String, dynamic> queryParams = {
         'apiKey': apiKey,
@@ -1854,6 +1881,48 @@ class ApiClient {
     } catch (e) {
       AppLogger.e('ApiClient', '使用API密钥获取模型列表时发生意外错误，provider: $provider', e);
       throw ApiException(-1, '使用API密钥获取模型列表失败: ${e.toString()}');
+    }
+  }
+
+  /// 测试指定提供商的 API Key（不拉取模型列表）
+  Future<bool> testProviderApiKey({
+    required String provider,
+    required String apiKey,
+    String? apiEndpoint,
+    String? modelName, // 新增：可选的模型名称参数
+  }) async {
+    final path = '/providers/$provider/test-api-key';
+    try {
+      final body = <String, dynamic>{
+        'apiKey': apiKey,
+        if (apiEndpoint != null && apiEndpoint.isNotEmpty) 'apiEndpoint': apiEndpoint,
+        if (modelName != null && modelName.isNotEmpty) 'modelName': modelName, // 添加模型名称到请求体
+      };
+
+      final responseData = await post(path, data: body);
+
+      if (responseData is bool) return responseData;
+      if (responseData is String) {
+        final lower = responseData.toLowerCase();
+        if (lower == 'true') return true;
+        if (lower == 'false') return false;
+      }
+      if (responseData is Map<String, dynamic>) {
+        // 兼容部分返回格式 { data: true } 或 { success: true }
+        final data = responseData['data'];
+        if (data is bool) return data;
+        final success = responseData['success'];
+        if (success is bool) return success;
+      }
+
+      AppLogger.w('ApiClient', 'testProviderApiKey 响应格式不正确: $responseData');
+      return false;
+    } on DioException catch (e) {
+      AppLogger.e('ApiClient', '测试 API Key 失败，provider: $provider', e);
+      throw _handleDioError(e);
+    } catch (e) {
+      AppLogger.e('ApiClient', '测试 API Key 时发生意外错误，provider: $provider', e);
+      throw ApiException(-1, '测试 API Key 失败: ${e.toString()}');
     }
   }
 
@@ -2186,7 +2255,7 @@ class ApiClient {
       final data = {
         'title': title,
         'author': author,
-        'series': series,
+        'seriesName': series,
       };
       
       final response = await _dio.post(
@@ -2374,9 +2443,30 @@ class ApiClient {
     return await post('/novels/add-chapter-fine', data: data);
   }
   
+  /// 原子化添加章节和场景 - 在一个事务中同时创建章节和场景
+  Future<Map<String, dynamic>> addChapterWithScene(String novelId, String actId, 
+      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent}) async {
+    final data = {
+      'novelId': novelId,
+      'actId': actId,
+      'chapterTitle': chapterTitle,
+      'sceneTitle': sceneTitle,
+    };
+    
+    if (sceneSummary != null) {
+      data['sceneSummary'] = sceneSummary;
+    }
+    
+    if (sceneContent != null) {
+      data['sceneContent'] = sceneContent;
+    }
+    
+    return await post('/novels/add-chapter-with-scene', data: data);
+  }
+  
   /// 细粒度添加场景 - 只提供必要信息
   Future<Map<String, dynamic>> addSceneFine(String novelId, String chapterId, String title, 
-      {String? summary, int? position}) async {
+      {String? summary, String? content, int? position}) async {
     final data = {
       'novelId': novelId,
       'chapterId': chapterId,
@@ -2385,6 +2475,10 @@ class ApiClient {
     
     if (summary != null) {
       data['summary'] = summary;
+    }
+    
+    if (content != null) {
+      data['content'] = content;
     }
     
     if (position != null) {
@@ -2566,6 +2660,27 @@ class ApiClient {
     } catch (e) {
       AppLogger.e('ApiClient', '❌ 获取用户积分余额时发生意外错误', e);
       throw ApiException(-1, '获取用户积分余额失败: ${e.toString()}');
+    }
+  }
+
+  /// 设置指定配置为用户的工具调用默认模型
+  Future<UserAIModelConfigModel> setToolDefaultAIConfiguration({
+    required String userId,
+    required String configId,
+  }) async {
+    final path = '$_userAIConfigBasePath/users/$userId/set-tool-default/$configId';
+    try {
+      final responseData = await post(path);
+      if (responseData is Map<String, dynamic>) {
+        return UserAIModelConfigModel.fromJson(responseData);
+      } else {
+        AppLogger.e('ApiClient',
+            'setToolDefaultAIConfiguration 响应格式错误 ($userId/$configId): $responseData');
+        throw ApiException(-1, '设置工具默认配置响应格式错误');
+      }
+    } catch (e) {
+      AppLogger.e('ApiClient', '设置工具默认 AI 配置失败 ($userId / $configId)', e);
+      rethrow;
     }
   }
 }

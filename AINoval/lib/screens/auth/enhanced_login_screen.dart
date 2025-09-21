@@ -214,7 +214,7 @@ class _EnhancedLoginScreenState extends State<EnhancedLoginScreen> with TickerPr
     // 注意：不清空图片验证码相关状态，因为图片验证码在整个注册流程中应该保持一致
     // 只在模式切换或者用户主动刷新时才清空图片验证码
     
-    print('🧹 清理验证码状态: 定时器已停止，验证码输入框已清空');
+    //print('🧹 清理验证码状态: 定时器已停止，验证码输入框已清空');
   }
 
   /// 清理图片验证码状态（仅在必要时调用）
@@ -223,7 +223,7 @@ class _EnhancedLoginScreenState extends State<EnhancedLoginScreen> with TickerPr
     _captchaId = null;
     _captchaImage = null;
     _isCaptchaLoading = false;
-    print('🧹 清理图片验证码状态: 输入框已清空，验证码图片已重置');
+    //print('🧹 清理图片验证码状态: 输入框已清空，验证码图片已重置');
   }
 
   /// 切换登录/注册模式
@@ -307,7 +307,7 @@ class _EnhancedLoginScreenState extends State<EnhancedLoginScreen> with TickerPr
       }
       
       if (type.isNotEmpty && target.isNotEmpty) {
-        print('📨 发送登录验证码: $type -> $target');
+        //print('📨 发送登录验证码: $type -> $target');
         authBloc.add(SendVerificationCode(
           type: type,
           target: target,
@@ -361,7 +361,7 @@ class _EnhancedLoginScreenState extends State<EnhancedLoginScreen> with TickerPr
           return;
         }
         
-        print('📨 发送注册验证码: $type -> $target (图片验证码ID: $_captchaId)');
+        //print('📨 发送注册验证码: $type -> $target (图片验证码ID: $_captchaId)');
         authBloc.add(SendVerificationCodeWithCaptcha(
           type: type,
           target: target,
@@ -521,21 +521,21 @@ class _EnhancedLoginScreenState extends State<EnhancedLoginScreen> with TickerPr
       // 根据登录方式发送不同的登录事件
       switch (_loginMethod) {
         case 'phone':
-          print('📱 发起手机号登录: ${_phoneController.text.trim()}');
+          //print('📱 发起手机号登录: ${_phoneController.text.trim()}');
           authBloc.add(PhoneLogin(
             phone: _phoneController.text.trim(),
             verificationCode: _verificationCodeController.text.trim(),
           ));
           break;
         case 'email':
-          print('📧 发起邮箱登录: ${_emailController.text.trim()}');
+          //print('📧 发起邮箱登录: ${_emailController.text.trim()}');
           authBloc.add(EmailLogin(
             email: _emailController.text.trim(),
             verificationCode: _verificationCodeController.text.trim(),
           ));
           break;
         default:
-          print('👤 发起用户名登录: ${_usernameController.text.trim()}');
+          //print('👤 发起用户名登录: ${_usernameController.text.trim()}');
           authBloc.add(AuthLogin(
             username: _usernameController.text.trim(),
             password: _passwordController.text,
@@ -553,7 +553,7 @@ class _EnhancedLoginScreenState extends State<EnhancedLoginScreen> with TickerPr
           _showError('请输入密码');
           return;
         }
-        print('⚡ 发起快捷注册: 用户名=${_usernameController.text.trim()}');
+        //print('⚡ 发起快捷注册: 用户名=${_usernameController.text.trim()}');
         authBloc.add(AuthRegister(
           username: _usernameController.text.trim(),
           password: _passwordController.text,
@@ -580,7 +580,7 @@ class _EnhancedLoginScreenState extends State<EnhancedLoginScreen> with TickerPr
           phoneVerificationCode = _verificationCodeController.text.trim();
         }
         
-        print('📝 发起注册: 用户名=${_usernameController.text.trim()}, 邮箱=$email, 手机=$phone');
+        //print('📝 发起注册: 用户名=${_usernameController.text.trim()}, 邮箱=$email, 手机=$phone');
         authBloc.add(AuthRegister(
           username: _usernameController.text.trim(),
           password: _passwordController.text,

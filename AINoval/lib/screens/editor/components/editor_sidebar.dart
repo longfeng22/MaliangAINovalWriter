@@ -13,6 +13,7 @@ import 'package:ainoval/blocs/setting/setting_bloc.dart';
 import 'package:ainoval/utils/web_theme.dart';
 import 'package:ainoval/widgets/common/user_avatar_menu.dart';
 import 'package:ainoval/screens/subscription/subscription_screen.dart';
+import 'package:ainoval/screens/editor/components/ai_task_center_panel.dart';
 
 import 'chapter_directory_tab.dart';
 
@@ -180,10 +181,10 @@ class _EditorSidebarState extends State<EditorSidebar> {
                     },
                   ),
 
-                  // 添加AI生成选项
-                  _buildPlaceholderTab(
-                      icon: Icons.auto_awesome,
-                      text: 'AI生成功能开发中'),
+                  // AI任务中心
+                  _KeepAliveWrapper(
+                    child: AITaskCenterPanel(),
+                  ),
                 ],
               ),
             ),

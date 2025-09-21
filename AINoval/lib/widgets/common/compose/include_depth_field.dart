@@ -27,14 +27,9 @@ class IncludeDepthField extends StatelessWidget {
           spacing: 8,
           children: [
             ChoiceChip(
-              label: const Text('仅摘要'),
-              selected: value == 'summaryOnly',
-              onSelected: (_) => onChanged('summaryOnly'),
-            ),
-            ChoiceChip(
               label: const Text('全文'),
-              selected: value == 'full',
-              onSelected: (_) => onChanged('full'),
+              selected: true, // 始终选中全文
+              onSelected: null, // 禁用点击
             ),
           ],
         ),

@@ -33,6 +33,15 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
   final FocusNode _focusNode = FocusNode();
 
   @override
+  void initState() {
+    super.initState();
+    // 当用户输入修改提示时，立即触发重建以刷新“生成修改”按钮可用态
+    _modificationController.addListener(() {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
   void dispose() {
     _modificationController.dispose();
     _descriptionController.dispose();
@@ -71,7 +80,6 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
       elevation: 0,
       color: Theme.of(context).cardColor.withOpacity(0.5),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
         side: BorderSide(
           color: Theme.of(context).dividerColor,
           width: 1,
@@ -236,11 +244,6 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: WebTheme.getPrimaryColor(context).withOpacity(0.05),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
-          width: 1,
-        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -281,13 +284,12 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                 controller: _descriptionController,
                 decoration: InputDecoration(
                   hintText: '请输入节点描述...',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                  border: InputBorder.none,
                   filled: true,
                   fillColor: Theme.of(context).colorScheme.surface,
+                  contentPadding: const EdgeInsets.all(12),
                 ),
-                maxLines: 4,
+                maxLines: 20,
                 enabled: hasSession,
               ),
               const SizedBox(height: 8),
@@ -310,9 +312,7 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                           : null,
                       style: ElevatedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 8),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
+                        shape: const RoundedRectangleBorder(),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -364,7 +364,6 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: color.withOpacity(0.3),
           width: 1,
@@ -396,13 +395,12 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
           controller: _modificationController,
           decoration: InputDecoration(
             hintText: '描述您希望对此节点做出的修改...',
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.all(12),
             filled: true,
             fillColor: Theme.of(context).colorScheme.surface,
           ),
-          maxLines: 4,
+          maxLines: 20,
         ),
       ],
     );
@@ -422,9 +420,8 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
         DropdownButtonFormField<String>(
           value: _selectedScope,
           decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.all(12),
             filled: true,
             fillColor: Theme.of(context).colorScheme.surface,
           ),
@@ -500,7 +497,7 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                 // 按钮可用条件：
                 // 1. 不在当前节点的修改流程中
                 // 2. 已输入修改提示
-                // 3. 存在可用的模型配置（下拉框选择或会话默认模型）
+                // 3. 已选择模型
                 onPressed: (isCurrentNodeUpdating || 
                             _modificationController.text.trim().isEmpty ||
                             _getModelConfigId(state) == null)
@@ -510,8 +507,7 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                       },
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                  shape: const RoundedRectangleBorder(
                   ),
                 ),
                 child: Row(
@@ -568,8 +564,7 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                     },
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                      shape: const RoundedRectangleBorder(
                       ),
                     ),
                     child: const Text('取消', style: TextStyle(fontSize: 12)),
@@ -585,8 +580,7 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                     },
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                      shape: const RoundedRectangleBorder(
                       ),
                     ),
                     child: const Text('应用', style: TextStyle(fontSize: 12)),
@@ -620,10 +614,10 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
     final currentState = context.read<SettingGenerationBloc>().state;
     AppLogger.i('EditorPanelWidget', '🔧 开始节点修改 - 当前状态: ${currentState.runtimeType}, 节点ID: ${node.id}');
 
-    // 计算模型配置ID，优先使用下拉框选择，其次使用会话默认值
+    // 计算模型配置ID：仅使用下拉框当前选择的模型
     final modelConfigId = _getModelConfigId(currentState);
     if (modelConfigId == null) {
-      AppLogger.w('EditorPanelWidget', '❌ 未选择模型且会话中也没有默认模型，无法修改');
+      AppLogger.w('EditorPanelWidget', '❌ 未选择模型，无法修改');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请先选择AI模型'), backgroundColor: Colors.orange),
       );
@@ -641,6 +635,8 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
           modificationPrompt: _modificationController.text.trim(),
           modelConfigId: modelConfigId,
           scope: _selectedScope,
+          isPublicModel: _selectedModel?.isPublic,
+          publicModelConfigId: _selectedModel?.isPublic == true ? _selectedModel!.id : null,
         ),
       );
 
@@ -658,33 +654,9 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
   }
 
   /// 获取当前可用的模型配置ID
-  /// 优先使用用户在下拉框中选择的模型，其次使用会话的默认模型
+  /// 仅使用下拉框当前选择的模型（不再回退到会话/metadata）
   String? _getModelConfigId(SettingGenerationState state) {
-    if (_selectedModel != null) {
-      return _selectedModel!.id;
-    }
-
-    String? fromSession;
-    Map<String, dynamic>? meta;
-    if (state is SettingGenerationInProgress) {
-      fromSession = state.activeSession.modelConfigId;
-      meta = state.activeSession.metadata;
-    } else if (state is SettingGenerationCompleted) {
-      fromSession = state.activeSession.modelConfigId;
-      meta = state.activeSession.metadata;
-    } else if (state is SettingGenerationNodeUpdating) {
-      fromSession = state.activeSession.modelConfigId;
-      meta = state.activeSession.metadata;
-    }
-
-    // 回退到会话元数据中的 modelConfigId（后端通常把它写在metadata里）
-    if (fromSession == null && meta != null) {
-      final dynamic metaId = meta['modelConfigId'];
-      if (metaId is String && metaId.isNotEmpty) {
-        return metaId;
-      }
-    }
-    return null;
+    return _selectedModel?.id;
   }
 
   // ====== 快捷键意图与处理 ======
@@ -713,6 +685,8 @@ extension on _EditorPanelWidgetState {
         modificationPrompt: _modificationController.text.trim(),
         modelConfigId: modelConfigId,
         scope: _selectedScope,
+        isPublicModel: _selectedModel?.isPublic,
+        publicModelConfigId: _selectedModel?.isPublic == true ? _selectedModel!.id : null,
       ),
     );
   }

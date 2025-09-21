@@ -1,6 +1,5 @@
 import 'package:ainoval/config/app_config.dart';
 import 'package:ainoval/models/editor_content.dart';
-import 'package:ainoval/models/editor_settings.dart';
 import 'package:ainoval/models/novel_structure.dart';
 import 'package:ainoval/models/novel_with_summaries_dto.dart';
 import 'package:ainoval/services/api_service/base/api_client.dart';
@@ -16,7 +15,7 @@ import 'package:flutter_client_sse/constants/sse_request_type_enum.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:ainoval/utils/event_bus.dart'; // Added EventBus import
-import 'package:collection/collection.dart'; // For lastOrNull
+// import 'package:collection/collection.dart'; // For lastOrNull (未使用)
 import 'package:ainoval/models/chapters_for_preload_dto.dart';
 
 /// 编辑器仓库实现
@@ -547,7 +546,7 @@ class EditorRepositoryImpl implements EditorRepository {
   /// 保存小说数据
   @override
   Future<bool> saveNovel(Novel novel) async {
-    bool localSaveSuccess = false;
+    bool localSaveSuccess = false; // 保留占位，便于未来扩展（例如统计保存结果）
     try {
       await _localStorageService.saveNovel(novel);
       localSaveSuccess = true;
@@ -792,14 +791,23 @@ class EditorRepositoryImpl implements EditorRepository {
         await _localStorageService.markForSyncByType(sceneKey, 'scene');
         AppLogger.i('EditorRepositoryImpl/saveSceneContent', '场景标记为待同步: $sceneKey');
         
-        // 准备场景数据
+        // 准备完整的场景数据
+        final now = DateTime.now().toIso8601String();
         final sceneData = {
           'id': sceneId,
           'novelId': novelId,
           'chapterId': chapterId,
+          'title': '场景内容', // 简单的默认标题
           'content': processedContent,
           'summary': summary.content,
+          'wordCount': scene.wordCount,
+          'sequence': 1, // 默认序列号
+          'version': scene.version, // 使用当前版本号
+          'createdAt': now,
+          'updatedAt': now,
         };
+        
+        AppLogger.i('EditorRepositoryImpl/saveSceneContent', '发送到服务器的场景数据: content长度=${processedContent.length}, summary长度=${summary.content.length}');
         
         // 调用API更新场景
         final response = await _apiClient.post('/scenes/upsert', data: sceneData);
@@ -960,7 +968,7 @@ class EditorRepositoryImpl implements EditorRepository {
     String novelId,
     String chapterId,
     String title,
-    {String? summary, int? position}
+    {String? summary, String? content, int? position}
   ) async {
     try {
       final requestData = {
@@ -970,6 +978,11 @@ class EditorRepositoryImpl implements EditorRepository {
         'summary': summary ?? '',
         'position': position,
       };
+      
+      // 如果提供了内容，添加到请求数据中
+      if (content != null && content.isNotEmpty) {
+        requestData['content'] = content;
+      }
 
       final response = await _apiClient.post('/scenes/add-scene-fine', data: requestData);
       
@@ -1071,6 +1084,29 @@ class EditorRepositoryImpl implements EditorRepository {
     } catch (e) {
       AppLogger.e('EditorRepository/addChapterFine', '添加Chapter失败', e);
       throw ApiException(-1, '添加Chapter失败: $e');
+    }
+  }
+
+  /// 原子化添加章节和场景 - 在一个事务中同时创建章节和场景，避免数据不一致
+  @override
+  Future<Map<String, dynamic>> addChapterWithScene(String novelId, String actId, 
+      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent}) async {
+    try {
+      final response = await _apiClient.addChapterWithScene(
+        novelId, actId, chapterTitle, sceneTitle,
+        sceneSummary: sceneSummary, sceneContent: sceneContent);
+      
+      // 发布结构更新事件
+      _publishNovelStructureUpdate(novelId, 'CHAPTER_ADDED', chapterId: response['chapterId']?.toString());
+      _publishNovelStructureUpdate(novelId, 'SCENE_ADDED', sceneId: response['sceneId']?.toString());
+      
+      AppLogger.i('EditorRepository/addChapterWithScene', 
+          '原子化创建章节和场景成功: chapterId=${response['chapterId']}, sceneId=${response['sceneId']}');
+      
+      return response;
+    } catch (e) {
+      AppLogger.e('EditorRepository/addChapterWithScene', '原子化添加章节和场景失败', e);
+      throw ApiException(-1, '原子化添加章节和场景失败: $e');
     }
   }
 
@@ -1272,13 +1308,12 @@ class EditorRepositoryImpl implements EditorRepository {
   }) async {
     try {
       final requestData = {
-        'novelId': novelId,
         'title': title,
-        'author': author,
-        'series': series,
+        if (author != null) 'author': author,
+        if (series != null) 'seriesName': series,
       };
       
-      await _apiClient.post('/novels/$novelId/update-metadata', data: requestData);
+      await _apiClient.post('/novels/$novelId/metadata', data: requestData);
     } catch (e) {
       AppLogger.e('EditorRepository/updateNovelMetadata', '更新小说元数据失败', e);
       throw ApiException(-1, '更新小说元数据失败: $e');
@@ -1448,6 +1483,12 @@ class EditorRepositoryImpl implements EditorRepository {
     int? contextChapterCount,
     String? customContext,
     String? writingStyle,
+    bool? requiresReview,
+    bool? persistChanges,
+    String? summaryPromptTemplateId,
+    String? contentPromptTemplateId,
+    String? summaryPublicModelConfigId,
+    String? contentPublicModelConfigId,
   }) async {
     try {
       final requestData = {
@@ -1459,9 +1500,19 @@ class EditorRepositoryImpl implements EditorRepository {
         'contextChapterCount': contextChapterCount,
         'customContext': customContext,
         'writingStyle': writingStyle,
+        // 由表单明确传入（默认：评审=true时通常不持久化，二者可独立配置）
+        'requiresReview': requiresReview ?? false,
+        'persistChanges': persistChanges ?? false,
+        // 可选：提示词模板（摘要/内容）
+        'summaryPromptTemplateId': summaryPromptTemplateId,
+        'contentPromptTemplateId': contentPromptTemplateId,
+        // 公共模型配置ID（可选）
+        'summaryPublicModelConfigId': summaryPublicModelConfigId,
+        'contentPublicModelConfigId': contentPublicModelConfigId,
       };
       
-      final response = await _apiClient.post('/ai/continue-writing', data: requestData);
+      // 后端控制器: TaskContinueWritingController => baseUrl(/api/v1) + /api/tasks/continue-writing
+      final response = await _apiClient.post('/api/tasks/continue-writing', data: requestData);
       
       if (response != null && response.containsKey('taskId')) {
         return response['taskId'];
@@ -2045,14 +2096,14 @@ class EditorRepositoryImpl implements EditorRepository {
       // 根据变更组件选择性同步
       bool structurePotentiallyChanged = false;
       if (changedComponents.contains('metadata')) {
-        // 仅同步元数据
+        // 仅同步元数据（标题/作者/系列）
         final metadataJson = {
-          'id': novel.id,
           'title': novel.title,
-          'coverImage': novel.coverUrl,
-          'author': novel.author?.toJson(),
+          if (novel.author?.username != null && novel.author!.username.isNotEmpty)
+            'author': novel.author!.username,
+          // seriesName 不在 Novel 模型中，若需要由上层传入
         };
-        await _apiClient.post('/novels/${novel.id}/update-metadata', data: metadataJson);
+        await _apiClient.post('/novels/${novel.id}/metadata', data: metadataJson);
       }
       
       if (changedComponents.contains('lastEditedChapterId') && novel.lastEditedChapterId != null) {

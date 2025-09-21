@@ -25,6 +25,7 @@ class AdminBloc extends Bloc<AdminEvent, AdminState> {
     on<DeductCreditsFromUser>(_onDeductCreditsFromUser);
     on<UpdateUserInfo>(_onUpdateUserInfo);
     on<AssignRoleToUser>(_onAssignRoleToUser);
+    on<ResetUserPassword>(_onResetUserPassword);
   }
 
   Future<void> _onLoadDashboardStats(
@@ -46,12 +47,27 @@ class AdminBloc extends Bloc<AdminEvent, AdminState> {
   ) async {
     emit(AdminLoading());
     try {
-      final users = await adminRepository.getUsers(
+      // 使用新的分页接口
+      final paged = await adminRepository.getUsersPaged(
         page: event.page,
         size: event.size,
-        search: event.search,
+        keyword: event.search,
+        status: event.status,
+        minCredits: event.minCredits,
+        createdStart: event.createdStart,
+        createdEnd: event.createdEnd,
+        lastLoginStart: event.lastLoginStart,
+        lastLoginEnd: event.lastLoginEnd,
+        sortBy: event.sortBy,
+        sortDir: event.sortDir,
       );
-      emit(UsersLoaded(users));
+      emit(UsersPageLoaded(
+        users: paged.content,
+        page: paged.page,
+        size: paged.size,
+        totalElements: paged.totalElements,
+        totalPages: paged.totalPages,
+      ));
     } catch (e) {
       emit(AdminError(e.toString()));
     }
@@ -215,6 +231,28 @@ class AdminBloc extends Bloc<AdminEvent, AdminState> {
       add(LoadUsers());
     } catch (e) {
       emit(AdminError(e.toString()));
+    }
+  }
+
+  Future<void> _onResetUserPassword(
+    ResetUserPassword event,
+    Emitter<AdminState> emit,
+  ) async {
+    try {
+      await adminRepository.resetUserPassword(event.userId, newPassword: event.newPassword);
+      // 重置成功后刷新列表
+      add(const LoadUsers());
+      // 可以考虑添加成功状态，但这里直接刷新列表更简洁
+    } catch (e) {
+      String errorMessage = '重置密码失败';
+      if (e.toString().contains('用户不存在')) {
+        errorMessage = '用户不存在，无法重置密码';
+      } else if (e.toString().contains('权限')) {
+        errorMessage = '没有权限执行此操作';
+      } else if (e.toString().contains('网络')) {
+        errorMessage = '网络连接失败，请稍后重试';
+      }
+      emit(AdminError('$errorMessage: ${e.toString()}'));
     }
   }
 }

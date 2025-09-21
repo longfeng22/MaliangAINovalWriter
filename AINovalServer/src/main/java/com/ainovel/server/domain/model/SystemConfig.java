@@ -186,6 +186,16 @@ public class SystemConfig {
          * 是否开启邮件验证
          */
         public static final String ENABLE_EMAIL_VERIFICATION = "ENABLE_EMAIL_VERIFICATION";
+
+        /**
+         * 计费处理窗口（最近N小时），字符串数值，留空表示不限
+         */
+        public static final String BILLING_PROCESS_SINCE_HOURS = "BILLING_PROCESS_SINCE_HOURS";
+
+        /**
+         * 计费处理开始时间（ISO-8601字符串），优先级高于 HOURS，留空表示不限
+         */
+        public static final String BILLING_PROCESS_SINCE_TIME = "BILLING_PROCESS_SINCE_TIME";
     }
     
     /**

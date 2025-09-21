@@ -87,7 +87,9 @@ public interface ISettingGenerationService {
         String nodeId, 
         String modificationPrompt,
         String modelConfigId,
-        String scope
+        String scope,
+        Boolean isPublicModel,
+        String publicModelConfigId
     );
     
     /**

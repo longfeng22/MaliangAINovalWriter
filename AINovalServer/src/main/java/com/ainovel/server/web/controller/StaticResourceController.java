@@ -34,3 +34,5 @@ public class StaticResourceController {
         return index();
     }
 }
+
+

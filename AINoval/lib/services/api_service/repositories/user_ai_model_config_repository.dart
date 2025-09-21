@@ -62,6 +62,12 @@ abstract interface class UserAIModelConfigRepository {
     required String configId,
   });
 
+  /// 设置指定配置为用户的工具调用默认模型
+  Future<UserAIModelConfigModel> setToolDefaultConfiguration({
+    required String userId,
+    required String configId,
+  });
+
   /// 获取提供商的模型列表能力
   Future<ModelListingCapability> getProviderCapability(String providerName);
   
@@ -70,5 +76,13 @@ abstract interface class UserAIModelConfigRepository {
     required String provider, 
     required String apiKey, 
     String? apiEndpoint
+  });
+
+  /// 测试指定提供商 API Key 是否有效（不拉取模型列表）
+  Future<bool> testApiKey({
+    required String provider,
+    required String apiKey,
+    String? apiEndpoint,
+    String? modelName, // 新增：可选的模型名称参数
   });
 } 

@@ -17,40 +17,63 @@ class AIModelGroup {
     final Map<String, List<ModelInfo>> groupedModels = {};
 
     for (final modelInfo in models) {
-      String prefix;
-      // Use model ID for prefix extraction
-      final modelId = modelInfo.id;
-      if (modelId.contains('/')) {
-        prefix = modelId.split('/').first;
-      } else if (modelId.contains(':')) {
-        prefix = modelId.split(':').first;
-      } else if (modelId.contains('-')) {
-        final parts = modelId.split('-');
-        prefix = parts.first;
-      } else {
-        prefix = modelId;
+      final groupName = _defaultGroupName(modelInfo.id, provider);
+      if (!groupedModels.containsKey(groupName)) {
+        groupedModels[groupName] = [];
       }
-
-      if (!groupedModels.containsKey(prefix)) {
-        groupedModels[prefix] = [];
-      }
-      groupedModels[prefix]!.add(modelInfo);
+      groupedModels[groupName]!.add(modelInfo);
     }
 
     final groups = groupedModels.entries
         .map((entry) => ModelPrefixGroup(
               prefix: entry.key,
-              // Pass ModelInfo list to ModelPrefixGroup constructor
-              modelsInfo: entry.value, 
+              modelsInfo: entry.value,
             ))
         .toList();
 
     groups.sort((a, b) => a.prefix.compareTo(b.prefix));
 
-    return AIModelGroup(
-      provider: provider,
-      groups: groups,
-    );
+    return AIModelGroup(provider: provider, groups: groups);
+  }
+
+  /// 参考 Cherry Studio 的分组规则，结合常见模型前缀进行归类
+  static String _defaultGroupName(String modelId, String provider) {
+    final id = modelId.toLowerCase();
+    final p = provider.toLowerCase();
+
+    // 1) 明确族群归类
+    if (id.startsWith('gpt') || id.startsWith('o1') || id.startsWith('o3')) return 'openai';
+    if (id.startsWith('claude')) return 'claude';
+    if (id.startsWith('gemini') || id.startsWith('imagen')) return 'gemini';
+    if (id.startsWith('mistral')) return 'mistral';
+    if (id.startsWith('llama') || id.startsWith('meta-llama') || id.startsWith('llama-')) return 'llama';
+    if (id.startsWith('qwen') || id.startsWith('qvq') || id.startsWith('qwq')) return 'qwen';
+    if (id.startsWith('glm') || id.startsWith('chatglm') || id.contains('zhipu')) return 'glm';
+    if (id.startsWith('deepseek')) return 'deepseek';
+    if (id.startsWith('grok') || id.contains('xai')) return 'grok';
+    if (id.startsWith('sonar') || id.contains('perplexity')) return 'perplexity';
+
+    // 2) openrouter 风格：vendor/model
+    if (id.contains('/')) {
+      final vendor = id.split('/').first;
+      if (vendor.isNotEmpty) return vendor;
+    }
+
+    // 3) 某些平台使用冒号
+    if (id.contains(':')) {
+      return id.split(':').first;
+    }
+
+    // 4) 使用第一个短横线段
+    if (id.contains('-')) {
+      return id.split('-').first;
+    }
+
+    // 5) 回退到 provider
+    if (p.isNotEmpty) return p;
+
+    // 6) 最后回退到完整 id
+    return id;
   }
 
   /// 获取所有模型的平铺列表

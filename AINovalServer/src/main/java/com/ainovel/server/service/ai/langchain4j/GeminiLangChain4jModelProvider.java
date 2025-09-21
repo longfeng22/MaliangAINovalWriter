@@ -1,13 +1,7 @@
 package com.ainovel.server.service.ai.langchain4j;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -31,23 +25,12 @@ import reactor.core.publisher.Mono;
  * 详细文档请参考：https://docs.langchain4j.dev/integrations/language-models/google-ai-gemini/
  */
 @Slf4j
-public class GeminiLangChain4jModelProvider extends LangChain4jModelProvider {
+public class GeminiLangChain4jModelProvider extends AbstractUnifiedModelProvider {
+
+    @Autowired
+    private ApplicationContext applicationContext;
 
     private static final String DEFAULT_API_ENDPOINT = "https://generativelanguage.googleapis.com/";
-    private static final Map<String, Double> TOKEN_PRICES;
-
-
-
-
-    static {
-        Map<String, Double> prices = new HashMap<>();
-        prices.put("gemini-pro", 0.0001);
-        prices.put("gemini-pro-vision", 0.0001);
-        prices.put("gemini-1.5-pro", 0.0007);
-        prices.put("gemini-1.5-flash", 0.0001);
-        prices.put("gemini-2.0-flash", 0.0001);
-        TOKEN_PRICES = Collections.unmodifiableMap(prices);
-    }
 
     /**
      * 构造函数
@@ -77,7 +60,7 @@ public class GeminiLangChain4jModelProvider extends LangChain4jModelProvider {
             log.info("尝试为Gemini模型 {} 初始化 LangChain4j 客户端...", modelName);
             
             // 获取所有注册的监听器
-            List<dev.langchain4j.model.chat.listener.ChatModelListener> listeners = getListeners();
+            java.util.List<dev.langchain4j.model.chat.listener.ChatModelListener> listeners = getListeners();
 
             // 创建非流式模型
             // 注意：Gemini模型不支持baseUrl和timeout方法，但支持其他特有参数
@@ -119,25 +102,42 @@ public class GeminiLangChain4jModelProvider extends LangChain4jModelProvider {
 
     @Override
     public Mono<Double> estimateCost(AIRequest request) {
-        // 获取模型价格（每1000个令牌的美元价格）
-        double pricePerThousandTokens = TOKEN_PRICES.getOrDefault(modelName, 0.0001);
-
-        // 估算输入令牌数
+        // 使用PricingCalculator进行成本估算
         int inputTokens = estimateInputTokens(request);
-
-        // 估算输出令牌数
         int outputTokens = request.getMaxTokens() != null ? request.getMaxTokens() : 1000;
-
-        // 计算总令牌数
+        
+        // 尝试使用PricingCalculator计算精确成本
+        try {
+            var pricingCalculator = getPricingCalculator();
+            if (pricingCalculator != null) {
+                return pricingCalculator.calculateTotalCost(modelName, inputTokens, outputTokens)
+                        .map(cost -> cost.doubleValue() * 7.2); // 转换为人民币
+            }
+        } catch (Exception e) {
+            log.debug("使用PricingCalculator计算成本失败，使用默认估算: {}", e.getMessage());
+        }
+        
+        // 回退到默认估算
+        double defaultPrice = 0.0001;
         int totalTokens = inputTokens + outputTokens;
-
-        // 计算成本（美元）
-        double costInUSD = (totalTokens / 1000.0) * pricePerThousandTokens;
-
-        // 转换为人民币（假设汇率为7.2）
-        double costInCNY = costInUSD * 7.2;
-
-        return Mono.just(costInCNY);
+        double costInUSD = (totalTokens / 1000.0) * defaultPrice;
+        return Mono.just(costInUSD * 7.2);
+    }
+    
+    /**
+     * 获取PricingCalculator的辅助方法
+     */
+    private com.ainovel.server.service.ai.pricing.TokenPricingCalculator getPricingCalculator() {
+        try {
+            return applicationContext.getBeansOfType(
+                com.ainovel.server.service.ai.pricing.TokenPricingCalculator.class)
+                .values().stream()
+                .filter(calc -> "gemini".equals(calc.getProviderName()))
+                .findFirst()
+                .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Override
@@ -320,20 +320,8 @@ public class GeminiLangChain4jModelProvider extends LangChain4jModelProvider {
                 });
     }
 
-    /**
-     * Gemini需要API密钥才能获取模型列表
-     * 覆盖基类的listModelsWithApiKey方法
-     *
-     * @param apiKey API密钥
-     * @param apiEndpoint 可选的API端点
-     * @return 模型信息列表
-     */
     @Override
-    public Flux<ModelInfo> listModelsWithApiKey(String apiKey, String apiEndpoint) {
-        if (isApiKeyEmpty(apiKey)) {
-            return Flux.error(new RuntimeException("API密钥不能为空"));
-        }
-
+    protected Flux<ModelInfo> callApiForModels(String apiKey, String apiEndpoint) {
         log.info("获取Gemini模型列表");
 
         // 获取API端点
@@ -358,53 +346,14 @@ public class GeminiLangChain4jModelProvider extends LangChain4jModelProvider {
                         log.debug("Gemini模型列表响应: {}", response);
 
                         // 这里应该使用JSON解析库来解析响应
-                        // 简化起见，返回预定义的模型列表
-                        return Flux.fromIterable(getDefaultGeminiModels());
+                        // 简化起见，返回空让基类使用统一的默认列表
+                        return Flux.<ModelInfo>empty();
                     } catch (Exception e) {
                         log.error("解析Gemini模型列表时出错", e);
-                        return Flux.fromIterable(getDefaultGeminiModels());
+                        return Flux.<ModelInfo>empty();
                     }
                 })
-                .onErrorResume(e -> {
-                    log.error("获取Gemini模型列表时出错", e);
-                    // 出错时返回预定义的模型列表
-                    return Flux.fromIterable(getDefaultGeminiModels());
-                });
+                .onErrorResume(e -> Flux.<ModelInfo>empty());
     }
 
-    /**
-     * 获取默认的Gemini模型列表
-     *
-     * @return 模型信息列表
-     */
-    private List<ModelInfo> getDefaultGeminiModels() {
-        List<ModelInfo> models = new ArrayList<>();
-
-        models.add(ModelInfo.basic("gemini-pro", "Gemini Pro", "gemini")
-                .withDescription("Google的Gemini Pro模型 - 强大的文本生成和推理能力")
-                .withMaxTokens(32768)
-                .withUnifiedPrice(0.0001));
-
-        models.add(ModelInfo.basic("gemini-pro-vision", "Gemini Pro Vision", "gemini")
-                .withDescription("Google的Gemini Pro Vision模型 - 支持图像输入")
-                .withMaxTokens(32768)
-                .withUnifiedPrice(0.0001));
-
-        models.add(ModelInfo.basic("gemini-1.5-pro", "Gemini 1.5 Pro", "gemini")
-                .withDescription("Google的Gemini 1.5 Pro模型 - 新一代多模态模型")
-                .withMaxTokens(1000000)
-                .withUnifiedPrice(0.0007));
-
-        models.add(ModelInfo.basic("gemini-1.5-flash", "Gemini 1.5 Flash", "gemini")
-                .withDescription("Google的Gemini 1.5 Flash模型 - 更快速的版本")
-                .withMaxTokens(1000000)
-                .withUnifiedPrice(0.0001));
-
-        models.add(ModelInfo.basic("gemini-2.0-flash", "Gemini 2.0 Flash", "gemini")
-                .withDescription("Google的Gemini 2.0 Flash模型 - 最新版本")
-                .withMaxTokens(1000000)
-                .withUnifiedPrice(0.0001));
-
-        return models;
-    }
 }

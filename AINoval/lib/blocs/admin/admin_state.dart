@@ -38,6 +38,25 @@ class UsersLoaded extends AdminState {
   List<Object> get props => [users];
 }
 
+class UsersPageLoaded extends AdminState {
+  final List<AdminUser> users;
+  final int page;
+  final int size;
+  final int totalElements;
+  final int totalPages;
+
+  const UsersPageLoaded({
+    required this.users,
+    required this.page,
+    required this.size,
+    required this.totalElements,
+    required this.totalPages,
+  });
+
+  @override
+  List<Object> get props => [users, page, size, totalElements, totalPages];
+}
+
 class RolesLoaded extends AdminState {
   final List<AdminRole> roles;
 

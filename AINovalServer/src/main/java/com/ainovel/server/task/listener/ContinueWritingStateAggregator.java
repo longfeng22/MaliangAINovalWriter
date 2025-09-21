@@ -17,6 +17,7 @@ import com.ainovel.server.task.service.TaskStateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
@@ -40,6 +41,7 @@ public class ContinueWritingStateAggregator {
     
     private final TaskStateService taskStateService;
     private final NovelService novelService;
+    private final ApplicationEventPublisher eventPublisher;
     
     // 用于确保事件幂等性处理的缓存
     private final ConcurrentHashMap<String, Boolean> processedEventIds = new ConcurrentHashMap<>();
@@ -249,10 +251,29 @@ public class ContinueWritingStateAggregator {
         
         if (finalStatus == TaskStatus.FAILED) {
             String errorMsg = finalProgress.getLastError() != null ? finalProgress.getLastError() : "续写任务失败";
-            Throwable errorToSend = new RuntimeException(errorMsg);
-            return taskStateService.recordFailure(taskId, errorToSend, true);
+            java.util.Map<String, Object> errorInfo = new java.util.HashMap<>();
+            errorInfo.put("message", errorMsg);
+            // 先持久化，再发布事件（以保证状态接口可见）
+            return taskStateService.recordFailure(taskId, errorInfo, true)
+                .doOnSuccess(v -> {
+                    try {
+                        eventPublisher.publishEvent(new com.ainovel.server.task.event.internal.TaskFailedEvent(
+                            this, taskId, parentTask.getTaskType(), parentTask.getUserId(), errorInfo, true));
+                    } catch (Throwable ex) {
+                        log.warn("发布父任务失败事件出错: taskId={} error={}", taskId, ex.toString());
+                    }
+                });
         } else {
-            return taskStateService.recordCompletion(taskId, result);
+            // 完成：先持久化，再发布 Completed 事件
+            return taskStateService.recordCompletion(taskId, result)
+                .doOnSuccess(v -> {
+                    try {
+                        eventPublisher.publishEvent(new com.ainovel.server.task.event.internal.TaskCompletedEvent(
+                            this, taskId, parentTask.getTaskType(), parentTask.getUserId(), result));
+                    } catch (Throwable ex) {
+                        log.warn("发布父任务完成事件出错: taskId={} error={}", taskId, ex.toString());
+                    }
+                });
         }
     }
     

@@ -1,14 +1,11 @@
 package com.ainovel.server.service.ai.langchain4j;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -26,25 +23,12 @@ import reactor.core.publisher.Mono;
  * SiliconFlow的LangChain4j实现 使用OpenAI兼容模式
  */
 @Slf4j
-public class SiliconFlowLangChain4jModelProvider extends LangChain4jModelProvider {
+public class SiliconFlowLangChain4jModelProvider extends AbstractUnifiedModelProvider {
+
+    @Autowired
+    private ApplicationContext applicationContext;
 
     private static final String DEFAULT_API_ENDPOINT = "https://api.siliconflow.cn/v1";
-    private static final Map<String, Double> TOKEN_PRICES;
-
-
-
-    static {
-        Map<String, Double> prices = new HashMap<>();
-        prices.put("moonshot-v1-8k", 0.0015);
-        prices.put("moonshot-v1-32k", 0.003);
-        prices.put("moonshot-v1-128k", 0.006);
-        prices.put("deepseek-ai/DeepSeek-V3", 0.0015);
-        prices.put("Qwen/Qwen2.5-32B-Instruct", 0.0015);
-        prices.put("Qwen/Qwen1.5-110B-Chat", 0.003);
-        prices.put("google/gemma-2-9b-it", 0.0001);
-        prices.put("meta-llama/Meta-Llama-3.1-70B-Instruct", 0.0009);
-        TOKEN_PRICES = Collections.unmodifiableMap(prices);
-    }
 
     /**
      * 构造函数
@@ -56,7 +40,7 @@ public class SiliconFlowLangChain4jModelProvider extends LangChain4jModelProvide
      */
     public SiliconFlowLangChain4jModelProvider(String modelName, String apiKey, String apiEndpoint, 
                                              ChatModelListenerManager listenerManager) {
-        super("siliconflow", modelName, apiKey, apiEndpoint, listenerManager);
+        super("siliconflow", modelName, apiKey, apiEndpoint, null, listenerManager);
     }
 
     @Override
@@ -124,25 +108,36 @@ public class SiliconFlowLangChain4jModelProvider extends LangChain4jModelProvide
 
     @Override
     public Mono<Double> estimateCost(AIRequest request) {
-        // 获取模型价格（每1000个令牌的美元价格）
-        double pricePerThousandTokens = TOKEN_PRICES.getOrDefault(modelName, 0.0015);
-
-        // 估算输入令牌数
         int inputTokens = estimateInputTokens(request);
-
-        // 估算输出令牌数
         int outputTokens = request.getMaxTokens() != null ? request.getMaxTokens() : 1000;
-
-        // 计算总令牌数
+        
+        try {
+            var pricingCalculator = getPricingCalculator();
+            if (pricingCalculator != null) {
+                return pricingCalculator.calculateTotalCost(modelName, inputTokens, outputTokens)
+                        .map(cost -> cost.doubleValue() * 7.2);
+            }
+        } catch (Exception e) {
+            log.debug("使用PricingCalculator失败: {}", e.getMessage());
+        }
+        
+        double defaultPrice = 0.0015;
         int totalTokens = inputTokens + outputTokens;
-
-        // 计算成本（美元）
-        double costInUSD = (totalTokens / 1000.0) * pricePerThousandTokens;
-
-        // 转换为人民币（假设汇率为7.2）
-        double costInCNY = costInUSD * 7.2;
-
-        return Mono.just(costInCNY);
+        double costInUSD = (totalTokens / 1000.0) * defaultPrice;
+        return Mono.just(costInUSD * 7.2);
+    }
+    
+    private com.ainovel.server.service.ai.pricing.TokenPricingCalculator getPricingCalculator() {
+        try {
+            return applicationContext.getBeansOfType(
+                com.ainovel.server.service.ai.pricing.TokenPricingCalculator.class)
+                .values().stream()
+                .filter(calc -> "siliconflow".equals(calc.getProviderName()))
+                .findFirst()
+                .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Override
@@ -174,32 +169,17 @@ public class SiliconFlowLangChain4jModelProvider extends LangChain4jModelProvide
                 });
     }
 
-    /**
-     * SiliconFlow需要API密钥才能获取模型列表
-     * 覆盖基类的listModelsWithApiKey方法
-     *
-     * @param apiKey API密钥
-     * @param apiEndpoint 可选的API端点
-     * @return 模型信息列表
-     */
     @Override
-    public Flux<ModelInfo> listModelsWithApiKey(String apiKey, String apiEndpoint) {
-        if (isApiKeyEmpty(apiKey)) {
-            return Flux.error(new RuntimeException("API密钥不能为空"));
-        }
-
+    protected Flux<ModelInfo> callApiForModels(String apiKey, String apiEndpoint) {
         log.info("获取SiliconFlow模型列表");
 
-        // 获取API端点
         String baseUrl = apiEndpoint != null && !apiEndpoint.trim().isEmpty() ?
                 apiEndpoint : DEFAULT_API_ENDPOINT;
 
-        // 创建WebClient
         WebClient webClient = WebClient.builder()
                 .baseUrl(baseUrl)
                 .build();
 
-        // 调用SiliconFlow API获取模型列表
         return webClient.get()
                 .uri("/models")
                 .header("Authorization", "Bearer " + apiKey)
@@ -208,72 +188,15 @@ public class SiliconFlowLangChain4jModelProvider extends LangChain4jModelProvide
                 .bodyToMono(String.class)
                 .flatMapMany(response -> {
                     try {
-                        // 解析响应
                         log.debug("SiliconFlow模型列表响应: {}", response);
-
-                        // 这里应该使用JSON解析库来解析响应
-                        // 简化起见，返回预定义的模型列表
-                        return Flux.fromIterable(getDefaultSiliconFlowModels());
+                        // 简化起见，返回空让基类使用统一的默认列表
+                        return Flux.<ModelInfo>empty();
                     } catch (Exception e) {
                         log.error("解析SiliconFlow模型列表时出错", e);
-                        return Flux.fromIterable(getDefaultSiliconFlowModels());
+                        return Flux.<ModelInfo>empty();
                     }
                 })
-                .onErrorResume(e -> {
-                    log.error("获取SiliconFlow模型列表时出错", e);
-                    // 出错时返回预定义的模型列表
-                    return Flux.fromIterable(getDefaultSiliconFlowModels());
-                });
+                .onErrorResume(e -> Flux.<ModelInfo>empty());
     }
 
-    /**
-     * 获取默认的SiliconFlow模型列表
-     *
-     * @return 模型信息列表
-     */
-    private List<ModelInfo> getDefaultSiliconFlowModels() {
-        List<ModelInfo> models = new ArrayList<>();
-
-        models.add(ModelInfo.basic("moonshot-v1-8k", "Moonshot V1 8K", "siliconflow")
-                .withDescription("硬流的Moonshot V1 8K模型 - 上下文窗口8K")
-                .withMaxTokens(8192)
-                .withUnifiedPrice(0.0015));
-
-        models.add(ModelInfo.basic("moonshot-v1-32k", "Moonshot V1 32K", "siliconflow")
-                .withDescription("硬流的Moonshot V1 32K模型 - 上下文窗口32K")
-                .withMaxTokens(32768)
-                .withUnifiedPrice(0.003));
-
-        models.add(ModelInfo.basic("moonshot-v1-128k", "Moonshot V1 128K", "siliconflow")
-                .withDescription("硬流的Moonshot V1 128K模型 - 上下文窗口128K")
-                .withMaxTokens(131072)
-                .withUnifiedPrice(0.006));
-
-        models.add(ModelInfo.basic("deepseek-ai/DeepSeek-V3", "DeepSeek V3", "siliconflow")
-                .withDescription("DeepSeek的V3模型")
-                .withMaxTokens(32768)
-                .withUnifiedPrice(0.0015));
-
-        models.add(ModelInfo.basic("Qwen/Qwen2.5-32B-Instruct", "Qwen 2.5 32B", "siliconflow")
-                .withDescription("通义千问2.5 32B模型")
-                .withMaxTokens(32768)
-                .withUnifiedPrice(0.0015));
-
-        models.add(ModelInfo.basic("Qwen/Qwen1.5-110B-Chat", "Qwen 1.5 110B", "siliconflow")
-                .withDescription("通义千问1.5 110B模型")
-                .withMaxTokens(32768)
-                .withUnifiedPrice(0.003));
-
-        models.add(ModelInfo.basic("google/gemma-2-9b-it", "Gemma 2 9B", "siliconflow")
-                .withDescription("Google的Gemma 2 9B模型")
-                .withMaxTokens(8192)
-                .withUnifiedPrice(0.0001));
-
-        models.add(ModelInfo.basic("meta-llama/Meta-Llama-3.1-70B-Instruct", "Llama 3.1 70B", "siliconflow")
-                .withDescription("Meta的Llama 3.1 70B模型")
-                .withMaxTokens(8192)
-                .withUnifiedPrice(0.0009));
-
-        return models;
-    }
 }

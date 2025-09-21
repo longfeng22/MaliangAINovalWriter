@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:ainoval/models/setting_generation_session.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ainoval/blocs/auth/auth_bloc.dart';
 import '../../blocs/setting_generation/setting_generation_bloc.dart';
@@ -21,12 +20,8 @@ import 'widgets/golden_three_chapters_dialog.dart';
 import '../../config/app_config.dart';
 import 'package:ainoval/widgets/common/top_toast.dart';
 import 'package:ainoval/blocs/ai_config/ai_config_bloc.dart';
-import 'package:ainoval/widgets/common/user_avatar_menu.dart';
-import 'package:ainoval/screens/subscription/subscription_screen.dart';
 import 'package:ainoval/models/compose_preview.dart';
-import 'package:ainoval/screens/settings/settings_panel.dart';
-import 'package:ainoval/screens/editor/managers/editor_state_manager.dart';
-import 'package:ainoval/models/editor_settings.dart';
+import 'package:ainoval/utils/web_theme.dart';
 
 /// 小说设定生成器主屏幕
 class NovelSettingsGeneratorScreen extends StatefulWidget {
@@ -106,13 +101,12 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
   String? _lastModelConfigId;
   // 新增：主区域视图切换（设定/结果预览）
   String _mainSection = 'settings'; // settings | results
-  // 新增：结果预览（按章：大纲/内容）占位数据与生成状态
-  bool _isGeneratingOutline = false; // 用于整体loading
-  bool _isGeneratingChapters = false; // 用于整体loading
-  List<ChapterPreviewData> _previewChapters = [];
-  // 监听后端写作就绪信号，控制头部“开始写作”按钮
+  // 监听后端写作就绪信号，控制头部"开始写作"按钮
   ComposeReadyInfo? _composeReady;
   var _composeReadySub;
+  // 🔧 新增：监听黄金三章生成状态
+  bool _composeGenerating = false;
+  var _composeGeneratingSub;
   
   @override
   void initState() {
@@ -130,21 +124,20 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
       _lastModelConfigId = defaultConfig?.id ?? '';
     }
     
-    // 仅在已登录时加载策略，避免游客模式下401
+    // 无论是否登录都尝试加载策略：未登录加载“公开策略”，已登录加载“可用策略”
     try {
+      final currentState = context.read<SettingGenerationBloc>().state;
+      if (currentState is SettingGenerationInitial || currentState is SettingGenerationError) {
+        AppLogger.i('NovelSettingsGeneratorScreen', '需要加载策略，当前状态: ${currentState.runtimeType}');
+        context.read<SettingGenerationBloc>().add(LoadStrategiesEvent(
+          novelId: widget.novelId,
+        ));
+      }
+
+      // 仅在已登录时加载用户历史记录
       final authed = context.read<AuthBloc>().state is AuthAuthenticated;
       if (authed) {
-        final currentState = context.read<SettingGenerationBloc>().state;
-        if (currentState is SettingGenerationInitial || currentState is SettingGenerationError) {
-          AppLogger.i('NovelSettingsGeneratorScreen', '需要加载策略，当前状态: ${currentState.runtimeType}');
-          context.read<SettingGenerationBloc>().add(LoadStrategiesEvent(
-            novelId: widget.novelId,
-          ));
-        } else {
-          AppLogger.i('NovelSettingsGeneratorScreen', '策略已加载，跳过加载，当前状态: ${currentState.runtimeType}');
-          // 登录后进入且策略已存在时，补充拉取用户历史记录
-          context.read<SettingGenerationBloc>().add(const GetUserHistoriesEvent());
-        }
+        context.read<SettingGenerationBloc>().add(const GetUserHistoriesEvent());
       }
     } catch (_) {}
     
@@ -167,6 +160,15 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
         }
         setState(() => _composeReady = info);
       });
+      
+      // 🔧 新增：订阅生成状态流
+      _composeGeneratingSub = bloc.composeGeneratingStream.listen((generating) {
+        if (!mounted) {
+          _composeGenerating = generating;
+          return;
+        }
+        setState(() => _composeGenerating = generating);
+      });
     } catch (_) {}
   }
 
@@ -174,6 +176,8 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
   void dispose() {
     try {
       _composeReadySub?.cancel();
+      // 🔧 新增：取消生成状态订阅
+      _composeGeneratingSub?.cancel();
     } catch (_) {}
     super.dispose();
   }
@@ -342,9 +346,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
       context: context,
       isScrollControlled: true,
       backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
-      ),
+      shape: const RoundedRectangleBorder(),
       builder: (ctx) {
         return Padding(
           padding: EdgeInsets.only(
@@ -394,7 +396,8 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
                   controller: promptCtrl,
                   maxLines: 3,
                   decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.all(12),
                     hintText: '例如：写一个硬核悬疑与家庭剧交织的故事骨架',
                   ),
                 ),
@@ -455,25 +458,9 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
                       onPressed: () {
                         // 关闭面板
                         Navigator.of(ctx).pop();
-                        // 切换到结果预览并显示占位/Mock
+                        // 切换到结果预览
                         setState(() {
                           _mainSection = 'results';
-                          // 按章创建：每章包含大纲与内容两部分（Mock）
-                          final genCount = genType == 'chapters' ? chapterCount : 3;
-                          _isGeneratingOutline = true;
-                          _isGeneratingChapters = false;
-                          _previewChapters = [];
-                          Future.delayed(const Duration(milliseconds: 1200), () {
-                            if (!mounted) return;
-                            setState(() {
-                              _isGeneratingOutline = false;
-                              _previewChapters = List.generate(genCount, (i) => ChapterPreviewData(
-                                    title: '第${i + 1}章 · 占位标题',
-                                    outline: '第${i + 1}章的大纲占位内容：关键冲突、目标与反转...',
-                                    content: '第${i + 1}章的正文占位内容\n\n这里是正文示例片段……',
-                                  ));
-                            });
-                          });
                         });
                       },
                       child: const Text('开始生成'),
@@ -490,110 +477,121 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: _buildAppBar(context),
-      body: BlocConsumer<SettingGenerationBloc, SettingGenerationState>(
-        listener: (context, state) {
-          if (state is SettingGenerationError) {
-            // 🔧 修复：只在错误不可恢复或者是致命错误时显示全局消息
-            // 普通生成错误让中间栏处理，不显示全局错误
-            if (!state.isRecoverable && state.message.contains('网络') || state.message.contains('连接')) {
-              TopToast.error(context, state.message);
-            }
-          } else if (state is SettingGenerationNodeUpdating) {
-            // 保持原态，不在build中做任何重建操作；如需提示，由具体事件驱动
-          } else if (state is SettingGenerationCompleted && (state.message.contains('保存') || state.message.contains('修改完成'))) {
-            TopToast.success(context, state.message);
-            // 对话框已在按钮点击时 pop，这里不再 pop 页面本身
-          }
-        },
-        // 🔧 新增：添加buildWhen条件，避免在节点修改时重建整个界面
-        buildWhen: (previous, current) {
-          // 🔧 关键修复：节点修改状态变化时不重建主界面，避免历史面板重置
-          if (previous is SettingGenerationCompleted && current is SettingGenerationNodeUpdating) {
-            AppLogger.i('NovelSettingsGeneratorScreen', '🚫 阻止节点修改时的界面重建');
-            return false;
-          }
-          
-          if (previous is SettingGenerationNodeUpdating && current is SettingGenerationCompleted) {
-            AppLogger.i('NovelSettingsGeneratorScreen', '🚫 阻止节点修改完成时的界面重建');
-            return false;
-          }
-          
-          // 🔧 只在关键状态变化时才重建界面
-          final previousType = previous.runtimeType;
-          final currentType = current.runtimeType;
-          
-          // 允许重建的状态变化
-          final allowedStateChanges = [
-            // 初始状态 -> 其他状态
-            'SettingGenerationInitial',
-            // 加载状态 -> 其他状态  
-            'SettingGenerationLoading',
-            // 就绪状态 -> 其他状态
-            'SettingGenerationReady',
-            // 生成中 -> 完成
-            'SettingGenerationInProgress',
-            // 错误状态 -> 其他状态
-            'SettingGenerationError',
-            // 保存状态 -> 其他状态
-            'SettingGenerationSaved',
-          ];
-          
-          bool shouldRebuild = allowedStateChanges.contains(previousType.toString()) || 
-                              allowedStateChanges.contains(currentType.toString());
-          
-          AppLogger.i('NovelSettingsGeneratorScreen', 
-              '🔄 状态变化检查: $previousType -> $currentType, 是否重建: $shouldRebuild');
-          
-          return shouldRebuild;
-        },
-        builder: (context, state) {
-          if (state is SettingGenerationInitial) {
-            return _buildLoadingView(state);
-          } else if (state is SettingGenerationLoading) {
-            // 🔧 简化：保存快照操作不影响主界面状态，只更新历史记录
-            if (state.message != null && state.message!.contains('保存')) {
-              // 保存操作 - 保持主内容显示，不显示加载覆盖
-              return _buildMainContent(context, state);
-            } else {
-              // 其他加载状态（如初始化、生成等） - 显示全屏加载
-              return _buildLoadingView(state);
-            }
-          } else {
-            return _buildMainContent(context, state);
-          }
-        },
-      ),
+    // 使用ValueListenableBuilder监听主题变化
+    return ValueListenableBuilder<String>(
+      valueListenable: WebTheme.variantListenable,
+      builder: (context, variant, _) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            scaffoldBackgroundColor: WebTheme.getBackgroundColor(context),
+            cardColor: WebTheme.getSurfaceColor(context),
+          ),
+          child: Scaffold(
+            backgroundColor: WebTheme.getBackgroundColor(context),
+            appBar: _buildAppBar(context),
+            body: BlocConsumer<SettingGenerationBloc, SettingGenerationState>(
+              listener: (context, state) {
+                if (state is SettingGenerationError) {
+                  // 🔧 修复：只在错误不可恢复或者是致命错误时显示全局消息
+                  // 普通生成错误让中间栏处理，不显示全局错误
+                  if (!state.isRecoverable && state.message.contains('网络') || state.message.contains('连接')) {
+                    TopToast.error(context, state.message);
+                  }
+                } else if (state is SettingGenerationNodeUpdating) {
+                  // 保持原态，不在build中做任何重建操作；如需提示，由具体事件驱动
+                } else if (state is SettingGenerationCompleted && (state.message.contains('保存') || state.message.contains('修改完成'))) {
+                  TopToast.success(context, state.message);
+                  // 对话框已在按钮点击时 pop，这里不再 pop 页面本身
+                }
+              },
+              // 🔧 新增：添加buildWhen条件，避免在节点修改时重建整个界面
+              buildWhen: (previous, current) {
+                // 🔧 关键修复：节点修改状态变化时不重建主界面，避免历史面板重置
+                if (previous is SettingGenerationCompleted && current is SettingGenerationNodeUpdating) {
+                  AppLogger.i('NovelSettingsGeneratorScreen', '🚫 阻止节点修改时的界面重建');
+                  return false;
+                }
+                
+                if (previous is SettingGenerationNodeUpdating && current is SettingGenerationCompleted) {
+                  AppLogger.i('NovelSettingsGeneratorScreen', '🚫 阻止节点修改完成时的界面重建');
+                  return false;
+                }
+                
+                // 🔧 只在关键状态变化时才重建界面
+                final previousType = previous.runtimeType;
+                final currentType = current.runtimeType;
+                
+                // 允许重建的状态变化
+                final allowedStateChanges = [
+                  // 初始状态 -> 其他状态
+                  'SettingGenerationInitial',
+                  // 加载状态 -> 其他状态  
+                  'SettingGenerationLoading',
+                  // 就绪状态 -> 其他状态
+                  'SettingGenerationReady',
+                  // 生成中 -> 完成
+                  'SettingGenerationInProgress',
+                  // 错误状态 -> 其他状态
+                  'SettingGenerationError',
+                  // 保存状态 -> 其他状态
+                  'SettingGenerationSaved',
+                ];
+                
+                bool shouldRebuild = allowedStateChanges.contains(previousType.toString()) || 
+                                    allowedStateChanges.contains(currentType.toString());
+                
+                AppLogger.i('NovelSettingsGeneratorScreen', 
+                    '🔄 状态变化检查: $previousType -> $currentType, 是否重建: $shouldRebuild');
+                
+                return shouldRebuild;
+              },
+              builder: (context, state) {
+                if (state is SettingGenerationInitial) {
+                  return _buildLoadingView(state);
+                } else if (state is SettingGenerationLoading) {
+                  // 🔧 简化：保存快照操作不影响主界面状态，只更新历史记录
+                  if (state.message != null && state.message!.contains('保存')) {
+                    // 保存操作 - 保持主内容显示，不显示加载覆盖
+                    return _buildMainContent(context, state);
+                  } else {
+                    // 其他加载状态（如初始化、生成等） - 显示全屏加载
+                    return _buildLoadingView(state);
+                  }
+                } else {
+                  return _buildMainContent(context, state);
+                }
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool compactActions = MediaQuery.of(context).size.width < 1100;
     
     return AppBar(
       elevation: 0,
-      backgroundColor: isDark 
-          ? const Color(0xFF0A0A0A).withOpacity(0.5) 
-          : const Color(0xFFFAFAFA),
-      foregroundColor: isDark 
-          ? const Color(0xFFF9FAFB) 
-          : const Color(0xFF111827),
+      backgroundColor: WebTheme.getBackgroundColor(context),
+      foregroundColor: WebTheme.getTextColor(context),
       title: Row(
         children: [
           Icon(
             Icons.psychology,
-            color: const Color(0xFF6366F1), // indigo-500
+            color: WebTheme.getPrimaryColor(context),
             size: 28,
           ),
           const SizedBox(width: 12),
-          Text(
-            '小说设定生成器',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: isDark ? const Color(0xFFF9FAFB) : const Color(0xFF111827),
+          Expanded(
+            child: Text(
+              '小说设定生成器',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: WebTheme.getTextColor(context),
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -602,9 +600,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
         preferredSize: const Size.fromHeight(1),
         child: Container(
           height: 1,
-          color: isDark 
-              ? const Color(0xFF1F2937) 
-              : const Color(0xFFE5E7EB),
+          color: WebTheme.getBorderColor(context),
         ),
       ),
       actions: [
@@ -679,6 +675,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
                         }
                       : null,
                   enabled: canSave,
+                  compact: compactActions,
                 ),
                 // const SizedBox(width: 8),
                 // _buildHeaderButton(
@@ -749,11 +746,17 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
               snippets: const [],
               initialSelectedUnifiedModel: widget.selectedModel,
               settingSessionId: sid,
-              onStarted: () => setState(() => _mainSection = 'results'),
+              onStarted: () => setState(() {
+                _mainSection = 'results';
+                // 🔧 关键：显式标记“黄金三章生成中”，并清空就绪标志
+                _composeGenerating = true;
+                _composeReady = null;
+              }),
             );
           },
           enabled: true,
           variant: 'primary',
+          compact: compactActions,
         ),
         const SizedBox(width: 8),
         // 根据会话状态决定是否允许开始写作
@@ -762,29 +765,53 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
           label: '开始写作',
           onPressed: () async {
             try {
+              // 🔧 修改逻辑：支持黄金三章标志为空或者为true时开始创作
+              final streamInfo = _composeReady; // 从stream获取的信息
+              ComposeReadyInfo? stateInfo; // 从BLoC状态获取的信息
+              
+              // 尝试从BLoC状态获取composeReady信息
+              final s = context.read<SettingGenerationBloc>().state;
+              if (s is SettingGenerationInProgress) {
+                stateInfo = s.composeReady;
+              } else if (s is SettingGenerationCompleted) {
+                stateInfo = s.composeReady;
+              } else if (s is SettingGenerationReady) {
+                stateInfo = s.composeReady;
+              }
+              
+              // 优先使用stream信息，其次使用状态信息
+              final info = streamInfo ?? stateInfo;
+              
+              // 🔧 新逻辑：区分黄金三章生成和历史记录情况
+              if (_composeGenerating) {
+                // 正在生成黄金三章：必须等待后端ready信号
+                if (info == null || !info.ready) {
+                  TopToast.error(context, '黄金三章尚未就绪，请等待生成完成…');
+                  return;
+                }
+              } else {
+                // 不在生成状态（历史记录等）：只在明确标记为not ready时才阻止
+                if (info != null && !info.ready) {
+                  TopToast.error(context, '黄金三章尚未就绪：${info.reason}');
+                  return;
+                }
+              }
+              
+              // info为null（历史记录等情况）或ready为true时都可以继续
               // 尝试从 BLoC 拿当前活跃 sessionId
               String? sessionId;
-              final s = context.read<SettingGenerationBloc>().state;
-              // 本地前置校验：仅当会话完成或已保存时允许开始写作
-              bool canStart = false;
               if (s is SettingGenerationInProgress) {
                 sessionId = s.activeSessionId;
-                final st = s.activeSession.status;
-                canStart = st == SessionStatus.completed || st == SessionStatus.saved;
               } else if (s is SettingGenerationCompleted) {
                 sessionId = s.activeSessionId;
-                canStart = true;
-              }
-              if (!canStart) {
-                TopToast.error(context, '会话未完成，请等待生成完成后再开始写作');
-                return;
               }
               final repo = context.read<SettingGenerationRepository>();
               // 统一 novelId 选择策略：composeReady → activeSession（历史会话不回退到props）
               String? novelIdToUse;
               try {
-                if (_composeReady != null && _composeReady!.novelId.isNotEmpty) {
-                  novelIdToUse = _composeReady!.novelId;
+                // 🔧 修复：安全地访问info.novelId
+                if (info != null && info.novelId.isNotEmpty) {
+                  novelIdToUse = info.novelId;
                 }
                 if ((novelIdToUse == null || novelIdToUse.isEmpty)) {
                   if (s is SettingGenerationInProgress) {
@@ -804,19 +831,6 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
                 historyId: null,
               );
               if (nid == null || nid.isEmpty) {
-                // 判断会话状态，明确提示
-                if (sessionId != null && sessionId.isNotEmpty) {
-                  try {
-                    final status = await context.read<SettingGenerationRepository>()
-                        .getSessionStatus(sessionId: sessionId);
-                    final st = status['data'] ?? status; // 兼容两种返回
-                    final s = st is Map<String, dynamic> ? (st['status'] as String? ?? '') : '';
-                    if (s.isNotEmpty && s != 'COMPLETED' && s != 'SAVED') {
-                      TopToast.error(context, '会话未完成，请等待生成完成后再开始写作');
-                      return;
-                    }
-                  } catch (_) {}
-                }
                 TopToast.error(context, '开始写作失败：未返回小说ID');
                 return;
               }
@@ -845,22 +859,44 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
               TopToast.error(context, '开始写作异常：$e');
             }
           },
-          // 动态控制是否可用
+          // 🔧 修改动态控制逻辑：考虑黄金三章生成状态
           enabled: () {
-            // 兼容两种状态：
-            // 1) 后端已保存并绑定（composeReady=true）
-            final info = _composeReady;
-            if (info != null && info.ready) return true;
-            // 2) 仅设定生成完成（会话 COMPLETED/SAVED）
-            final s = context.watch<SettingGenerationBloc>().state;
-            if (s is SettingGenerationInProgress) {
-              final st = s.activeSession.status;
-              return st == SessionStatus.completed || st == SessionStatus.saved;
+            final streamInfo = _composeReady; // 从stream获取的信息
+            ComposeReadyInfo? stateInfo; // 从BLoC状态获取的信息
+            
+            // 尝试从BLoC状态获取composeReady信息
+            final state = context.watch<SettingGenerationBloc>().state;
+            if (state is SettingGenerationInProgress) {
+              stateInfo = state.composeReady;
+            } else if (state is SettingGenerationCompleted) {
+              stateInfo = state.composeReady;
+            } else if (state is SettingGenerationReady) {
+              stateInfo = state.composeReady;
             }
-            if (s is SettingGenerationCompleted) return true;
-            return false;
+            
+            // 优先使用stream信息，其次使用状态信息
+            final info = streamInfo ?? stateInfo;
+            
+            // 🔧 关键逻辑：区分黄金三章生成和历史记录情况
+            if (_composeGenerating) {
+              // 正在生成黄金三章：必须等待后端ready信号
+              return false;
+            } else {
+              // 不在生成状态（历史记录等）：info为null或ready为true时都可用
+              if (info != null && !info.ready) {
+                return false; // 明确标记为not ready时禁用
+              }
+              
+              // 确保有活跃会话
+              String? sid;
+              if (state is SettingGenerationInProgress) sid = state.activeSessionId;
+              else if (state is SettingGenerationCompleted) sid = state.activeSessionId;
+              
+              return sid != null && sid.isNotEmpty;
+            }
           }(),
           variant: 'primary',
+          compact: compactActions,
         ),
         const SizedBox(width: 16),
       ],
@@ -873,29 +909,27 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
     required VoidCallback? onPressed,
     required bool enabled,
     String variant = 'outline',
+    bool compact = false,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     
     if (variant == 'primary') {
       return ElevatedButton.icon(
         onPressed: enabled ? onPressed : null,
         icon: Icon(icon, size: 16),
-        label: Text(
+        label: compact ? const SizedBox.shrink() : Text(
           label,
           style: const TextStyle(fontSize: 14),
         ),
         style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 8),
           backgroundColor: enabled 
-              ? const Color(0xFF6366F1) 
-              : (isDark ? const Color(0xFF374151) : const Color(0xFFE5E7EB)),
+              ? WebTheme.getPrimaryColor(context)
+              : WebTheme.getSecondaryTextColor(context),
           foregroundColor: enabled 
               ? Colors.white 
-              : (isDark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF)),
+              : WebTheme.getSecondaryTextColor(context),
           elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(6),
-          ),
+          shape: const RoundedRectangleBorder(),
         ),
       );
     }
@@ -903,24 +937,22 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
     return OutlinedButton.icon(
       onPressed: enabled ? onPressed : null,
       icon: Icon(icon, size: 16),
-      label: Text(
+      label: compact ? const SizedBox.shrink() : Text(
         label,
         style: const TextStyle(fontSize: 14),
       ),
       style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 8),
         foregroundColor: enabled 
-            ? (isDark ? const Color(0xFFF9FAFB) : const Color(0xFF111827))
-            : (isDark ? const Color(0xFF6B7280) : const Color(0xFF9CA3AF)),
+            ? WebTheme.getTextColor(context)
+            : WebTheme.getSecondaryTextColor(context),
         side: BorderSide(
           color: enabled 
-              ? (isDark ? const Color(0xFF1F2937) : const Color(0xFFE5E7EB))
-              : (isDark ? const Color(0xFF374151) : const Color(0xFFE5E7EB)),
+              ? WebTheme.getBorderColor(context)
+              : WebTheme.getSecondaryBorderColor(context),
           width: 1,
         ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(6),
-        ),
+        shape: const RoundedRectangleBorder(),
       ),
     );
   }
@@ -946,178 +978,228 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
 
 
   Widget _buildMainContent(BuildContext context, SettingGenerationState state) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     
     return Container(
-      color: isDark ? Colors.black : Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // 使用类似CSS Grid的col-span-3, col-span-5, col-span-4布局
-            final totalWidth = constraints.maxWidth - 32; // 减去gap
-            final leftWidth = (totalWidth * 3 / 12); // col-span-3
-            final centerWidth = (totalWidth * 5 / 12); // col-span-5  
-            final rightWidth = (totalWidth * 4 / 12); // col-span-4
-            
-            return Row(
+      color: WebTheme.getBackgroundColor(context),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 响应式布局：桌面/平板/手机
+          final screenWidth = constraints.maxWidth;
+          
+          // 移动端布局 (< 768px)
+          if (screenWidth < 768) {
+            return _buildMobileLayout(context, state);
+          }
+          
+          // 平板端布局 (768px - 1024px)
+          if (screenWidth < 1024) {
+            return _buildTabletLayout(context, state);
+          }
+          
+          // 桌面端布局 (>= 1024px)
+          return _buildDesktopLayout(context, state, screenWidth);
+        },
+      ),
+    );
+  }
+  
+  Widget _buildDesktopLayout(BuildContext context, SettingGenerationState state, double screenWidth) {
+    // 新的布局比例：左侧历史记录1.5个单位，创作控制台2个单位，中间6个单位，右侧2.5个单位（总12个单位）
+    final totalWidth = screenWidth;
+    final historyWidth = (totalWidth * 1.5 / 12); // 历史记录面板
+    final controlWidth = (totalWidth * 2 / 12); // 创作控制台面板  
+    final centerWidth = (totalWidth * 6 / 12); // 中间内容区域
+    final rightWidth = (totalWidth * 2.5 / 12); // 右侧面板
+    
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch, // 让所有面板高度一致
+      children: [
+        // 最左侧 - 历史记录面板
+        Container(
+          width: historyWidth,
+          color: WebTheme.getSurfaceColor(context),
+          child: const HistoryPanelWidget(),
+        ),
+        // 左侧 - 创作控制台面板
+        Container(
+          width: controlWidth,
+          decoration: BoxDecoration(
+            color: WebTheme.getSurfaceColor(context),
+            border: Border(
+              left: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
+            ),
+          ),
+          child: GenerationControlPanel(
+            initialPrompt: widget.initialPrompt,
+            selectedModel: widget.selectedModel,
+            initialStrategy: widget.selectedStrategy,
+            onGenerationStart: (prompt, strategy, modelConfigId) {
+              setState(() {
+                _lastInitialPrompt = prompt;
+                _lastStrategy = strategy;
+                _lastModelConfigId = modelConfigId;
+              });
+            },
+          ),
+        ),
+        // 中间主内容区 - 无缝连接
+        Container(
+          width: centerWidth,
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
+              right: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildMainHeader(),
+              // 超时/状态提示条
+              if (_mainSection == 'settings') _buildStatusBanner(),
+              Expanded(
+                child: Container(
+                  color: WebTheme.getBackgroundColor(context),
+                  child: IndexedStack(
+                    index: _mainSection == 'settings' ? 0 : 1,
+                    children: [
+                      SettingsTreeWidget(
+                        lastInitialPrompt: _lastInitialPrompt,
+                        lastStrategy: _lastStrategy,
+                        lastModelConfigId: _lastModelConfigId,
+                        novelId: widget.novelId,
+                        userId: AppConfig.userId,
+                      ),
+                      _ComposeResultsBridge(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // 右侧编辑面板 - 无缝连接，隐藏微调区域
+        Container(
+          width: rightWidth,
+          color: WebTheme.getSurfaceColor(context),
+          child: _mainSection == 'settings'
+              ? EditorPanelWidget(novelId: widget.novelId)
+              : Container(), // 隐藏黄金三章右侧微调区域
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildTabletLayout(BuildContext context, SettingGenerationState state) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 历史记录面板 - 平板布局
+        Expanded(
+          flex: 1, // 10%
+          child: Container(
+            color: WebTheme.getSurfaceColor(context),
+            child: const HistoryPanelWidget(),
+          ),
+        ),
+        // 创作控制台面板 - 平板布局
+        Expanded(
+          flex: 2, // 20%
+          child: Container(
+            decoration: BoxDecoration(
+              color: WebTheme.getSurfaceColor(context),
+              border: Border(
+                left: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
+              ),
+            ),
+            child: GenerationControlPanel(
+              initialPrompt: widget.initialPrompt,
+              selectedModel: widget.selectedModel,
+              initialStrategy: widget.selectedStrategy,
+              onGenerationStart: (prompt, strategy, modelConfigId) {
+                setState(() {
+                  _lastInitialPrompt = prompt;
+                  _lastStrategy = strategy;
+                  _lastModelConfigId = modelConfigId;
+                });
+              },
+            ),
+          ),
+        ),
+        // 中间内容区 - 平板占主要空间
+        Expanded(
+          flex: 6, // 60%
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
+                right: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
+              ),
+            ),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 左侧面板 (col-span-3)
-                SizedBox(
-                  width: leftWidth,
-                  child: Column(
+                _buildMainHeader(),
+                if (_mainSection == 'settings') _buildStatusBanner(),
+                Expanded(
+                  child: IndexedStack(
+                    index: _mainSection == 'settings' ? 0 : 1,
                     children: [
-                      // 控制面板 - 🔧 修复：添加高度约束防止溢出
-                      Flexible(
-                        flex: 0, // 不争夺剩余空间，只使用必要空间
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxHeight: MediaQuery.of(context).size.height * 0.6, // 最大占用60%屏幕高度
-                          ),
-                          child: GenerationControlPanel(
-                            initialPrompt: widget.initialPrompt,
-                            selectedModel: widget.selectedModel,
-                            initialStrategy: widget.selectedStrategy,
-                            onGenerationStart: (prompt, strategy, modelConfigId) {
-                              setState(() {
-                                _lastInitialPrompt = prompt;
-                                _lastStrategy = strategy;
-                                _lastModelConfigId = modelConfigId;
-                              });
-                            },
-                          ),
-                        ),
+                      SettingsTreeWidget(
+                        lastInitialPrompt: _lastInitialPrompt,
+                        lastStrategy: _lastStrategy,
+                        lastModelConfigId: _lastModelConfigId,
+                        novelId: widget.novelId,
+                        userId: AppConfig.userId,
                       ),
-                      const SizedBox(height: 16),
-                      // 历史面板 - 🔧 修复：确保获得剩余空间
-                      const Expanded(
-                        flex: 1,
-                        child: HistoryPanelWidget(),
-                      ),
-                      const SizedBox(height: 12),
-                      // 底部头像菜单，与小说列表保持一致
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: UserAvatarMenu(
-                          size: 16,
-                          showName: false,
-                          onMySubscription: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (_) => const SubscriptionScreen()),
-                            );
-                          },
-                          onOpenSettings: () {
-                            final userId = AppConfig.userId;
-                            if (userId == null || userId.isEmpty) return;
-                            showDialog(
-                              context: context,
-                              barrierDismissible: true,
-                              builder: (dialogContext) => Dialog(
-                                insetPadding: const EdgeInsets.all(16),
-                                backgroundColor: Colors.transparent,
-                                child: SettingsPanel(
-                                  stateManager: EditorStateManager(),
-                                  userId: userId,
-                                  onClose: () => Navigator.of(dialogContext).pop(),
-                                  editorSettings: const EditorSettings(),
-                                  onEditorSettingsChanged: (_) {},
-                                  initialCategoryIndex: SettingsPanel.accountManagementCategoryIndex,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
+                      _ComposeResultsBridge(),
                     ],
                   ),
-                ),
-                const SizedBox(width: 16),
-                // 中间主内容区 (col-span-5)
-                SizedBox(
-                  width: centerWidth,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildMainHeader(),
-                      const SizedBox(height: 8),
-                      // 超时/状态提示条：显示在“设定总览”下方、设定树上方
-                      if (_mainSection == 'settings') _buildStatusBanner(),
-                      Expanded(
-                        child: IndexedStack(
-                          index: _mainSection == 'settings' ? 0 : 1,
-                          children: [
-                            SettingsTreeWidget(
-                              lastInitialPrompt: _lastInitialPrompt,
-                              lastStrategy: _lastStrategy,
-                              lastModelConfigId: _lastModelConfigId,
-                              novelId: widget.novelId,
-                              userId: AppConfig.userId,
-                            ),
-                            _ComposeResultsBridge(),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 16),
-                // 右侧编辑面板 (col-span-4)
-                SizedBox(
-                  width: rightWidth,
-                  child: _mainSection == 'settings'
-                      ? EditorPanelWidget(novelId: widget.novelId)
-                      : _ResultsTuningPanel(
-                          isGeneratingOutline: _isGeneratingOutline || _isGeneratingChapters,
-                          isGeneratingChapters: _isGeneratingOutline || _isGeneratingChapters,
-                          onRefine: (text) {
-                            if (_previewChapters.isEmpty) return;
-                            setState(() {
-                              final first = _previewChapters.first;
-                              _previewChapters[0] = first.copyWith(outline: first.outline + '（已微调）');
-                            });
-                          },
-                          onRegenerate: () {
-                            setState(() {
-                              _isGeneratingOutline = true;
-                              _previewChapters = [];
-                            });
-                            Future.delayed(const Duration(milliseconds: 900), () {
-                              if (!mounted) return;
-                              setState(() {
-                                _isGeneratingOutline = false;
-                                _previewChapters = List.generate(3, (i) => ChapterPreviewData(
-                                      title: '新·第${i + 1}章',
-                                      outline: '新·第${i + 1}章大纲占位内容',
-                                      content: '新·第${i + 1}章正文占位内容...',
-                                    ));
-                              });
-                            });
-                          },
-                          onAppendChapters: (n) {
-                            setState(() {
-                              final start = _previewChapters.length;
-                              _previewChapters.addAll(List.generate(n, (i) => ChapterPreviewData(
-                                    title: '追加·第${start + i + 1}章',
-                                    outline: '追加章大纲占位',
-                                    content: '追加章正文占位...',
-                                  )));
-                            });
-                          },
-                        ),
                 ),
               ],
-            );
-          },
+            ),
+          ),
         ),
-      ),
+        // 右侧面板 - 平板布局保持紧凑
+        Expanded(
+          flex: 1, // 10%
+          child: Container(
+            color: WebTheme.getSurfaceColor(context),
+            child: _mainSection == 'settings'
+                ? EditorPanelWidget(novelId: widget.novelId)
+                : Container(), // 隐藏微调区域
+          ),
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildMobileLayout(BuildContext context, SettingGenerationState state) {
+    // 移动端使用垂直布局
+    return Column(
+      children: [
+        _buildMainHeader(),
+        Expanded(
+          child: IndexedStack(
+            index: _mainSection == 'settings' ? 0 : 1,
+            children: [
+              SettingsTreeWidget(
+                lastInitialPrompt: _lastInitialPrompt,
+                lastStrategy: _lastStrategy,
+                lastModelConfigId: _lastModelConfigId,
+                novelId: widget.novelId,
+                userId: AppConfig.userId,
+              ),
+              _ComposeResultsBridge(),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
   // 统一的顶部状态提示条（用于请求超时等非致命状态）
   Widget _buildStatusBanner() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return BlocBuilder<SettingGenerationBloc, SettingGenerationState>(
       buildWhen: (prev, curr) {
         String? op(Object s) {
@@ -1137,14 +1219,11 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
           return const SizedBox(height: 0);
         }
         return Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1F2937) : const Color(0xFFEEF2FF),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isDark ? const Color(0xFF374151) : const Color(0xFFDBEAFE),
-              width: 1,
+            color: WebTheme.getSurfaceColor(context),
+            border: Border(
+              bottom: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
             ),
           ),
           child: Row(
@@ -1152,7 +1231,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
               Icon(
                 Icons.info_outline,
                 size: 16,
-                color: isDark ? const Color(0xFF93C5FD) : const Color(0xFF2563EB),
+                color: WebTheme.getPrimaryColor(context),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -1160,7 +1239,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
                   operation,
                   style: TextStyle(
                     fontSize: 12,
-                    color: isDark ? const Color(0xFF93C5FD) : const Color(0xFF1E3A8A),
+                    color: WebTheme.getTextColor(context),
                   ),
                 ),
               ),
@@ -1172,44 +1251,32 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
   }
 
   Widget _buildMainHeader() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: isDark 
-            ? const Color(0xFF1F2937).withOpacity(0.5) 
-            : const Color(0xFFF9FAFB).withOpacity(0.5),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isDark 
-              ? const Color(0xFF1F2937) 
-              : const Color(0xFFE5E7EB),
-          width: 1,
+        color: WebTheme.getSurfaceColor(context),
+        border: Border(
+          bottom: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
         ),
       ),
       child: Row(
         children: [
+          // 标题
           Text(
             '设定总览',
             style: TextStyle(
-              fontSize: 16,
+              fontSize: 18,
               fontWeight: FontWeight.w600,
-              color: isDark 
-                  ? const Color(0xFFE5E7EB) 
-                  : const Color(0xFF1F2937),
+              color: WebTheme.getTextColor(context),
             ),
           ),
-          const Spacer(),
-          // 新增：设定/结果预览 切换
+          const SizedBox(width: 24),
+          // 控件靠左显示 - 不使用Expanded和Flexible
           Container(
-            margin: const EdgeInsets.only(right: 8),
-            padding: const EdgeInsets.all(4),
+            padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: isDark 
-                  ? const Color(0xFF111827) 
-                  : const Color(0xFFE5E7EB),
-              borderRadius: BorderRadius.circular(8),
+              color: WebTheme.getBackgroundColor(context),
+              border: Border.all(color: WebTheme.getBorderColor(context)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -1219,15 +1286,16 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
               ],
             ),
           ),
+          const SizedBox(width: 12),
           _buildViewModeToggle(),
+          // 用Spacer占据剩余空间，让控件保持靠左
+          const Spacer(),
         ],
       ),
     );
   }
 
   Widget _buildViewModeToggle() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    
     return BlocBuilder<SettingGenerationBloc, SettingGenerationState>(
       builder: (context, state) {
         String currentMode = 'compact';
@@ -1240,12 +1308,10 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
         }
 
         return Container(
-          padding: const EdgeInsets.all(4),
+          padding: const EdgeInsets.all(3),
           decoration: BoxDecoration(
-            color: isDark 
-                ? const Color(0xFF1F2937).withOpacity(0.8) 
-                : const Color(0xFFE5E7EB).withOpacity(0.8),
-            borderRadius: BorderRadius.circular(8),
+            color: WebTheme.getBackgroundColor(context),
+            border: Border.all(color: WebTheme.getBorderColor(context)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1275,8 +1341,6 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
     required String label,
     required bool isSelected,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    
     return Tooltip(
       message: label,
       child: InkWell(
@@ -1285,22 +1349,20 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
             ToggleViewModeEvent(mode),
           );
         },
-        borderRadius: BorderRadius.circular(4),
         child: Container(
-          height: 28,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: isSelected 
-                ? (isDark ? const Color(0xFF374151) : const Color(0xFFD1D5DB))
+                ? WebTheme.getSurfaceColor(context)
                 : Colors.transparent,
-            borderRadius: BorderRadius.circular(4),
           ),
           child: Icon(
             icon,
             size: 16,
             color: isSelected 
-                ? (isDark ? const Color(0xFFF9FAFB) : const Color(0xFF111827))
-                : (isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                ? WebTheme.getTextColor(context)
+                : WebTheme.getSecondaryTextColor(context),
           ),
         ),
       ),
@@ -1309,31 +1371,29 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
 
   // ========== 新增：主区域切换按钮 ==========
   Widget _buildMainSectionButton(String label, String value, bool isSelected) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
       onTap: () {
         setState(() {
           _mainSection = value;
         });
       },
-      borderRadius: BorderRadius.circular(4),
       child: Container(
-        height: 28,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: isSelected 
-              ? (isDark ? const Color(0xFF374151) : const Color(0xFFD1D5DB))
+              ? WebTheme.getSurfaceColor(context)
               : Colors.transparent,
-          borderRadius: BorderRadius.circular(4),
         ),
         alignment: Alignment.center,
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 12,
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
             color: isSelected 
-                ? (isDark ? const Color(0xFFF9FAFB) : const Color(0xFF111827))
-                : (isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
+                ? WebTheme.getTextColor(context)
+                : WebTheme.getSecondaryTextColor(context),
           ),
         ),
       ),
@@ -1361,7 +1421,6 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.blue.withOpacity(0.3)),
               ),
               child: const Text(
@@ -1444,7 +1503,6 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
               width: double.maxFinite,
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.grey.withOpacity(0.3)),
-                borderRadius: BorderRadius.circular(8),
               ),
               child: const Center(
                 child: Column(
@@ -1527,7 +1585,6 @@ class _ResultsTuningPanelState extends State<_ResultsTuningPanel> {
       elevation: 0,
       color: Theme.of(context).cardColor.withOpacity(0.5),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: Theme.of(context).dividerColor, width: 1),
       ),
       child: Padding(
@@ -1572,7 +1629,6 @@ class _ResultsTuningPanelState extends State<_ResultsTuningPanel> {
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: isDark ? const Color(0xFF111827) : const Color(0xFFF3F4F6),
-                borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Theme.of(context).dividerColor),
               ),
               child: Row(

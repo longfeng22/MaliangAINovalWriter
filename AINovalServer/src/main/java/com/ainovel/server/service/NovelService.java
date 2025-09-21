@@ -373,6 +373,20 @@ public interface NovelService {
     Mono<Chapter> addChapterFine(String novelId, String actId, String title, String description);
 
     /**
+     * 原子化添加章节和场景 - 在一个事务中同时创建章节和场景，避免数据不一致
+     *
+     * @param novelId 小说ID
+     * @param actId 卷ID
+     * @param chapterTitle 章节标题
+     * @param sceneTitle 场景标题
+     * @param sceneSummary 场景摘要
+     * @param sceneContent 场景内容
+     * @return 包含新创建章节和场景信息的Map
+     */
+    Mono<Map<String, Object>> addChapterWithScene(String novelId, String actId, 
+            String chapterTitle, String sceneTitle, String sceneSummary, String sceneContent);
+
+    /**
      * 细粒度删除卷 - 只提供ID，不传整个结构
      *
      * @param novelId    小说ID

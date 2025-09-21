@@ -733,12 +733,21 @@ public class NovelSettingHistoryServiceImpl implements NovelSettingHistoryServic
                     // 查找该设定条目的最新历史记录，作为beforeContent
                     return itemHistoryRepository.findTopBySettingItemIdOrderByVersionDesc(item.getId())
                             .map(NovelSettingItemHistory::getAfterContent)
-                            .defaultIfEmpty(null) // 如果没有历史记录，beforeContent为null
                             .flatMap(beforeContent -> recordNodeChange(
                                     item.getId(),
                                     history.getHistoryId(),
                                     "UPDATE",
                                     beforeContent,
+                                    item,
+                                    "更新设定历史记录",
+                                    history.getUserId()
+                            ))
+                            // 如果没有历史记录（上游为空），以 beforeContent=null 记录一次变更
+                            .switchIfEmpty(recordNodeChange(
+                                    item.getId(),
+                                    history.getHistoryId(),
+                                    "UPDATE",
+                                    null,
                                     item,
                                     "更新设定历史记录",
                                     history.getUserId()

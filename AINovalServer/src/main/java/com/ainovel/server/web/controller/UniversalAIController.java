@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -52,8 +53,16 @@ public class UniversalAIController {
     @Trace(operationName = "ai.universal.request")
     @PostMapping("/request")
     public Mono<ResponseEntity<UniversalAIResponseDto>> sendRequest(
-            @Valid @RequestBody UniversalAIRequestDto request) {
+            @Valid @RequestBody UniversalAIRequestDto request,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
         
+        // 注入当前用户ID（若请求未显式携带）
+        try {
+            if ((request.getUserId() == null || request.getUserId().isBlank()) && currentUser != null && currentUser.getId() != null) {
+                request.setUserId(currentUser.getId());
+            }
+        } catch (Exception ignore) {}
+
         logger.info("收到通用AI请求 - 类型: {}, 用户ID: {}, 模型配置: {}, 小说ID: {}", 
                    request.getRequestType(), request.getUserId(), 
                    request.getModelConfigId(), request.getNovelId());
@@ -74,8 +83,15 @@ public class UniversalAIController {
     @Trace(operationName = "ai.universal.estimate-cost")
     @PostMapping("/estimate-cost")
     public Mono<ResponseEntity<CostEstimationService.CostEstimationResponse>> estimateCost(
-            @Valid @RequestBody UniversalAIRequestDto request) {
+            @Valid @RequestBody UniversalAIRequestDto request,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
         
+        try {
+            if ((request.getUserId() == null || request.getUserId().isBlank()) && currentUser != null && currentUser.getId() != null) {
+                request.setUserId(currentUser.getId());
+            }
+        } catch (Exception ignore) {}
+
         logger.info("收到快速积分预估请求 - 类型: {}, 用户ID: {}", 
                    request.getRequestType(), request.getUserId());
 
@@ -103,8 +119,15 @@ public class UniversalAIController {
     @Trace(operationName = "ai.universal.stream")
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> streamRequest(
-            @Valid @RequestBody UniversalAIRequestDto request) {
+            @Valid @RequestBody UniversalAIRequestDto request,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
         
+        try {
+            if ((request.getUserId() == null || request.getUserId().isBlank()) && currentUser != null && currentUser.getId() != null) {
+                request.setUserId(currentUser.getId());
+            }
+        } catch (Exception ignore) {}
+
         logger.info("收到流式通用AI请求 - 类型: {}, 用户ID: {}, 模型配置: {}, 小说ID: {}", 
                    request.getRequestType(), request.getUserId(), 
                    request.getModelConfigId(), request.getNovelId());
@@ -184,8 +207,15 @@ public class UniversalAIController {
     @Trace(operationName = "ai.universal.preview")
     @PostMapping("/preview")
     public Mono<ResponseEntity<UniversalAIPreviewResponseDto>> previewRequest(
-            @Valid @RequestBody UniversalAIRequestDto request) {
+            @Valid @RequestBody UniversalAIRequestDto request,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
         
+        try {
+            if ((request.getUserId() == null || request.getUserId().isBlank()) && currentUser != null && currentUser.getId() != null) {
+                request.setUserId(currentUser.getId());
+            }
+        } catch (Exception ignore) {}
+
         logger.info("收到AI预览请求 - 类型: {}, 用户ID: {}", 
                    request.getRequestType(), request.getUserId());
 

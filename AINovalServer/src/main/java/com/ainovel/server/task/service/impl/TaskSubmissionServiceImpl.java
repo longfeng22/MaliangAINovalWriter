@@ -3,15 +3,14 @@ package com.ainovel.server.task.service.impl;
 import com.ainovel.server.repository.BackgroundTaskRepository;
 import com.ainovel.server.task.model.BackgroundTask;
 import com.ainovel.server.task.model.TaskStatus;
-import com.ainovel.server.task.event.internal.TaskApplicationEvent;
 import com.ainovel.server.task.event.internal.TaskSubmittedEvent;
 import com.ainovel.server.task.producer.TaskMessageProducer;
 import com.ainovel.server.task.service.TaskStateService;
 import com.ainovel.server.task.service.TaskSubmissionService;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,7 +21,6 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -204,5 +202,22 @@ public class TaskSubmissionServiceImpl implements TaskSubmissionService {
                 return Mono.just(false);
             }
         });
+    }
+    
+    @Override
+    public Flux<BackgroundTask> getUserTasks(String userId, TaskStatus status, int page, int size) {
+        if (userId == null || userId.trim().isEmpty()) {
+            return Flux.error(new IllegalArgumentException("用户ID不能为空"));
+        }
+        
+        log.debug("获取用户任务列表: userId={}, status={}, page={}, size={}", userId, status, page, size);
+        
+        return taskStateService.getUserTasks(userId, status, page, size)
+                .doOnNext(task -> log.debug("找到任务: taskId={}, type={}, status={}", 
+                        task.getId(), task.getTaskType(), task.getStatus()))
+                .onErrorResume(e -> {
+                    log.error("获取用户任务列表失败: userId={}, error={}", userId, e.getMessage(), e);
+                    return Flux.error(new RuntimeException("获取任务列表失败: " + e.getMessage(), e));
+                });
     }
 } 

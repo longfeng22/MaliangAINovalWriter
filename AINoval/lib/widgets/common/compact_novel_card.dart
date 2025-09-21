@@ -287,170 +287,170 @@ class _CompactNovelCardState extends State<CompactNovelCard> with TickerProvider
                     ),
                     ),
                   ),
-                  // Content Area - 更紧凑的布局
+                  // Content Area - 修复溢出问题的紧凑布局
                   Expanded(
                     flex: 2,
                     child: Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Title
-                        Text(
-                          widget.novel.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: _isHovered 
-                              ? WebTheme.getPrimaryColor(context)
-                              : WebTheme.getTextColor(context),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        // Description
-                        Expanded(
-                          child: Text(
-                            widget.novel.description.isNotEmpty 
-                              ? widget.novel.description 
-                              : '暂无描述',
-                            maxLines: 2,
+                      padding: const EdgeInsets.fromLTRB(8, 4, 8, 6), // 减少顶部和底部边距
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Title
+                          Text(
+                            widget.novel.title,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              fontSize: 11,
-                              color: WebTheme.getSecondaryTextColor(context),
-                              height: 1.2,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: _isHovered 
+                                ? WebTheme.getPrimaryColor(context)
+                                : WebTheme.getTextColor(context),
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        // Category and Rating
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: WebTheme.getBorderColor(context),
-                                  width: 1,
-                                ),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                widget.novel.seriesName.isNotEmpty 
-                                  ? widget.novel.seriesName 
-                                  : '独立作品',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                  color: WebTheme.getTextColor(context, isPrimary: false),
-                                ),
+                          const SizedBox(height: 2),
+                          // Description - 灵活高度分配
+                          Flexible(
+                            child: Text(
+                              widget.novel.description.isNotEmpty 
+                                ? widget.novel.description 
+                                : '暂无描述',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: WebTheme.getSecondaryTextColor(context),
+                                height: 1.2,
                               ),
                             ),
-                            if (widget.novel.completionPercentage > 0) ...[
-                              const SizedBox(width: 6),
+                          ),
+                          const SizedBox(height: 3), // 减少间距
+                          // Category and Rating
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1), // 减少垂直内边距
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: WebTheme.getBorderColor(context),
+                                    width: 1,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  widget.novel.seriesName.isNotEmpty 
+                                    ? widget.novel.seriesName 
+                                    : '独立作品',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w500,
+                                    color: WebTheme.getTextColor(context, isPrimary: false),
+                                  ),
+                                ),
+                              ),
+                              if (widget.novel.completionPercentage > 0) ...[
+                                const SizedBox(width: 4), // 减少间距
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.percent,
+                                      size: 11, // 稍微减小图标
+                                      color: Theme.of(context).colorScheme.secondary,
+                                    ),
+                                    const SizedBox(width: 1),
+                                    Text(
+                                      '${widget.novel.completionPercentage.toStringAsFixed(0)}%',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w500,
+                                        color: WebTheme.getSecondaryTextColor(context),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 3), // 减少间距
+                          // Stats - 单行显示
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
                               Row(
                                 children: [
                                   Icon(
-                                    Icons.percent,
-                                    size: 12,
-                                    color: Theme.of(context).colorScheme.secondary,
+                                    Icons.menu_book,
+                                    size: 9,
+                                    color: WebTheme.getSecondaryTextColor(context),
                                   ),
-                                  const SizedBox(width: 2),
+                                  const SizedBox(width: 1),
                                   Text(
-                                    '${widget.novel.completionPercentage.toStringAsFixed(0)}%',
+                                    '${(widget.novel.wordCount / 1000).toStringAsFixed(0)}k字',
                                     style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w500,
+                                      fontSize: 9,
+                                      color: WebTheme.getSecondaryTextColor(context),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Icon(
+                                    Icons.schedule,
+                                    size: 9,
+                                    color: WebTheme.getSecondaryTextColor(context),
+                                  ),
+                                  const SizedBox(width: 1),
+                                  Text(
+                                    '${widget.novel.readTime}分钟',
+                                    style: TextStyle(
+                                      fontSize: 9,
                                       color: WebTheme.getSecondaryTextColor(context),
                                     ),
                                   ),
                                 ],
                               ),
+                              Text(
+                                _formatLastEditTime(),
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  color: WebTheme.getSecondaryTextColor(context),
+                                ),
+                              ),
                             ],
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        // Stats - 单行显示
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.menu_book,
-                                  size: 9,
-                                  color: WebTheme.getSecondaryTextColor(context),
+                          ),
+                          const SizedBox(height: 4), // 减少间距
+                          // Continue Writing Button - 确保不会溢出
+                          SizedBox(
+                            width: double.infinity,
+                            height: 22, // 稍微减小按钮高度
+                            child: OutlinedButton(
+                              onPressed: widget.onContinueWriting,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _isHovered
+                                  ? WebTheme.white
+                                  : WebTheme.getTextColor(context),
+                                backgroundColor: _isHovered
+                                  ? WebTheme.getPrimaryColor(context)
+                                  : Colors.transparent,
+                                side: BorderSide(
+                                  color: WebTheme.getBorderColor(context),
+                                  width: 1,
                                 ),
-                                const SizedBox(width: 1),
-                                Text(
-                                  '${(widget.novel.wordCount / 1000).toStringAsFixed(0)}k字',
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    color: WebTheme.getSecondaryTextColor(context),
-                                  ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(6),
                                 ),
-                                const SizedBox(width: 6),
-                                Icon(
-                                  Icons.schedule,
-                                  size: 9,
-                                  color: WebTheme.getSecondaryTextColor(context),
-                                ),
-                                const SizedBox(width: 1),
-                                Text(
-                                  '${widget.novel.readTime}分钟',
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    color: WebTheme.getSecondaryTextColor(context),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Text(
-                              _formatLastEditTime(),
-                              style: TextStyle(
-                                fontSize: 9,
-                                color: WebTheme.getSecondaryTextColor(context),
+                                padding: const EdgeInsets.symmetric(horizontal: 8), // 减少水平内边距
+                                minimumSize: Size.zero, // 允许按钮收缩到最小尺寸
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        // Continue Writing Button
-                        SizedBox(
-                          width: double.infinity,
-                          height: 24,
-                          child: OutlinedButton(
-                            onPressed: widget.onContinueWriting,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: _isHovered
-                                ? WebTheme.white
-                                : WebTheme.getTextColor(context),
-                              backgroundColor: _isHovered
-                                ? WebTheme.getPrimaryColor(context)
-                                : Colors.transparent,
-                              side: BorderSide(
-                                color: WebTheme.getBorderColor(context),
-                                width: 1,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              padding: const EdgeInsets.symmetric(horizontal: 12),
-                            ),
-                            child: const Text(
-                              '继续创作',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
+                              child: const Text(
+                                '继续创作',
+                                style: TextStyle(
+                                  fontSize: 11, // 稍微减小字体
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -462,25 +462,4 @@ class _CompactNovelCardState extends State<CompactNovelCard> with TickerProvider
     );
   }
 
-  Widget _buildPlaceholder(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            WebTheme.getPrimaryColor(context).withOpacity(0.1),
-            WebTheme.getSecondaryColor(context).withOpacity(0.05),
-          ],
-        ),
-      ),
-      child: Center(
-        child: Icon(
-          Icons.menu_book,
-          size: 32,
-          color: WebTheme.getSecondaryTextColor(context).withOpacity(0.5),
-        ),
-      ),
-    );
-  }
 }

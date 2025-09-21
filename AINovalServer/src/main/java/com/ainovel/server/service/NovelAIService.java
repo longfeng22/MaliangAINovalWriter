@@ -252,6 +252,12 @@ public interface NovelAIService {
      */
     Mono<String> generateNextSingleSummary(String userId, String novelId, String currentContext, String aiConfigIdSummary, String writingStyle);
 
+    // Overload: 支持指定摘要生成的提示词模板ID
+    Mono<String> generateNextSingleSummaryWithTemplate(String userId, String novelId, String currentContext, String aiConfigIdSummary, String writingStyle, String summaryPromptTemplateId);
+
+    // 新增：摘要流式生成（用于统一后扣费；上层可收集为字符串）
+    Flux<String> generateNextSingleSummaryStream(String userId, String novelId, String currentContext, String aiConfigIdSummary, String writingStyle, String summaryPromptTemplateId, String publicModelConfigId);
+
     /**
      * 根据配置ID获取AI模型提供商
      * @param userId 用户ID

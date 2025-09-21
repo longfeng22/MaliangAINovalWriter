@@ -7,6 +7,11 @@ import 'package:ainoval/widgets/common/model_display_selector.dart';
 import 'package:ainoval/models/unified_ai_model.dart';
 
 import 'package:ainoval/models/strategy_template_info.dart';
+import 'package:ainoval/blocs/public_models/public_models_bloc.dart';
+import 'package:ainoval/blocs/ai_config/ai_config_bloc.dart';
+import 'package:ainoval/screens/settings/settings_panel.dart';
+import 'package:ainoval/screens/editor/managers/editor_state_manager.dart';
+import 'package:ainoval/models/editor_settings.dart';
 import 'package:ainoval/blocs/setting_generation/setting_generation_bloc.dart';
 import 'package:ainoval/blocs/setting_generation/setting_generation_event.dart';
 import 'package:ainoval/blocs/setting_generation/setting_generation_state.dart';
@@ -147,11 +152,116 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
   //   });
   // }
 
-  void _handleGenerateSettings() {
+  Future<void> _handleGenerateSettings() async {
     if (_controller.text.trim().isEmpty || widget.selectedModel == null) return;
-    
+
+    // 检查登录状态
+    final String? userId = AppConfig.userId;
+    if (userId == null || userId.isEmpty) {
+      // 未登录，提示用户登录
+      _showLoginRequiredDialog();
+      return;
+    }
+
+    final ok = await _precheckToolModelAndMaybePrompt();
+    if (!ok) return;
+
     // 打开设定生成器对话框，并传递选择的策略
     _showSettingGeneratorDialog(context);
+  }
+
+  /// 轻量前置检查：当没有可用公共模型或缺少 jsonify/jsonIf 标签，且用户也未设置“工具调用默认”时，提示去设置。
+  /// 返回 true 表示继续生成，false 表示用户选择了取消或去设置。
+  Future<bool> _precheckToolModelAndMaybePrompt() async {
+    // 用户已设置工具默认且已验证 → 直接通过
+    final aiState = context.read<AiConfigBloc>().state;
+    final hasToolDefault = aiState.configs.any((c) => c.isToolDefault && c.isValidated);
+    if (hasToolDefault) return true;
+
+    // 公共模型检查（仅在已加载时判断，避免阻塞）
+    final publicBloc = context.read<PublicModelsBloc>();
+    final publicState = publicBloc.state;
+    bool needPrompt = false;
+    if (publicState is PublicModelsLoaded) {
+      final models = publicState.models;
+      final tagsNeedles = {'jsonify', 'jsonif', 'json-if', 'json_if'};
+      final hasJsonifyTag = models.any((m) => (m.tags ?? const <String>[]) 
+          .map((t) => t.toLowerCase())
+          .any((t) => tagsNeedles.contains(t)));
+      final noPublic = models.isEmpty;
+      needPrompt = noPublic || !hasJsonifyTag;
+    } else {
+      // 轻量：若未加载，不做拦截
+      needPrompt = false;
+    }
+
+    if (!needPrompt) return true;
+
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('请配置工具调用模型'),
+        content: const Text('未检测到可用的公共工具模型或缺少 jsonify 标签。建议先在“模型服务管理”中设置一个工具调用默认模型（成本低、速度快），例如：Gemini 2.0 Flash。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop(false);
+              final userId = AppConfig.userId ?? '';
+              await showDialog(
+                context: context,
+                barrierDismissible: true,
+                builder: (dialogContext) => Dialog(
+                  insetPadding: const EdgeInsets.all(16),
+                  backgroundColor: Colors.transparent,
+                  child: SettingsPanel(
+                    stateManager: EditorStateManager(),
+                    userId: userId,
+                    onClose: () => Navigator.of(dialogContext).pop(),
+                    editorSettings: const EditorSettings(),
+                    onEditorSettingsChanged: (_) {},
+                    initialCategoryIndex: 0, // 聚焦“模型服务”
+                  ),
+                ),
+              );
+            },
+            child: const Text('去设置'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('继续生成'),
+          ),
+        ],
+      ),
+    );
+    return proceed ?? false;
+  }
+
+  void _showLoginRequiredDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('需要登录'),
+        content: const Text('使用"我的设定"功能需要先登录账号'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              // TODO: 触发登录流程，这里可以根据应用的登录方式来实现
+              // 例如：可以导航到登录页面或者显示登录对话框
+            },
+            child: const Text('立即登录'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSettingGeneratorDialog(BuildContext context) {
@@ -401,7 +511,7 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
                                            _isGenerating || 
                                            _isPolishing
                                     ? null
-                                    : _handleGenerateSettings,
+                                    : () async { await _handleGenerateSettings(); },
                                   icon: const Icon(Icons.psychology, size: 18),
                                   label: const Text('生成设定'),
                                   style: OutlinedButton.styleFrom(

@@ -10,6 +10,12 @@ import '../../../models/setting_generation_session.dart';
 import '../../../widgets/common/model_display_selector.dart';
 import '../../../blocs/ai_config/ai_config_bloc.dart';
 import 'strategy_selector_dropdown.dart';
+import 'package:ainoval/blocs/public_models/public_models_bloc.dart';
+import 'package:ainoval/config/app_config.dart';
+import 'package:ainoval/screens/settings/settings_panel.dart';
+import 'package:ainoval/screens/editor/managers/editor_state_manager.dart';
+import 'package:ainoval/models/editor_settings.dart';
+import 'package:ainoval/utils/web_theme.dart';
 
 /// 生成控制面板
 class GenerationControlPanel extends StatefulWidget {
@@ -32,21 +38,17 @@ class GenerationControlPanel extends StatefulWidget {
 
 class _GenerationControlPanelState extends State<GenerationControlPanel> {
   late TextEditingController _promptController;
-  late TextEditingController _adjustmentController;
   UnifiedAIModel? _selectedModel;
   StrategyTemplateInfo? _selectedStrategy;
-  // 防抖计时器，降低输入频率带来的状态分发与重建
-  Timer? _adjustmentDebounce;
-  // 🔧 新增：跟踪当前活动的会话ID，用于检测会话切换
+  // 🔧 跟踪当前活动的会话ID，用于检测会话切换
   String? _currentActiveSessionId;
-  // 🔧 新增：跟踪用户是否手动修改了原始创意，避免覆盖用户输入
+  // 🔧 跟踪用户是否手动修改了原始创意，避免覆盖用户输入
   bool _userHasModifiedPrompt = false;
 
   @override
   void initState() {
     super.initState();
     _promptController = TextEditingController(text: widget.initialPrompt ?? '');
-    _adjustmentController = TextEditingController();
     // 注意：_selectedStrategy 将在策略加载完成后根据 widget.initialStrategy 设置
 
     // 获取用户默认模型配置
@@ -58,7 +60,7 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
     _selectedModel = widget.selectedModel ??
         (defaultConfig != null ? PrivateAIModel(defaultConfig) : null);
 
-    // 🔧 新增：在初始化时同步当前活动会话的原始创意
+    // 🔧 在初始化时同步当前活动会话的原始创意
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         final currentState = context.read<SettingGenerationBloc>().state;
@@ -70,8 +72,6 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
   @override
   void dispose() {
     _promptController.dispose();
-    _adjustmentController.dispose();
-    _adjustmentDebounce?.cancel();
     super.dispose();
   }
 
@@ -142,71 +142,66 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     
     return BlocListener<SettingGenerationBloc, SettingGenerationState>(
       listener: (context, state) {
-        // 🔧 新增：监听活动会话变化，自动填充原始创意
+        // 🔧 监听活动会话变化，自动填充原始创意
         _handleActiveSessionChange(state);
       },
-      child: Card(
-        elevation: 0,
-        color: isDark 
-            ? const Color(0xFF1F2937).withOpacity(0.5) 
-            : const Color(0xFFF9FAFB).withOpacity(0.5),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(
-            color: isDark 
-                ? const Color(0xFF1F2937) 
-                : const Color(0xFFE5E7EB),
-            width: 1,
-          ),
-        ),
+      child: Container(
+        color: WebTheme.getSurfaceColor(context),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                '创作控制台',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
+              // 标题
+              Container(
+                padding: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: WebTheme.getBorderColor(context), width: 1),
+                  ),
+                ),
+                child: Text(
+                  '创作控制台',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: WebTheme.getTextColor(context),
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
-              // 🔧 修复：自适应高度，紧凑布局
-              Flexible(
+              // 内容区域 - 自适应高度
+              Expanded(
                 child: SingleChildScrollView(
                   physics: const BouncingScrollPhysics(),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 提示词输入区域
-                      BlocBuilder<SettingGenerationBloc, SettingGenerationState>(
-                        builder: (context, state) {
-                          return _buildPromptInput(state);
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      
-                      // 策略选择器
-                      _buildStrategySelector(),
-                      const SizedBox(height: 16),
-                      
-                      // 模型选择器
-                      _buildModelSelector(),
-                      const SizedBox(height: 24), // 适度间距
-                      
-                      // 操作按钮
-                      BlocBuilder<SettingGenerationBloc, SettingGenerationState>(
-                        builder: (context, state) {
-                          return _buildActionButtons(state);
-                        },
-                      ),
-                      const SizedBox(height: 16), // 底部留白
+                        // 提示词输入区域 - 扩大空间
+                        BlocBuilder<SettingGenerationBloc, SettingGenerationState>(
+                          builder: (context, state) {
+                            return _buildPromptInput(state);
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // 策略选择器
+                        _buildStrategySelector(),
+                        const SizedBox(height: 16),
+                        
+                        // 模型选择器
+                        _buildModelSelector(),
+                        const SizedBox(height: 20),
+                        
+                        // 操作按钮
+                        BlocBuilder<SettingGenerationBloc, SettingGenerationState>(
+                          builder: (context, state) {
+                            return _buildActionButtons(state);
+                          },
+                        ),
                     ],
                   ),
                 ),
@@ -218,117 +213,54 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
     );
   }
 
-  Widget _buildPromptInput(SettingGenerationState state) {
-    final hasGeneratedSettings = state is SettingGenerationInProgress ||
-        state is SettingGenerationCompleted;
+  
 
-    if (!hasGeneratedSettings) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '你的核心想法',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w500,
-              color: Theme.of(context).textTheme.bodySmall?.color,
-            ),
+  Widget _buildPromptInput(SettingGenerationState state) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '原始创意',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            color: WebTheme.getTextColor(context),
           ),
-          const SizedBox(height: 8),
-          TextField(
+        ),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: WebTheme.getBorderColor(context)),
+          ),
+          child: TextField(
             controller: _promptController,
             decoration: InputDecoration(
-              hintText: '例如：一个发生在赛博朋克都市的侦探故事',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
+              hintText: '例如：一个发生在赛博朋克都市的侦探故事\n\n详细描述你的创作想法：\n• 故事背景和世界观设定\n• 主要角色的性格和关系\n• 核心冲突和情节走向\n• 想要表达的主题思想\n• 期望的风格和氛围...',
+              hintStyle: TextStyle(
+                color: WebTheme.getSecondaryTextColor(context),
+                fontSize: 14,
+                height: 1.4,
               ),
-              filled: true,
-              fillColor: Theme.of(context).colorScheme.surface,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.all(16),
             ),
-            // 🔧 修复：设置合理的行数范围，避免布局问题
-            maxLines: 5,
-            minLines: 2,
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.5,
+              color: WebTheme.getTextColor(context),
+            ),
+            // 🎯 进一步扩大输入空间 - 支持更大的创作描述
+            maxLines: 12,
+            minLines: 6,
             textInputAction: TextInputAction.newline,
             onChanged: (value) {
-              // 🔧 新增：标记用户已手动修改原始创意
+              // 标记用户已手动修改原始创意
               _userHasModifiedPrompt = true;
             },
           ),
-        ],
-      );
-    } else {
-      // 🔧 修复：生成完成后显示两个输入框 - 原始提示词和调整提示词
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 原始提示词（只读显示，可以编辑用于新建生成）
-          Text(
-            '原始创意',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w500,
-              color: Theme.of(context).textTheme.bodySmall?.color,
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _promptController,
-            decoration: InputDecoration(
-              hintText: '例如：一个发生在赛博朋克都市的侦探故事',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              filled: true,
-              fillColor: Theme.of(context).colorScheme.surface,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            ),
-            // 🎯 自适应行数：根据内容长度调整，最多3行
-            maxLines: 3,
-            minLines: 1,
-            textInputAction: TextInputAction.newline,
-            onChanged: (value) {
-              // 🔧 新增：标记用户已手动修改原始创意
-              _userHasModifiedPrompt = true;
-            },
-          ),
-          const SizedBox(height: 16),
-          // 调整提示词
-          Text(
-            '调整设定',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w500,
-              color: Theme.of(context).textTheme.bodySmall?.color,
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _adjustmentController,
-            decoration: InputDecoration(
-              hintText: '例如：将背景改为蒸汽朋克风格',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              filled: true,
-              fillColor: Theme.of(context).colorScheme.surface,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            ),
-            // 🔧 修复：设置合理的行数范围，避免布局问题
-            maxLines: 4,
-            minLines: 2,
-            textInputAction: TextInputAction.newline,
-            onChanged: (value) {
-              // 250ms 防抖，避免每个字符都触发 BLoC 更新与重建
-              _adjustmentDebounce?.cancel();
-              _adjustmentDebounce = Timer(const Duration(milliseconds: 250), () {
-                if (!mounted) return;
-                context.read<SettingGenerationBloc>().add(
-                  UpdateAdjustmentPromptEvent(_adjustmentController.text),
-                );
-              });
-            },
-          ),
-        ],
-      );
-    }
+        ),
+      ],
+    );
   }
 
   Widget _buildStrategySelector() {
@@ -342,6 +274,9 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
         } else if (state is SettingGenerationInProgress) {
           strategies = state.strategies;
         } else if (state is SettingGenerationCompleted) {
+          strategies = state.strategies;
+        } else if (state is SettingGenerationNodeUpdating) {
+          // 节点修改过程中依然沿用已加载的策略，不显示加载骨架
           strategies = state.strategies;
         } else {
           isLoading = true;
@@ -401,12 +336,13 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
       children: [
         Text(
           'AI模型',
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          style: TextStyle(
+            fontSize: 14,
             fontWeight: FontWeight.w500,
-            color: Theme.of(context).textTheme.bodySmall?.color,
+            color: WebTheme.getTextColor(context),
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         ModelDisplaySelector(
           selectedModel: _selectedModel,
           onModelSelected: (model) {
@@ -415,7 +351,7 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
             });
           },
           size: ModelDisplaySize.medium,
-          height: 60, // 扩大一倍高度 (36px * 2)
+          height: 60,
           showIcon: true,
           showTags: true,
           showSettingsButton: false,
@@ -426,256 +362,164 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
   }
 
   Widget _buildActionButtons(SettingGenerationState state) {
+    final isGenerating = state is SettingGenerationInProgress && state.isGenerating;
     final hasGeneratedSettings = state is SettingGenerationInProgress ||
         state is SettingGenerationCompleted;
-    final isGenerating = state is SettingGenerationInProgress && state.isGenerating;
 
-    if (!hasGeneratedSettings) {
-      return SizedBox(
-        width: double.infinity,
-        child: ElevatedButton(
-          onPressed: isGenerating || _selectedModel == null || _promptController.text.trim().isEmpty
-              ? null
-              : () {
-                  final prompt = _promptController.text.trim();
-                  final strategy = _selectedStrategy;
-                  final modelConfigId = _selectedModel!.id;
+    return Container(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: isGenerating || _selectedModel == null || _promptController.text.trim().isEmpty
+            ? null
+            : () async {
+                final ok = await _precheckToolModelAndMaybePrompt();
+                if (!ok) return;
+                final prompt = _promptController.text.trim();
+                final strategy = _selectedStrategy;
+                final modelConfigId = _selectedModel!.id;
+                
+                if (strategy != null) {
+                  // 通知主屏幕更新参数 - 传递策略名称用于显示
+                  widget.onGenerationStart?.call(prompt, strategy.name, modelConfigId);
                   
-                  if (strategy != null) {
-                    // 通知主屏幕更新参数 - 传递策略名称用于显示
-                    widget.onGenerationStart?.call(prompt, strategy.name, modelConfigId);
-                    
-                    final model = _selectedModel!;
-                    final bool usePublic = model.isPublic;
-                    final String? publicProvider = usePublic ? model.provider : null;
-                    final String? publicModelId = usePublic ? model.modelId : null;
+                  final model = _selectedModel!;
+                  final bool usePublic = model.isPublic;
+                  final String? publicProvider = usePublic ? model.provider : null;
+                  final String? publicModelId = usePublic ? model.modelId : null;
 
-                    context.read<SettingGenerationBloc>().add(
-                      StartGenerationEvent(
-                        initialPrompt: prompt,
-                        promptTemplateId: strategy.promptTemplateId, // 🔧 修复：使用策略ID而非名称
-                        modelConfigId: modelConfigId,
-                        usePublicTextModel: usePublic,
-                        textPhasePublicProvider: publicProvider,
-                        textPhasePublicModelId: publicModelId,
-                      ),
-                    );
-                  }
-                },
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
+                  context.read<SettingGenerationBloc>().add(
+                    StartGenerationEvent(
+                      initialPrompt: prompt,
+                      promptTemplateId: strategy.promptTemplateId,
+                      modelConfigId: modelConfigId,
+                      usePublicTextModel: usePublic,
+                      textPhasePublicProvider: publicProvider,
+                      textPhasePublicModelId: publicModelId,
+                    ),
+                  );
+                }
+              },
+        style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          backgroundColor: WebTheme.getPrimaryColor(context),
+          foregroundColor: Colors.white,
+          shape: const RoundedRectangleBorder(
           ),
-          child: isGenerating
-              ? Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Theme.of(context).colorScheme.onPrimary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('生成中...'),
-                  ],
-                )
-              : Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.auto_awesome,
-                      size: 16,
-                      color: Theme.of(context).colorScheme.onPrimary,
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('生成设定'),
-                  ],
-                ),
+          elevation: 0,
         ),
-      );
-    } else {
-      // 🔧 修复：生成完成后的按钮逻辑
-      return Column(
-        children: [
-          // 新建生成按钮 - 基于当前配置重新生成
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: isGenerating || _selectedModel == null
-                  ? null
-                  : () {
-                      // 使用原始提示词和当前配置重新生成
-                      final prompt = _promptController.text.trim();
-                      final strategy = _selectedStrategy;
-                      final modelConfigId = _selectedModel!.id;
-                      
-                      if (prompt.isNotEmpty && strategy != null) {
-                        // 通知主屏幕更新参数 - 传递策略名称用于显示
-                        widget.onGenerationStart?.call(prompt, strategy.name, modelConfigId);
-                        
-                      final model = _selectedModel!;
-                      final bool usePublic = model.isPublic;
-                      final String? publicProvider = usePublic ? model.provider : null;
-                      final String? publicModelId = usePublic ? model.modelId : null;
-
-                      context.read<SettingGenerationBloc>().add(
-                        StartGenerationEvent(
-                          initialPrompt: prompt,
-                          promptTemplateId: strategy.promptTemplateId,
-                          modelConfigId: modelConfigId,
-                          usePublicTextModel: usePublic,
-                          textPhasePublicProvider: publicProvider,
-                          textPhasePublicModelId: publicModelId,
-                        ),
-                      );
-                      }
-                    },
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: Row(
+        child: isGenerating
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    '生成中...',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              )
+            : Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    Icons.auto_awesome,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.onPrimary,
+                    hasGeneratedSettings ? Icons.refresh : Icons.auto_awesome,
+                    size: 18,
+                    color: Colors.white,
                   ),
-                  const SizedBox(width: 8),
-                  const Text('新建生成'),
+                  const SizedBox(width: 12),
+                  Text(
+                    hasGeneratedSettings ? '重新生成' : '生成设定',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white,
+                    ),
+                  ),
                 ],
               ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          // 调整生成按钮行
-          // Row(
-          //   children: [
-          //     // --- 调整生成按钮（改为基于会话整体调整） ---
-          //     Expanded(
-          //       child: ElevatedButton(
-          //         onPressed: isGenerating || _selectedModel == null || _adjustmentController.text.trim().isEmpty
-          //             ? null
-          //             : () {
-          //                 final prompt = _adjustmentController.text.trim();
-          //                 final modelConfigId = _selectedModel!.id;
+      ),
+    );
+  }
 
-          //                 // 读取当前活跃会话ID
-          //                 final currentState = context.read<SettingGenerationBloc>().state;
-          //                 String? sessionId;
-          //                 if (currentState is SettingGenerationInProgress) {
-          //                   sessionId = currentState.activeSessionId;
-          //                 } else if (currentState is SettingGenerationCompleted) {
-          //                   sessionId = currentState.activeSessionId;
-          //                 }
+  /// 轻量前置检查：当没有可用公共模型或缺少 jsonify/jsonIf 标签，且用户也未设置“工具调用默认”时，提示去设置。
+  /// 返回 true 表示继续生成，false 表示用户选择了取消或去设置。
+  Future<bool> _precheckToolModelAndMaybePrompt() async {
+    // 用户已设置工具默认且已验证 → 直接通过
+    final aiState = context.read<AiConfigBloc>().state;
+    final hasToolDefault = aiState.configs.any((c) => c.isToolDefault && c.isValidated);
+    if (hasToolDefault) return true;
 
-          //                 if (sessionId != null && sessionId.isNotEmpty) {
-          //                   // 推测当前策略模板ID（若可获取）
-          //                   String? promptTemplateId;
-          //                   final state = context.read<SettingGenerationBloc>().state;
-          //                   if (state is SettingGenerationInProgress) {
-          //                     promptTemplateId = state.activeSession.metadata['promptTemplateId'] as String?;
-          //                   } else if (state is SettingGenerationCompleted) {
-          //                     promptTemplateId = state.activeSession.metadata['promptTemplateId'] as String?;
-          //                   }
-          //                   // 优先使用当前选择的策略模板ID
-          //                   if (_selectedStrategy != null) {
-          //                     promptTemplateId = _selectedStrategy!.promptTemplateId;
-          //                   }
-          //                   context.read<SettingGenerationBloc>().add(
-          //                     AdjustGenerationEvent(
-          //                       sessionId: sessionId,
-          //                       adjustmentPrompt: prompt,
-          //                       modelConfigId: modelConfigId,
-          //                       promptTemplateId: promptTemplateId,
-          //                     ),
-          //                   );
-          //                 }
-          //               },
-          //         style: ElevatedButton.styleFrom(
-          //           padding: const EdgeInsets.symmetric(vertical: 10),
-          //           shape: RoundedRectangleBorder(
-          //             borderRadius: BorderRadius.circular(8),
-          //           ),
-          //         ),
-          //         child: Row(
-          //           mainAxisAlignment: MainAxisAlignment.center,
-          //           children: [
-          //             Icon(
-          //               Icons.refresh,
-          //               size: 14,
-          //               color: Theme.of(context).colorScheme.onPrimary,
-          //             ),
-          //             const SizedBox(width: 4),
-          //             const Text('调整生成', style: TextStyle(fontSize: 12)),
-          //           ],
-          //         ),
-          //       ),
-          //     ),
-
-          //     const SizedBox(width: 8),
-
-          //     // --- 创建分支按钮 ---
-          //     Expanded(
-          //       child: Tooltip(
-          //         message: '基于当前设定和调整提示词创建新的历史记录',
-          //         child: ElevatedButton(
-          //           onPressed: isGenerating || _selectedModel == null || _adjustmentController.text.trim().isEmpty
-          //               ? null
-          //               : () {
-          //                   final prompt = _adjustmentController.text.trim();
-          //                   final strategy = _selectedStrategy;
-          //                   final modelConfigId = _selectedModel!.id;
-
-          //                   if (strategy != null) {
-          //                     // 通知主屏幕更新参数 - 传递策略名称用于显示
-          //                     widget.onGenerationStart?.call(prompt, strategy.name, modelConfigId);
-
-          //                     // 创建分支
-          //                     context.read<SettingGenerationBloc>().add(
-          //                       StartGenerationEvent(
-          //                         initialPrompt: prompt,
-          //                         promptTemplateId: strategy.promptTemplateId, // 🔧 修复：使用策略ID而非名称
-          //                         modelConfigId: modelConfigId,
-          //                       ),
-          //                     );
-          //                   }
-          //                 },
-          //           style: ElevatedButton.styleFrom(
-          //             padding: const EdgeInsets.symmetric(vertical: 10),
-          //             shape: RoundedRectangleBorder(
-          //               borderRadius: BorderRadius.circular(8),
-          //             ),
-          //           ),
-          //           child: Row(
-          //             mainAxisAlignment: MainAxisAlignment.center,
-          //             children: [
-          //               Icon(
-          //                 Icons.call_split,
-          //                 size: 14,
-          //                 color: Theme.of(context).colorScheme.onPrimary,
-          //               ),
-          //               const SizedBox(width: 4),
-          //               const Text('创建分支', style: TextStyle(fontSize: 12)),
-          //             ],
-          //           ),
-          //         ),
-          //       ),
-          //     ),
-          //   ],
-          // ),
-        ],
-      );
+    // 公共模型检查（仅在已加载时判断，避免阻塞）
+    final publicBloc = context.read<PublicModelsBloc>();
+    final publicState = publicBloc.state;
+    bool needPrompt = false;
+    if (publicState is PublicModelsLoaded) {
+      final models = publicState.models;
+      final tagsNeedles = {'jsonify', 'jsonif', 'json-if', 'json_if'};
+      final hasJsonifyTag = models.any((m) => (m.tags ?? const <String>[]) 
+          .map((t) => t.toLowerCase())
+          .any((t) => tagsNeedles.contains(t)));
+      final noPublic = models.isEmpty;
+      needPrompt = noPublic || !hasJsonifyTag;
+    } else {
+      // 轻量：若未加载，不做拦截
+      needPrompt = false;
     }
+
+    if (!needPrompt) return true;
+
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('请配置工具调用模型'),
+        content: const Text('未检测到可用的公共工具模型或缺少 jsonify 标签。建议先在“模型服务管理”中设置一个工具调用默认模型（成本低、速度快），例如：Gemini 2.0 Flash。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop(false);
+              final userId = AppConfig.userId ?? '';
+              await showDialog(
+                context: context,
+                barrierDismissible: true,
+                builder: (dialogContext) => Dialog(
+                  insetPadding: const EdgeInsets.all(16),
+                  backgroundColor: Colors.transparent,
+                  child: SettingsPanel(
+                    stateManager: EditorStateManager(),
+                    userId: userId,
+                    onClose: () => Navigator.of(dialogContext).pop(),
+                    editorSettings: const EditorSettings(),
+                    onEditorSettingsChanged: (_) {},
+                    initialCategoryIndex: 0, // 聚焦“模型服务”
+                  ),
+                ),
+              );
+            },
+            child: const Text('去设置'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('继续生成'),
+          ),
+        ],
+      ),
+    );
+    return proceed ?? false;
   }
 }

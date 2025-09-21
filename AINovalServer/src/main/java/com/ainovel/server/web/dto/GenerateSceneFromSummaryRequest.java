@@ -60,4 +60,14 @@ public class GenerateSceneFromSummaryRequest {
      * AI配置ID（可选）
      */
     private String aiConfigId;
+
+    /**
+     * 提示词模板ID（可选，用于SUMMARY_TO_SCENE）
+     */
+    private String promptTemplateId;
+
+    /**
+     * 公共模型配置ID（可选，使用公共模型时填写）
+     */
+    private String publicModelConfigId;
 } 

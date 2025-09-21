@@ -87,6 +87,15 @@ class _ModelServiceListPageState extends State<ModelServiceListPage> {
     ));
   }
 
+  void _handleSetToolDefault(String configId) {
+    AppLogger.i('ModelServiceListPage', '设置工具默认配置: $configId');
+    widget.editorStateManager.setModelOperationInProgress(true);
+    context.read<AiConfigBloc>().add(SetToolDefaultAiConfig(
+      userId: widget.userId,
+      configId: configId,
+    ));
+  }
+
   void _handleValidate(String configId) {
     AppLogger.i('ModelServiceListPage', '验证配置: $configId');
     widget.editorStateManager.setModelOperationInProgress(true);
@@ -387,6 +396,7 @@ class _ModelServiceListPageState extends State<ModelServiceListPage> {
                         onToggleExpanded: () => _handleToggleProvider(provider),
                         onAddModel: () => _handleAddModel(provider),
                         onSetDefault: _handleSetDefault,
+                        onSetToolDefault: _handleSetToolDefault,
                         onValidate: _handleValidate,
                         onEdit: _handleEdit,
                         onDelete: _handleDelete,

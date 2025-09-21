@@ -41,16 +41,14 @@ import com.ainovel.server.domain.model.UserAIModelConfig;
 import com.ainovel.server.service.AIService;
 import com.ainovel.server.service.KnowledgeService;
 import com.ainovel.server.service.NovelAIService;
-import com.ainovel.server.service.NovelRagAssistant;
 import com.ainovel.server.service.NovelService;
+import com.ainovel.server.service.PublicModelConfigService;
 import com.ainovel.server.service.EnhancedUserPromptService;
 import com.ainovel.server.service.SceneService;
 import com.ainovel.server.service.UserAIModelConfigService;
 import com.ainovel.server.service.UserPromptService;
 import com.ainovel.server.service.UserService;
 import com.ainovel.server.service.ai.AIModelProvider;
-import com.ainovel.server.service.dto.AiGeneratedSettingData;
-import com.ainovel.server.service.rag.RagService;
 import com.ainovel.server.web.dto.GenerateSceneFromSummaryRequest;
 import com.ainovel.server.web.dto.GenerateSceneFromSummaryResponse;
 import com.ainovel.server.web.dto.OutlineGenerationChunk;
@@ -64,14 +62,6 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.query.Query;
-import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.service.AiServices;
-import dev.langchain4j.service.V;
-import dev.langchain4j.model.output.Response;
-import dev.langchain4j.model.output.TokenUsage;
-import java.util.function.Function;
-import dev.langchain4j.data.message.AiMessage;
-import java.util.Optional;
 
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
@@ -105,14 +95,18 @@ public class NovelAIServiceImpl implements NovelAIService {
     @Autowired
     private ContentRetriever contentRetriever;
 
-    @Autowired
-    private NovelRagAssistant novelRagAssistant;
+    // 已暂未使用，避免未使用警告
+    // @Autowired
+    // private NovelRagAssistant novelRagAssistant;
 
-    @Autowired
-    private RagService ragService;
+    // @Autowired
+    // private RagService ragService;
 
     @Autowired
     private UserPromptService userPromptService;
+
+    @Autowired
+    private PublicModelConfigService publicModelConfigService;
 
     @Autowired
     private UserAIModelConfigService userAIModelConfigService;
@@ -317,8 +311,9 @@ public class NovelAIServiceImpl implements NovelAIService {
                                         })
                                         .doOnComplete(() -> {
                                             long duration = System.currentTimeMillis() - startTime.get();
-                                            log.info("流式内容生成成功完成，耗时: {}ms，用户ID: {}, 模型: {}",
-                                                    duration, enrichedRequest.getUserId(), enrichedRequest.getModel());
+                                            long idleMs = System.currentTimeMillis() - lastActivityTime.get();
+                                            log.info("流式内容生成成功完成，耗时: {}ms，最后空闲: {}ms，用户ID: {}, 模型: {}",
+                                                    duration, idleMs, enrichedRequest.getUserId(), enrichedRequest.getModel());
                                         })
                                         .doOnCancel(() -> {
                                             log.info("流式生成被取消，但模型会在后台继续生成，用户ID: {}, 模型: {}",
@@ -651,7 +646,7 @@ public class NovelAIServiceImpl implements NovelAIService {
         log.info("开始为小说 {} 生成第 {} 个剧情选项，选项ID: {}, 使用配置ID: {}", 
                 novelId, optionIndex + 1, optionId, configId);
 
-        return createSingleOutlineGenerationRequest(novelId, contextDescription, authorGuidance, startChapterId, endChapterId)
+        return createSingleOutlineGenerationRequest(userId, novelId, contextDescription, authorGuidance, startChapterId, endChapterId)
             .flatMap(request -> enrichRequestWithContext(request))
             .flatMapMany(enrichedRequest ->
                 getAIModelProviderByConfigId(userId, configId)
@@ -676,8 +671,8 @@ public class NovelAIServiceImpl implements NovelAIService {
         log.info("开始为小说 {} 生成第 {} 个剧情选项 (基于上下文)，选项ID: {}, 使用配置ID: {}", 
                 novelId, optionIndex + 1, optionId, configId);
 
-        return createSingleOutlineGenerationRequest(novelId, currentContext, authorGuidance)
-            .flatMap(request -> enrichRequestWithContext(request))
+        return createSingleOutlineGenerationRequest(userId, novelId, currentContext, authorGuidance)
+            //.flatMap(request -> enrichRequestWithContext(request))
             .flatMapMany(enrichedRequest ->
                 getAIModelProviderByConfigId(userId, configId)
                     .flatMapMany(provider ->
@@ -769,7 +764,7 @@ public class NovelAIServiceImpl implements NovelAIService {
     /**
      * 创建单个下一剧情大纲生成请求 (用于并发调用)
      */
-    private Mono<AIRequest> createSingleOutlineGenerationRequest(String novelId, String context, String authorGuidance, String startChapterId, String endChapterId) {
+    private Mono<AIRequest> createSingleOutlineGenerationRequest(String userId, String novelId, String context, String authorGuidance, String startChapterId, String endChapterId) {
         return promptService.getSingleOutlineGenerationPrompt()
                  .map(promptTemplate -> {
                      String prompt = promptTemplate
@@ -777,6 +772,7 @@ public class NovelAIServiceImpl implements NovelAIService {
                              .replace("{{authorGuidance}}", authorGuidance.isEmpty() ? "" : "作者引导：" + authorGuidance);
 
                      AIRequest request = new AIRequest();
+                     request.setUserId(userId);
                      request.setNovelId(novelId);
                      request.setEnableContext(true); // Context 由外部传入
 
@@ -820,8 +816,8 @@ public class NovelAIServiceImpl implements NovelAIService {
     /**
      * 创建单个下一剧情大纲生成请求 (重载，用于基于 general context)
      */
-    private Mono<AIRequest> createSingleOutlineGenerationRequest(String novelId, String currentContext, String authorGuidance) {
-        return createSingleOutlineGenerationRequest(novelId, currentContext, authorGuidance, null, null); // 调用章节范围版本，传入null chapter IDs
+    private Mono<AIRequest> createSingleOutlineGenerationRequest(String userId, String novelId, String currentContext, String authorGuidance) {
+        return createSingleOutlineGenerationRequest(userId, novelId, currentContext, authorGuidance, null, null); // 调用章节范围版本，传入null chapter IDs
     }
 
     @Override
@@ -1725,16 +1721,33 @@ public class NovelAIServiceImpl implements NovelAIService {
                             return result;
                         });
 
-                    Mono<String> systemPromptContentMono = promptService.getSystemMessageForFeature(AIFeatureType.SUMMARY_TO_SCENE)
-                        .switchIfEmpty(Mono.<String>defer(() -> {
-                            return Mono.just("你是一位富有创意的小说家。请根据用户提供的摘要、上下文信息、相关设定和风格要求，生成详细的小说场景内容。请确保生成的内容与设定保持一致。");
-                        }));
-                        
-                    Mono<String> userPromptTemplateMono = userPromptService.getPromptTemplate(
-                            userId, AIFeatureType.SUMMARY_TO_SCENE)
-                        .switchIfEmpty(Mono.<String>defer(() -> {
-                            return promptService.getSuggestionPrompt(AIFeatureType.SUMMARY_TO_SCENE.name());
-                        }));
+                    Mono<String> systemPromptContentMono;
+                    Mono<String> userPromptTemplateMono;
+
+                    if (request.getPromptTemplateId() != null && !request.getPromptTemplateId().isBlank()) {
+                        Mono<com.ainovel.server.domain.model.EnhancedUserPromptTemplate> selectedTemplateMono =
+                                promptService.getPromptTemplateById(userId, request.getPromptTemplateId())
+                                    .doOnNext(t -> log.info("使用指定的内容提示词模板: {}", t.getId()))
+                                    .cache();
+
+                        systemPromptContentMono = selectedTemplateMono
+                                .map(t -> {
+                                    String sys = t.getSystemPrompt();
+                                    return (sys != null && !sys.isBlank()) ? sys : null;
+                                })
+                                .switchIfEmpty(promptService.getSystemMessageForFeature(AIFeatureType.SUMMARY_TO_SCENE))
+                                .switchIfEmpty(Mono.just("你是一位富有创意的小说家。请根据用户提供的摘要、上下文信息、相关设定和风格要求，生成详细的小说场景内容。请确保生成的内容与设定保持一致。"));
+
+                        userPromptTemplateMono = selectedTemplateMono
+                                .map(t -> t.getUserPrompt())
+                                .switchIfEmpty(userPromptService.getPromptTemplate(userId, AIFeatureType.SUMMARY_TO_SCENE))
+                                .switchIfEmpty(promptService.getSuggestionPrompt(AIFeatureType.SUMMARY_TO_SCENE.name()));
+                    } else {
+                        systemPromptContentMono = promptService.getSystemMessageForFeature(AIFeatureType.SUMMARY_TO_SCENE)
+                                .switchIfEmpty(Mono.just("你是一位富有创意的小说家。请根据用户提供的摘要、上下文信息、相关设定和风格要求，生成详细的小说场景内容。请确保生成的内容与设定保持一致。"));
+                        userPromptTemplateMono = userPromptService.getPromptTemplate(userId, AIFeatureType.SUMMARY_TO_SCENE)
+                                .switchIfEmpty(promptService.getSuggestionPrompt(AIFeatureType.SUMMARY_TO_SCENE.name()));
+                    }
 
                     // 返回包含合并后上下文、系统提示、用户模板的Tuple
                     return Mono.zip(combinedContextMono, systemPromptContentMono, userPromptTemplateMono);
@@ -1768,12 +1781,73 @@ public class NovelAIServiceImpl implements NovelAIService {
                         promptRef.set(fallbackPrompt);
                     }
 
-                    // 获取AI配置并调用LLM (流式)
-                    return userAIModelConfigService.getValidatedDefaultConfiguration(userId)
-                            .doOnNext(config -> log.info("获取到AI模型配置: 提供商={}, 模型={}, 小说ID: {}",
-                                                        config.getProvider(), config.getModelName(), novelId))
-                            .switchIfEmpty(Mono.error(new RuntimeException("未找到有效的AI模型配置")))
-                            .flatMapMany(aiConfig -> {
+                    // 检查是否使用公共模型
+                    if (request.getPublicModelConfigId() != null && !request.getPublicModelConfigId().isBlank()) {
+                        String publicModelConfigId = request.getPublicModelConfigId();
+                        log.info("使用公共模型进行内容生成: {}", publicModelConfigId);
+                        
+                        return publicModelConfigService.findById(publicModelConfigId)
+                            .switchIfEmpty(Mono.error(new IllegalArgumentException("公共模型配置不存在: " + publicModelConfigId)))
+                            .flatMapMany(cfg -> {
+                                if (!Boolean.TRUE.equals(cfg.getEnabled()) || !cfg.isEnabledForFeature(AIFeatureType.SUMMARY_TO_SCENE)) {
+                                    return Flux.error(new IllegalArgumentException("公共模型未启用或不支持功能: SUMMARY_TO_SCENE"));
+                                }
+                                return publicModelConfigService.getActiveDecryptedApiKey(cfg.getProvider(), cfg.getModelId())
+                                    .switchIfEmpty(Mono.error(new IllegalStateException("公共模型缺少可用API Key: " + cfg.getId())))
+                                    .flatMapMany(apiKey -> {
+                                        AIRequest aiRequest = new AIRequest();
+                                        aiRequest.setUserId(userId);
+                                        aiRequest.setNovelId(novelId);
+                                        aiRequest.setModel(cfg.getModelId());
+
+                                        // 创建系统消息
+                                        AIRequest.Message systemMessage = new AIRequest.Message();
+                                        systemMessage.setRole("system");
+                                        systemMessage.setContent(systemPromptContent);
+                                        aiRequest.getMessages().add(systemMessage);
+
+                                        // 创建用户消息
+                                        AIRequest.Message userMessage = new AIRequest.Message();
+                                        userMessage.setRole("user");
+                                        userMessage.setContent(promptRef.get());
+                                        aiRequest.getMessages().add(userMessage);
+
+                                        // 设置生成参数
+                                        aiRequest.setTemperature(0.8);
+                                        aiRequest.setMaxTokens(200000);
+
+                                        // 设置计费信息
+                                        try {
+                                            String correlationId = java.util.UUID.randomUUID().toString();
+                                            String idempotencyKey = correlationId;
+                                            com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
+                                                aiRequest,
+                                                true,
+                                                true,
+                                                AIFeatureType.SUMMARY_TO_SCENE.name(),
+                                                cfg.getId(),
+                                                cfg.getProvider(),
+                                                cfg.getModelId(),
+                                                correlationId,
+                                                idempotencyKey
+                                            );
+                                        } catch (Throwable ignore) {}
+
+                                        return aiService.generateContentStream(aiRequest, apiKey, cfg.getApiEndpoint());
+                                    });
+                            });
+                    }
+
+                    // 使用私人模型配置（原有逻辑）
+                    Mono<UserAIModelConfig> cfgMono = Mono.justOrEmpty(request.getAiConfigId())
+                            .filter(id -> !id.isBlank())
+                            .flatMap(id -> userAIModelConfigService.getConfigurationById(userId, id)
+                                    .doOnNext(c -> log.info("使用指定内容模型配置: {} (provider={}, model={})", id, c.getProvider(), c.getModelName()))
+                                    .switchIfEmpty(userAIModelConfigService.getValidatedDefaultConfiguration(userId)))
+                            .switchIfEmpty(userAIModelConfigService.getValidatedDefaultConfiguration(userId))
+                            .switchIfEmpty(Mono.error(new RuntimeException("未找到有效的AI模型配置")));
+
+                    return cfgMono.flatMapMany(aiConfig -> {
                                 AIRequest aiRequest = new AIRequest();
                                 aiRequest.setUserId(userId);
                                 aiRequest.setNovelId(novelId);
@@ -1796,90 +1870,17 @@ public class NovelAIServiceImpl implements NovelAIService {
                                 aiRequest.setMaxTokens(200000);
 
                                 // 获取AI模型提供商并调用流式生成
-                                return getAIModelProvider(userId, aiConfig.getModelName())
+                                return getOrCreateAIModelProvider(userId, aiConfig)
                                         .doOnNext(provider -> log.info("获取到AI模型提供商: {}, 小说ID: {}", 
                                                                      provider.getClass().getSimpleName(), novelId))
                                         .flatMapMany(provider -> {
-                                            // ... 保持现有的静默检测和流处理代码不变 ...
-                                            // 创建一个原子计数器跟踪最后活动时间戳
-                                            final AtomicLong lastActivityTimestamp = new AtomicLong(System.currentTimeMillis());
-
-                                            // 创建初始启动延迟，给模型足够时间建立连接
-                                            // 用于避免在刚开始时被静默检测器误判为超时
-                                            final long initialStartupTime = System.currentTimeMillis();
-                                            final int startupGracePeriodSeconds = 60; // 增加到60秒启动宽限期
-
-                                            // 创建静默检测流，每10秒检查一次是否有新活动
-                                            // 但要延迟启动，等模型有足够时间建立连接
-                                            Flux<String> silenceDetector = Flux.interval(Duration.ofSeconds(10))
-                                                    .mapNotNull(tick -> {
-                                                        long now = System.currentTimeMillis();
-
-                                                        // 在启动宽限期内不执行静默检测
-                                                        if (now - initialStartupTime < startupGracePeriodSeconds * 1000) {
-                                                            log.debug("模型建立连接中，处于宽限期内 ({}/{}秒)，userId: {}, novelId: {}",
-                                                                    (now - initialStartupTime) / 1000,
-                                                                    startupGracePeriodSeconds,
-                                                                    userId,
-                                                                    novelId);
-                                                            return null;
-                                                        }
-
-                                                        long lastActivity = lastActivityTimestamp.get();
-                                                        // 如果超过60秒没有活动，且已经过了启动宽限期
-                                                        if (now - lastActivity > 60000) {
-                                                            log.info("检测到生成静默超过60秒，自动结束流, userId: {}, novelId: {}", userId, novelId);
-                                                            return "[DONE]";
-                                                        }
-                                                        // 否则返回null，会被过滤掉
-                                                        return null;
-                                                    })
-                                                    .filter(Objects::nonNull)
-                                                    // 只取第一个[DONE]信号
-                                                    .take(1);
-
-                                            // 标记是否已完成生成
-                                            final AtomicBoolean isStreamCompleted = new AtomicBoolean(false);
-
-                                            // 主内容流，更新活动时间戳
-                                            Flux<String> contentFlux = provider.generateContentStream(aiRequest)
+                                            return provider.generateContentStream(aiRequest)
                                                     .doOnSubscribe(sub -> {
-                                                        log.info("模型流已订阅，启动宽限期 {} 秒, userId: {}, novelId: {}",
-                                                                startupGracePeriodSeconds, userId, novelId);
+                                                        log.info("模型流已订阅, userId: {}, novelId: {}", userId, novelId);
                                                     })
-                                                    .doOnNext(content -> {
-                                                        if (!"heartbeat".equals(content)) {
-                                                            //log.debug("收到模型生成内容，更新活动时间戳, userId: {}, novelId: {}", userId, novelId);
-                                                            lastActivityTimestamp.set(System.currentTimeMillis());
-                                                        }
-                                                    })
-                                                    .concatWithValues("[DONE]");
-
-                                            // 合并主流和静默检测流，取先发送的[DONE]
-                                            return Flux.merge(contentFlux, silenceDetector)
-                                                    // 过滤重复的[DONE]标记和heartbeat消息
-                                                    .filter(content -> {
-                                                        if (content.equals("[DONE]")) {
-                                                            // 如果已经有[DONE]标记，则过滤掉
-                                                            if (isStreamCompleted.get()) {
-                                                                return false;
-                                                            }
-                                                            isStreamCompleted.set(true);
-                                                            return true;
-                                                        }
-                                                        return !"heartbeat".equals(content);  // 过滤掉heartbeat消息
-                                                    })
-                                                    // 添加超时保护
-                                                    .timeout(Duration.ofSeconds(300))
-                                                    .onErrorResume(timeoutError -> {
-                                                        log.warn("生成场景内容超时，userId: {}, novelId: {}", userId, novelId);
-                                                        return Flux.just(
-                                                                "AI模型响应超时，生成已中断。",
-                                                                "[DONE]"
-                                                        );
-                                                    })
+                                                    .filter(content -> !"heartbeat".equals(content))
                                                     .doOnCancel(() -> {
-                                                        log.info("流被取消，但允许模型后台继续生成，userId: {}, novelId: {}", userId, novelId);
+                                                        log.info("流被取消，允许模型后台继续生成, userId: {}, novelId: {}", userId, novelId);
                                                     });
                                         });
                             });
@@ -2069,8 +2070,8 @@ public class NovelAIServiceImpl implements NovelAIService {
             .switchIfEmpty(Mono.error(new RuntimeException("无法找到有效的AI配置")));
 
         // 2. 使用NovelRagAssistant检索相关上下文和设定
-        Mono<String> relevantContextMono = novelRagAssistant.retrieveRelevantContext(novelId, currentContext);
-        Mono<String> relevantSettingsMono = novelRagAssistant.retrieveRelevantSettings(novelId, currentContext);
+        //Mono<String> relevantContextMono = novelRagAssistant.retrieveRelevantContext(novelId, currentContext);
+        //Mono<String> relevantSettingsMono = novelRagAssistant.retrieveRelevantSettings(novelId, currentContext);
 
         // 3. 构建作者引导（如果有写作风格）
         String authorGuidance = "";
@@ -2080,11 +2081,8 @@ public class NovelAIServiceImpl implements NovelAIService {
 
         // 4. 整合所有信息并生成请求
         String finalAuthorGuidance = authorGuidance;
-        return Mono.zip(configMono, relevantContextMono, relevantSettingsMono)
-            .flatMap(tuple -> {
-                UserAIModelConfig config = tuple.getT1();
-                String relevantContext = tuple.getT2();
-                String relevantSettings = tuple.getT3();
+        return configMono
+            .flatMap(config -> {
                 
                 // 4.1 获取配置ID
                 String configId = config.getId();
@@ -2095,15 +2093,15 @@ public class NovelAIServiceImpl implements NovelAIService {
                 // 4.3 构建完整上下文
                 StringBuilder enrichedContext = new StringBuilder(currentContext);
                 
-                // 添加检索到的上下文（如果有）
-                if (!relevantContext.isEmpty()) {
-                    enrichedContext.append("\\n\\n## 相关上下文\\n\\n").append(relevantContext);
-                }
-                
-                // 添加设定信息（如果有）
-                if (!relevantSettings.isEmpty()) {
-                    enrichedContext.append("\\n\\n## 相关设定\\n\\n").append(relevantSettings);
-                }
+//                // 添加检索到的上下文（如果有）
+//                if (!relevantContext.isEmpty()) {
+//                    enrichedContext.append("\\n\\n## 相关上下文\\n\\n").append(relevantContext);
+//                }
+//
+//                // 添加设定信息（如果有）
+//                if (!relevantSettings.isEmpty()) {
+//                    enrichedContext.append("\\n\\n## 相关设定\\n\\n").append(relevantSettings);
+//                }
                 
                 // 4.4 使用NextOutline生成逻辑生成单个大纲选项
                 return generateSingleOutlineOptionStream(
@@ -2127,15 +2125,98 @@ public class NovelAIServiceImpl implements NovelAIService {
                         return processOutlineToSummary(outlineContent);
                     })
                     .doOnSuccess(summary -> {
-                        log.info("成功生成下一章摘要, 长度: {}, 开头: {}", 
-                                summary.length(), 
-                                summary.substring(0, Math.min(50, summary.length())));
+                        // 避免打印正文片段，改为仅打印长度
+                        log.info("成功生成下一章摘要, 长度: {}", summary.length());
                     })
                     .onErrorResume(e -> {
                         log.error("生成下一章摘要失败: {}", e.getMessage(), e);
                         return Mono.error(new RuntimeException("生成摘要失败: " + e.getMessage()));
                     });
             });
+    }
+
+    @Override
+    public Flux<String> generateNextSingleSummaryStream(String userId, String novelId, String currentContext, String aiConfigIdSummary, String writingStyle, String summaryPromptTemplateId, String publicModelConfigId) {
+        // 构建用于摘要的大纲请求（重用 createSingleOutlineGenerationRequest + processProviderStream）
+        if (currentContext == null || currentContext.isEmpty()) {
+            return Flux.error(new IllegalArgumentException("上下文内容不能为空"));
+        }
+        String authorGuidance = (writingStyle != null && !writingStyle.isEmpty()) ? ("写作风格: " + writingStyle) : "";
+        StringBuilder enrichedContext = new StringBuilder(currentContext);
+
+        Mono<AIRequest> reqMono;
+        if (summaryPromptTemplateId != null && !summaryPromptTemplateId.isBlank()) {
+            reqMono = promptService.getPromptTemplateById(userId, summaryPromptTemplateId)
+                .map(t -> {
+                    String sys = t.getSystemPrompt();
+                    String usr = t.getUserPrompt();
+                    if (usr == null || usr.isBlank()) {
+                        usr = promptService.getSingleOutlineGenerationPrompt().block();
+                    }
+                    AIRequest req = new AIRequest();
+                    req.setUserId(userId);
+                    req.setNovelId(novelId);
+                    AIRequest.Message sysMsg = new AIRequest.Message();
+                    sysMsg.setRole("system");
+                    sysMsg.setContent((sys != null && !sys.isBlank()) ? sys : "你是一位专业的小说创作顾问。");
+                    req.getMessages().add(sysMsg);
+                    AIRequest.Message userMsg = new AIRequest.Message();
+                    userMsg.setRole("user");
+                    userMsg.setContent(usr.replace("{{context}}", enrichedContext.toString()).replace("{{authorGuidance}}", authorGuidance));
+                    req.getMessages().add(userMsg);
+                    req.setTemperature(0.75);
+                    req.setMaxTokens(200000);
+                    return req;
+                })
+                .switchIfEmpty(createSingleOutlineGenerationRequest(userId, novelId, enrichedContext.toString(), authorGuidance));
+        } else {
+            reqMono = createSingleOutlineGenerationRequest(userId, novelId, enrichedContext.toString(), authorGuidance);
+        }
+
+        if (publicModelConfigId != null && !publicModelConfigId.isBlank()) {
+            return reqMono.flatMapMany(request -> publicModelConfigService.findById(publicModelConfigId)
+                .switchIfEmpty(Mono.error(new IllegalArgumentException("公共模型配置不存在: " + publicModelConfigId)))
+                .flatMapMany(cfg -> {
+                    if (!Boolean.TRUE.equals(cfg.getEnabled()) || !cfg.isEnabledForFeature(AIFeatureType.TEXT_SUMMARY)) {
+                        return Flux.error(new IllegalArgumentException("公共模型未启用或不支持功能: TEXT_SUMMARY"));
+                    }
+                    return publicModelConfigService.getActiveDecryptedApiKey(cfg.getProvider(), cfg.getModelId())
+                        .switchIfEmpty(Mono.error(new IllegalStateException("公共模型缺少可用API Key: " + cfg.getId())))
+                        .flatMapMany(apiKey -> {
+                            // 确保设置userId
+                            request.setUserId(userId);
+                            try {
+                                String correlationId = java.util.UUID.randomUUID().toString();
+                                String idempotencyKey = correlationId;
+                                com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
+                                    request,
+                                    true,
+                                    true,
+                                    AIFeatureType.TEXT_SUMMARY.name(),
+                                    cfg.getId(),
+                                    cfg.getProvider(),
+                                    cfg.getModelId(),
+                                    correlationId,
+                                    idempotencyKey
+                                );
+                            } catch (Throwable ignore) {}
+                            // 设置公共模型的模型ID
+                            request.setModel(cfg.getModelId());
+                            return aiService.generateContentStream(request, apiKey, cfg.getApiEndpoint());
+                        });
+                })
+            );
+        }
+
+        Mono<UserAIModelConfig> configMono = Mono.justOrEmpty(aiConfigIdSummary)
+            .flatMap(configId -> userAIModelConfigService.getConfigurationById(userId, configId))
+            .switchIfEmpty(userAIModelConfigService.getValidatedDefaultConfiguration(userId))
+            .switchIfEmpty(Mono.error(new RuntimeException("无法找到有效的AI配置")));
+
+        return reqMono.flatMapMany(req -> configMono.flatMapMany(cfg -> getOrCreateAIModelProvider(userId, cfg)
+            .flatMapMany(provider -> provider.generateContentStream(req)
+                .filter(content -> !"heartbeat".equalsIgnoreCase(content))
+            )));
     }
 
     /**
@@ -2229,6 +2310,68 @@ public class NovelAIServiceImpl implements NovelAIService {
             return userAIModelConfigService.getConfigurationById(userId, request.getAiConfigId());
         }
         return userAIModelConfigService.getValidatedDefaultConfiguration(userId);
+    }
+
+    @Override
+    public Mono<String> generateNextSingleSummaryWithTemplate(String userId, String novelId, String currentContext, String aiConfigIdSummary, String writingStyle, String summaryPromptTemplateId) {
+        if (summaryPromptTemplateId == null || summaryPromptTemplateId.isBlank()) {
+            return generateNextSingleSummary(userId, novelId, currentContext, aiConfigIdSummary, writingStyle);
+        }
+        if (currentContext == null || currentContext.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("上下文内容不能为空"));
+        }
+        Mono<UserAIModelConfig> configMono = Mono.justOrEmpty(aiConfigIdSummary)
+            .flatMap(configId -> userAIModelConfigService.getConfigurationById(userId, configId))
+            .switchIfEmpty(userAIModelConfigService.getValidatedDefaultConfiguration(userId))
+            .switchIfEmpty(Mono.error(new RuntimeException("无法找到有效的AI配置")));
+        String authorGuidance = (writingStyle != null && !writingStyle.isEmpty()) ? ("写作风格: " + writingStyle) : "";
+        String finalAuthorGuidance = authorGuidance;
+        StringBuilder enrichedContext = new StringBuilder(currentContext);
+        String optionId = UUID.randomUUID().toString();
+        return configMono.flatMapMany(config ->
+            promptService.getPromptTemplateById(userId, summaryPromptTemplateId)
+                .map(t -> {
+                    String sys = t.getSystemPrompt();
+                    String usr = t.getUserPrompt();
+                    if (usr == null || usr.isBlank()) {
+                        usr = promptService.getSingleOutlineGenerationPrompt().block();
+                    }
+                    try {
+                        String prompt = usr
+                            .replace("{{context}}", enrichedContext.toString())
+                            .replace("{{authorGuidance}}", finalAuthorGuidance == null ? "" : finalAuthorGuidance);
+                        AIRequest req = new AIRequest();
+                        req.setUserId(userId);
+                        req.setNovelId(novelId);
+                        AIRequest.Message sysMsg = new AIRequest.Message();
+                        sysMsg.setRole("system");
+                        sysMsg.setContent((sys != null && !sys.isBlank()) ? sys : "你是一位专业的小说创作顾问。");
+                        req.getMessages().add(sysMsg);
+                        AIRequest.Message userMsg = new AIRequest.Message();
+                        userMsg.setRole("user");
+                        userMsg.setContent(prompt);
+                        req.getMessages().add(userMsg);
+                        req.setTemperature(0.75);
+                        req.setMaxTokens(200000);
+                        return req;
+                    } catch (Exception e) {
+                        log.warn("应用摘要模板占位符失败，回退默认模板: {}", e.getMessage());
+                        return createSingleOutlineGenerationRequest(userId, novelId, enrichedContext.toString(), finalAuthorGuidance).block();
+                    }
+                })
+                .switchIfEmpty(createSingleOutlineGenerationRequest(userId, novelId, enrichedContext.toString(), finalAuthorGuidance))
+                .flatMapMany(req -> getAIModelProviderByConfigId(userId, config.getId())
+                    .flatMapMany(provider -> processProviderStream(provider, req, optionId, 0)))
+        )
+        .reduce(new StringBuilder(), (sb, chunk) -> {
+            if (chunk.getError() != null) {
+                log.error("生成摘要出错: {}", chunk.getError());
+                throw new RuntimeException("生成摘要失败: " + chunk.getError());
+            }
+            return sb.append(chunk.getTextChunk());
+        })
+        .map(StringBuilder::toString)
+        .flatMap(this::processOutlineToSummary);
     }
 }
 

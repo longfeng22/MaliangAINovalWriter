@@ -1,7 +1,9 @@
 package com.ainovel.server.task.service;
 
-import java.util.UUID;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import com.ainovel.server.task.model.BackgroundTask;
+import com.ainovel.server.task.model.TaskStatus;
 
 /**
  * 响应式任务提交服务接口
@@ -47,6 +49,17 @@ public interface TaskSubmissionService {
      * @return 任务状态的JSON表示的Mono
      */
     Mono<Object> getTaskStatus(String taskId, String userId);
+    
+    /**
+     * 获取用户的历史任务列表
+     * 
+     * @param userId 用户ID
+     * @param status 任务状态过滤条件（可选）
+     * @param page 页码
+     * @param size 每页大小
+     * @return 任务列表的Flux
+     */
+    Flux<BackgroundTask> getUserTasks(String userId, TaskStatus status, int page, int size);
     
     /**
      * 取消任务

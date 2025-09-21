@@ -51,11 +51,15 @@ docker compose up -d
 ```
 启动后访问：http://localhost:18080/
 
+> 提示：开源一键部署使用 `open-dev` 配置，默认连接 compose 中的 `mongo` 服务，并显式在 Mongo 连接字符串上添加 `retryWrites=false&retryReads=false` 以兼容单机 Mongo（非副本集）。如果你改用外部 Mongo，请参考下方示例。
+
 ## MongoDB 说明
 - 默认 compose 已包含 `mongo` 服务（镜像：mongo:6.0），开源一键部署默认使用 dev 模式、无认证。
 - 如你已有外部 MongoDB，可：
   - 注释/删除 `docker-compose.yml` 中的 `mongo` 服务；
-  - 在 `deploy/open/production.env` 设置 `SPRING_DATA_MONGODB_URI` 指向外部实例（例如：`mongodb://host:27017/ainovel`）。
+  - 在 `deploy/open/production.env` 设置 `SPRING_DATA_MONGODB_URI` 指向外部实例；单机外部 Mongo 建议示例：
+    - `SPRING_DATA_MONGODB_URI=mongodb://host:27017/ainovel?retryWrites=false&retryReads=false`
+    - 如你的 Mongo 是副本集，可去掉 `retryWrites/Reads=false` 并加上 `replicaSet=xxx`。
 
 ## 重要环境变量（节选）
 - 端口与 JVM：`SERVER_PORT`、`JVM_XMS`、`JVM_XMX`

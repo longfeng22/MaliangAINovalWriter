@@ -1274,6 +1274,43 @@ public class NovelController extends ReactiveBaseController {
     }
     
     /**
+     * 原子化添加章节和场景 - 在一个事务中同时创建章节和场景，避免数据不一致
+     *
+     * @param requestData 包含小说ID、卷ID、章节信息和场景信息的请求数据
+     * @return 包含新创建章节和场景的响应数据
+     */
+    @PostMapping("/add-chapter-with-scene")
+    public Mono<Map<String, Object>> addChapterWithScene(@RequestBody Map<String, Object> requestData) {
+        String novelId = (String) requestData.get("novelId");
+        String actId = (String) requestData.get("actId");
+        String chapterTitle = (String) requestData.get("chapterTitle");
+        String sceneTitle = (String) requestData.get("sceneTitle");
+        String sceneSummary = (String) requestData.get("sceneSummary");
+        String sceneContent = (String) requestData.get("sceneContent");
+        
+        if (StringUtils.isEmpty(novelId) || StringUtils.isEmpty(actId)) {
+            return Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST, "小说ID和卷ID不能为空"));
+        }
+        
+        if (StringUtils.isEmpty(chapterTitle)) {
+            chapterTitle = "AI生成章节";
+        }
+        
+        if (StringUtils.isEmpty(sceneTitle)) {
+            sceneTitle = "AI生成场景";
+        }
+        
+        log.info("原子化添加章节和场景: novelId={}, actId={}, chapterTitle={}, sceneTitle={}", 
+                novelId, actId, chapterTitle, sceneTitle);
+        
+        return novelService.addChapterWithScene(novelId, actId, chapterTitle, sceneTitle, sceneSummary, sceneContent)
+                .doOnSuccess(result -> log.info("原子化添加章节和场景成功: novelId={}, chapterId={}, sceneId={}", 
+                        novelId, result.get("chapterId"), result.get("sceneId")))
+                .doOnError(e -> log.error("原子化添加章节和场景失败: novelId={}, actId={}, error={}", 
+                        novelId, actId, e.getMessage()));
+    }
+    
+    /**
      * 删除卷 - 细粒度操作：只接收小说ID和卷ID
      *
      * @param requestData 包含小说ID和卷ID的请求数据

@@ -14,7 +14,7 @@ spring:
     name: ai-novel-server
   data:
     mongodb:
-      uri: mongodb://${MONGO_USER:${MONGO_USERNAME:}}:${MONGO_PASSWORD}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/${MONGO_DATABASE:ainovel}?authSource=${MONGO_AUTH_DB:admin}
+      uri: mongodb://${MONGO_USER:${MONGO_USERNAME:}}:${MONGO_PASSWORD}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/${MONGO_DATABASE:ainovel}?authSource=${MONGO_AUTH_DB:admin}&retryWrites=true&retryReads=true&replicaSet=rs0&w=majority
       auto-index-creation: true
       database: ${MONGO_DATABASE:ainovel}
       authentication-database: ${MONGO_AUTH_DB:admin}
@@ -24,6 +24,7 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
   rabbitmq:
+    enabled: false
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
@@ -37,9 +38,14 @@ spring:
         prefetch: 5
         concurrency: 8
         max-concurrency: 16
+        auto-startup: false
+        missingQueuesFatal: false
         retry:
           enabled: true
           max-attempts: 3
+      direct:
+        auto-startup: false
+        missingQueuesFatal: false
     connection-timeout: 10000
     template:
       mandatory: true
@@ -56,6 +62,7 @@ logging:
     com.ainovel.server: INFO
     com.ainovel.server.task: WARN
     org.springframework.amqp: WARN
+    com.ainovel.server.security.JwtAuthenticationManager: ERROR
   request: false
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{traceId:-}] [%X{userId:-}] [%thread] %logger{36} - %msg%n"
@@ -180,12 +187,13 @@ ai:
 
 jasypt:
   encryptor:
-    password: ${JASYPT_PASSWORD:MaliangAI_SecretKey_PleaseChangeThis_2025}
+    password: ${JASYPT_PASSWORD:AINoval_Secure_Encryption_Key_2025}
     algorithm: PBEWITHHMACSHA512ANDAES_256
     iv-generator-classname: org.jasypt.iv.RandomIvGenerator
 
 # 生产环境限流配置
 task:
+  transport: local
   ratelimiter:
     type: ${RATE_LIMITER_TYPE:memory}
     

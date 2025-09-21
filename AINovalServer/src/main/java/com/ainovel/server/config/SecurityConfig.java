@@ -56,7 +56,7 @@ public class SecurityConfig {
                     "/api/v1/prompts/**", "/api/v1/prompt-aggregation/**", "/api/v1/prompt-templates/**", "/api/v1/content-provider/**",
                     "/api/v1/admin/**","/api/v1/public-models/**","/api/v1/credits/**","/api/v1/preset-aggregation/**", "/api/v1/presets/**",
                     "/api/v1/setting-histories/**","/api/v1/setting-generation/**","/api/v1/test/setting-generation/**","/api/v1/compose/**","/api/v1/tool-orchestration/**",
-                    "/api/v1/analytics/**", "/api/v1/payments/**")
+                    "/api/v1/analytics/**", "/api/v1/payments/**","/api/v1/models/**","/api/v1/providers/**")
         );
         
         // 添加认证失败处理器
@@ -94,6 +94,11 @@ public class SecurityConfig {
                 .pathMatchers("/api/v1/credit-packs/**").permitAll()
                 // 设定生成：放开 GET /strategies 供游客拉取公共策略
                 .pathMatchers(HttpMethod.GET, "/api/v1/setting-generation/strategies").permitAll()
+
+                                // AI提供商能力/测试/默认端点：放行
+                .pathMatchers("/api/v1/providers/**").permitAll()
+                                // AI提供商能力/测试/默认端点：放行
+                                .pathMatchers("/api/v1/models/**").permitAll()
                  // 需要认证的端点
                 .pathMatchers("/api/v1/setting-generation/**").authenticated()
                 .pathMatchers("/api/v1/test/setting-generation/**").authenticated()

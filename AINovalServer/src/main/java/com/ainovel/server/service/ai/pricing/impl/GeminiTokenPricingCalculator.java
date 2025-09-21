@@ -36,42 +36,31 @@ public class GeminiTokenPricingCalculator extends AbstractTokenPricingCalculator
      */
     public Mono<List<ModelPricing>> getDefaultGeminiPricing() {
         List<ModelPricing> defaultPricing = List.of(
-                // Gemini 1.5 Flash - 最经济的模型
-                createDefaultPricing("gemini-1.5-flash", "Gemini 1.5 Flash", 
-                        0.00015, 0.0006, 1000000, "快速高效的多模态模型"),
-                
-                createDefaultPricing("gemini-1.5-flash-001", "Gemini 1.5 Flash 001", 
-                        0.00015, 0.0006, 1000000, "Gemini 1.5 Flash稳定版本"),
-                
-                createDefaultPricing("gemini-1.5-flash-002", "Gemini 1.5 Flash 002", 
-                        0.00015, 0.0006, 1000000, "Gemini 1.5 Flash最新版本"),
-                
-                // Gemini 1.5 Pro - 性能最强的模型
-                createDefaultPricing("gemini-1.5-pro", "Gemini 1.5 Pro", 
-                        0.00125, 0.005, 2000000, "最强大的Gemini模型，支持超长上下文"),
-                
-                createDefaultPricing("gemini-1.5-pro-001", "Gemini 1.5 Pro 001", 
-                        0.00125, 0.005, 2000000, "Gemini 1.5 Pro稳定版本"),
-                
-                createDefaultPricing("gemini-1.5-pro-002", "Gemini 1.5 Pro 002", 
-                        0.00125, 0.005, 2000000, "Gemini 1.5 Pro最新版本"),
-                
-                // Gemini 1.0 Pro - 第一代模型
-                createDefaultPricing("gemini-1.0-pro", "Gemini 1.0 Pro", 
-                        0.0005, 0.0015, 32760, "第一代Gemini Pro模型"),
-                
-                createDefaultPricing("gemini-1.0-pro-001", "Gemini 1.0 Pro 001", 
-                        0.0005, 0.0015, 32760, "Gemini 1.0 Pro稳定版本"),
-                
-                createDefaultPricing("gemini-1.0-pro-vision", "Gemini 1.0 Pro Vision", 
-                        0.00025, 0.0005, 16384, "支持视觉输入的Gemini模型"),
-                
-                // Gemini Pro实验版本
-                createDefaultPricing("gemini-pro", "Gemini Pro", 
-                        0.0005, 0.0015, 32760, "Gemini Pro通用版本"),
-                
-                createDefaultPricing("gemini-pro-vision", "Gemini Pro Vision", 
-                        0.00025, 0.0005, 16384, "Gemini Pro视觉版本")
+                // 2.5 Pro（≤200K / >200K 提示分段）
+                createDefaultPricing("gemini-2.5-pro", "Gemini 2.5 Pro",
+                        0.00125, 0.0100, 2_000_000, "2.5 Pro：输入≤200K $1.25/百万，>200K $2.50/百万；输出≤200K $10/百万，>200K $15/百万"),
+
+                // 2.5 Flash（文本/图像/视频统一输入价；音频不同价）
+                createDefaultPricing("gemini-2.5-flash", "Gemini 2.5 Flash",
+                        0.00030, 0.0025, 1_000_000, "2.5 Flash：输入文字/图片/视频 $0.30/百万，音频 $1.00/百万；输出 $2.50/百万"),
+                createDefaultPricing("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite",
+                        0.00010, 0.00040, 1_000_000, "2.5 Flash-Lite：输入文字/图片/视频 $0.10/百万，音频 $0.30/百万；输出 $0.40/百万"),
+
+                // 2.0 Flash（文本/图像/视频 $0.10；音频 $0.70；输出 $0.40）
+                createDefaultPricing("gemini-2.0-flash", "Gemini 2.0 Flash",
+                        0.00010, 0.00040, 1_000_000, "2.0 Flash：输入文字/图片/视频 $0.10/百万，音频 $0.70/百万；输出 $0.40/百万"),
+                createDefaultPricing("gemini-2.0-flash-lite", "Gemini 2.0 Flash-Lite",
+                        0.000075, 0.00030, 1_000_000, "2.0 Flash-Lite：输入 $0.075/百万；输出 $0.30/百万"),
+
+                // 1.5 Pro（≤128K / >128K 提示分段）
+                createDefaultPricing("gemini-1.5-pro", "Gemini 1.5 Pro",
+                        0.00125, 0.0050, 2_000_000, "1.5 Pro：输入≤128K $1.25/百万，>128K $2.50/百万；输出≤128K $5/百万，>128K $10/百万"),
+
+                // 1.5 Flash（≤128K / >128K 提示分段）
+                createDefaultPricing("gemini-1.5-flash", "Gemini 1.5 Flash",
+                        0.000075, 0.00030, 1_000_000, "1.5 Flash：输入≤128K $0.075/百万，>128K $0.15/百万；输出≤128K $0.30/百万，>128K $0.60/百万"),
+                createDefaultPricing("gemini-1.5-flash-8b", "Gemini 1.5 Flash-8B",
+                        0.0000375, 0.00015, 1_000_000, "1.5 Flash-8B：输入≤128K $0.0375/百万，>128K $0.075/百万；输出≤128K $0.15/百万，>128K $0.30/百万")
         );
         
         // 添加免费额度信息
@@ -88,22 +77,13 @@ public class GeminiTokenPricingCalculator extends AbstractTokenPricingCalculator
     private void addFreeTierInfo(List<ModelPricing> pricingList) {
         pricingList.forEach(pricing -> {
             Map<String, Double> additionalPricing = new HashMap<>();
-            
-            // Gemini API 免费额度
-            if (pricing.getModelId().contains("1.5-flash")) {
-                additionalPricing.put("free_tier_requests_per_minute", 15.0);
-                additionalPricing.put("free_tier_requests_per_day", 1500.0);
-                additionalPricing.put("free_tier_tokens_per_minute", 1000000.0);
-            } else if (pricing.getModelId().contains("1.5-pro")) {
-                additionalPricing.put("free_tier_requests_per_minute", 2.0);
-                additionalPricing.put("free_tier_requests_per_day", 50.0);
-                additionalPricing.put("free_tier_tokens_per_minute", 32000.0);
-            } else if (pricing.getModelId().contains("1.0-pro")) {
-                additionalPricing.put("free_tier_requests_per_minute", 60.0);
-                additionalPricing.put("free_tier_requests_per_day", 1440.0);
-                additionalPricing.put("free_tier_tokens_per_minute", 120000.0);
+            // 免费层（RPD/RPM）示意值（可按需调整或移除）
+            if (pricing.getModelId().contains("2.5-flash")) {
+                additionalPricing.put("free_rpd", 1500.0);
             }
-            
+            if (pricing.getModelId().contains("2.0-flash")) {
+                additionalPricing.put("free_rpd", 500.0);
+            }
             pricing.setAdditionalPricing(additionalPricing);
         });
     }

@@ -6,11 +6,9 @@
  */
 import 'dart:async';
 import 'dart:convert';
-import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:ainoval/utils/logger.dart';
-import 'package:ainoval/utils/quill_helper.dart';
 
 /// 优化的文档解析器
 /// 
@@ -31,7 +29,6 @@ class DocumentParser {
   
   // 解析队列配置
   static const int _maxConcurrentParsing = 5; // 从3增加到5个并发解析
-  static const Duration _parseTimeout = Duration(seconds: 8); // 从5秒增加到8秒
   
   // 缓存存储
   final Map<String, _CachedDocument> _documentCache = {};
@@ -192,12 +189,14 @@ class DocumentParser {
       return Document.fromJson([{'insert': '\n'}]);
     }
     
-    // 尝试从缓存获取
+    // 尝试从缓存获取（返回副本，避免共享可变Document导致污染）
     if (useCache && _documentCache.containsKey(key)) {
       _updateCacheAccess(key);
       _cacheHits++;
       AppLogger.d('DocumentParser', '缓存命中: $key');
-      return _documentCache[key]!.document;
+      final cached = _documentCache[key]!;
+      // 返回一个新的Document实例副本
+      return Document.fromJson(cached.document.toDelta().toJson());
     }
 
     _cacheMisses++;
@@ -210,7 +209,8 @@ class DocumentParser {
         if (useCache) {
           _storeInCache(key, simpleDocument, content.length);
         }
-        return simpleDocument;
+        // 返回副本
+        return Document.fromJson(simpleDocument.toDelta().toJson());
       } catch (e) {
         AppLogger.e('DocumentParser', '简化解析失败: $key', e);
         return Document.fromJson([{'insert': '内容过大，解析失败\n'}]);
@@ -224,7 +224,8 @@ class DocumentParser {
       if (useCache) {
         _storeInCache(key, quickDocument, content.length);
       }
-      return quickDocument;
+      // 返回副本
+      return Document.fromJson(quickDocument.toDelta().toJson());
     }
     
     // 创建解析请求
@@ -314,7 +315,8 @@ class DocumentParser {
       }
       
       AppLogger.d('DocumentParser', '解析完成: ${request.cacheKey}, 耗时: ${parseTime}ms');
-      request.completer.complete(document);
+      // 返回副本
+      request.completer.complete(Document.fromJson(document.toDelta().toJson()));
       
     } catch (e, stackTrace) {
       stopwatch.stop();
@@ -329,7 +331,8 @@ class DocumentParser {
           _storeInCache(request.cacheKey, fallbackDocument, request.content.length);
         }
         
-        request.completer.complete(fallbackDocument);
+        // 返回副本
+        request.completer.complete(Document.fromJson(fallbackDocument.toDelta().toJson()));
         AppLogger.i('DocumentParser', '简化解析备用方案成功: ${request.cacheKey}');
       } catch (fallbackError) {
         // 最后的备用方案：创建错误文档
@@ -374,22 +377,40 @@ class DocumentParser {
     final length = content.length;
     if (length == 0) return 'doc_empty_0';
     
-    // 采样关键字符位置，避免完整内容哈希
-    final sample1 = content.codeUnitAt(0);
-    final sample2 = length > 10 ? content.codeUnitAt(length ~/ 4) : 0;
-    final sample3 = length > 20 ? content.codeUnitAt(length ~/ 2) : 0;
-    final sample4 = length > 30 ? content.codeUnitAt(length * 3 ~/ 4) : 0;
-    final sample5 = content.codeUnitAt(length - 1);
+    // 🚀 修复：使用更准确的哈希算法，避免缓存冲突
+    // 对于短内容(< 1000字符)，使用完整内容的哈希确保唯一性
+    if (length < 1000) {
+      // 使用简单的字符串哈希，确保内容完全相同才有相同的缓存键
+      int hash = 0;
+      for (int i = 0; i < length; i++) {
+        hash = (hash * 31 + content.codeUnitAt(i)) & 0x7FFFFFFF;
+      }
+      return 'doc_${length}_${hash}_full';
+    }
     
-    // 使用字符码点和生成稳定哈希
+    // 对于长内容，使用采样方式减少计算开销
+    // 但增加采样点数量以减少冲突
+    final samples = <int>[];
+    
+    // 采样更多的特征位置
+    samples.add(content.codeUnitAt(0));
+    samples.add(content.codeUnitAt(length - 1));
+    
+    // 按照固定间隔采样，确保不同内容有不同的特征
+    final sampleInterval = (length / 16).ceil();
+    for (int i = sampleInterval; i < length - 1; i += sampleInterval) {
+      samples.add(content.codeUnitAt(i));
+      // 限制采样点数量避免过多计算
+      if (samples.length >= 20) break;
+    }
+    
+    // 生成基于所有采样点的哈希
     int stableHash = length;
-    stableHash = (stableHash * 31 + sample1) & 0x7FFFFFFF;
-    stableHash = (stableHash * 31 + sample2) & 0x7FFFFFFF;
-    stableHash = (stableHash * 31 + sample3) & 0x7FFFFFFF;
-    stableHash = (stableHash * 31 + sample4) & 0x7FFFFFFF;
-    stableHash = (stableHash * 31 + sample5) & 0x7FFFFFFF;
+    for (final sample in samples) {
+      stableHash = (stableHash * 31 + sample) & 0x7FFFFFFF;
+    }
     
-    return 'doc_${length}_${stableHash}';
+    return 'doc_${length}_${stableHash}_sampled';
   }
 
   /// 存储到缓存
@@ -397,8 +418,9 @@ class DocumentParser {
     // 检查缓存大小限制
     _enforceCacheLimits();
     
+    // 存储副本，避免外部修改污染缓存
     final cachedDoc = _CachedDocument(
-      document: document,
+      document: Document.fromJson(document.toDelta().toJson()),
       contentSize: contentSize,
       accessTime: DateTime.now(),
     );
@@ -483,7 +505,7 @@ class DocumentParser {
               break;
             }
             // 检查是否有样式属性
-            if (op is Map && op.containsKey('attributes')) {
+            if (op.containsKey('attributes')) {
               hasStyleAttributes = true;
               final attributes = op['attributes'] as Map<String, dynamic>?;
               if (attributes != null) {
@@ -559,11 +581,6 @@ class DocumentParser {
     }
   }
 
-  /// 优化缓存键生成 - 使用更稳定的hash算法
-  String _generateCacheKeyOptimized(String content) {
-    // 统一使用新的稳定缓存键生成方法
-    return _generateCacheKey(content);
-  }
 
   /// 检查缓存健康状况
   static Map<String, dynamic> checkCacheHealth() {
@@ -632,7 +649,6 @@ class DocumentParser {
     List<String>? priorityContents,
     int warmupSize = 10,
   }) async {
-    final parser = DocumentParser();
     
     AppLogger.i('DocumentParser', '开始缓存预热...');
     

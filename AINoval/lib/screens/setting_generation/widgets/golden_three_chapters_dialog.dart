@@ -18,16 +18,10 @@ import 'package:ainoval/utils/context_selection_helper.dart';
 import 'package:ainoval/models/context_selection_models.dart';
 import 'package:ainoval/config/app_config.dart';
 import 'package:ainoval/blocs/setting_generation/setting_generation_bloc.dart';
-import 'package:ainoval/blocs/setting_generation/setting_generation_state.dart';
-import 'package:ainoval/services/api_service/repositories/setting_generation_repository.dart';
-// import 'package:ainoval/blocs/novel_list/novel_list_bloc.dart';
-import 'package:ainoval/screens/editor/editor_screen.dart';
-import 'package:ainoval/models/novel_summary.dart';
 import 'package:ainoval/blocs/setting_generation/setting_generation_event.dart';
 import 'package:ainoval/utils/logger.dart';
 import 'package:ainoval/models/compose_preview.dart';
 import 'dart:async';
-import 'package:ainoval/models/setting_generation_session.dart';
 
 import 'package:ainoval/widgets/common/compose/chapter_count_field.dart';
 import 'package:ainoval/widgets/common/compose/chapter_length_field.dart';
@@ -70,15 +64,15 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
   bool _includeWholeSettingTree = true; // 是否将整个设定树纳入上下文
 
   // 章节参数
-  String _mode = 'chapters'; // outline | chapters | outline_plus_chapters
+  String _mode = 'outline_plus_chapters'; // outline | chapters | outline_plus_chapters
   int _chapterCount = 3;
-  String _includeDepth = 'summaryOnly';
-  String? _lengthPreset; // short|medium|long
+  String _includeDepth = 'full'; // 默认全文
+  String? _lengthPreset = 'long'; // 默认长
   String _customLength = '';
   double _temperature = 0.7;
   double _topP = 0.9;
   String? _promptTemplateId;
-  String? _s2sTemplateId; // 仅“先大纲后章节”使用的 SUMMARY_TO_SCENE 模板ID
+  String? _s2sTemplateId; // 仅"先大纲后章节"使用的 SUMMARY_TO_SCENE 模板ID
 
   OverlayEntry? _tempOverlay;
   bool _previewRequested = false;
@@ -114,11 +108,11 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
     } catch (_) {}
   }
 
-  int _mapLengthToMaxTokens(String? preset, String custom) {
-    // 简单映射：可按模型上限调整
-    if (preset == 'short') return 1500;
-    if (preset == 'medium') return 3000;
-    if (preset == 'long') return 4500;
+  int _mapLengthToWordCount(String? preset, String custom) {
+    // 字数映射：短中长分别对应1000、2000、3000字
+    if (preset == 'short') return 1000;
+    if (preset == 'medium') return 2000;
+    if (preset == 'long') return 3000;
     // 自定义数字（若用户直接输入数字）
     final n = int.tryParse(custom.trim());
     if (n != null && n > 0) return n;
@@ -142,9 +136,9 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
               onSelected: (_) => setState(() => _mode = 'outline'),
             ),
             ChoiceChip(
-              label: const Text('直接生成章节'),
+              label: const Text('直接生成章节（暂时禁用）'),
               selected: _mode == 'chapters',
-              onSelected: (_) => setState(() => _mode = 'chapters'),
+              onSelected: null, // 禁用该选项
             ),
             ChoiceChip(
               label: const Text('先大纲后章节'),
@@ -159,7 +153,7 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
               ? '只输出分章节大纲（不生成正文）'
               : _mode == 'outline_plus_chapters'
                   ? '先输出大纲，再按大纲逐章生成正文'
-                  : '直接生成章节概要与正文',
+                  : '直接生成章节概要与正文（当前不可用）',
           style: Theme.of(context).textTheme.bodySmall,
         )
       ],
@@ -359,13 +353,14 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
       parameters: {
         'mode': _mode,
         'chapterCount': _chapterCount,
-        'length': _lengthPreset ?? _customLength,
+        'length': _mapLengthToWordCount(_lengthPreset, _customLength).toString(),
         'include': _includeDepth,
         'includeWholeSettingTree': _includeWholeSettingTree,
         'temperature': _temperature,
         'topP': _topP,
         'promptTemplateId': _promptTemplateId,
         'enableSmartContext': _enableSmartContext,
+        'maxTokens': 100000,
         if (_mode == 'outline_plus_chapters' && _s2sTemplateId != null)
           's2sTemplateId': _s2sTemplateId,
       },
@@ -409,15 +404,15 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
       };
 
       final commonParams = {
-        'length': _lengthPreset ?? _customLength,
+        'length': _mapLengthToWordCount(_lengthPreset, _customLength).toString(), // 传递字数
         'include': _includeDepth,
         'includeWholeSettingTree': _includeWholeSettingTree,
         'temperature': _temperature,
         'topP': _topP,
         'promptTemplateId': _promptTemplateId,
         'enableSmartContext': _enableSmartContext,
-        // 根据长度预设/自定义映射合理的maxTokens，减少LENGTH截断
-        'maxTokens': _mapLengthToMaxTokens(_lengthPreset, _customLength),
+        // maxTokens固定为100000，不再与长度绑定
+        'maxTokens': 100000,
       };
 
       switch (_mode) {

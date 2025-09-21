@@ -158,8 +158,19 @@ public class LocalTaskTransport implements TaskTransport {
     @SuppressWarnings("unchecked")
     private Mono<Void> handleResult(BackgroundTask task, ExecutionResult<?> result) {
         if (result.isSuccess()) {
-            eventPublisher.publishEvent(new TaskCompletedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), result.getResult()));
-            return taskStateService.recordCompletion(task.getId(), result.getResult());
+            try {
+                // 父任务 CONTINUE_WRITING_CONTENT 的初始结果通常为 RUNNING，不应立即标记完成
+                if ("CONTINUE_WRITING_CONTENT".equals(task.getTaskType()) && result.getResult() instanceof com.ainovel.server.task.dto.continuecontent.ContinueWritingContentResult cResult) {
+                    if (cResult.getStatus() == TaskStatus.RUNNING) {
+                        log.info("父任务初始结果为 RUNNING，记录进度，不发布 Completed: taskId={}", task.getId());
+                        return taskStateService.recordProgress(task.getId(), cResult);
+                    }
+                }
+            } catch (Throwable ignore) {}
+
+            // 其他任务：先持久化，再发布 Completed 事件（与 Rabbit 流程保持一致）
+            return taskStateService.recordCompletion(task.getId(), result.getResult())
+                    .doOnSuccess(v -> eventPublisher.publishEvent(new TaskCompletedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), result.getResult())));
         } else if (result.isRetryable()) {
             long delay = getRetryDelay(task.getRetryCount());
             int nextRetry = task.getRetryCount() + 1;

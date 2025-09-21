@@ -45,6 +45,8 @@ class SettingGenerationReady extends SettingGenerationState {
   final String? activeSessionId;
   final String adjustmentPrompt;
   final String viewMode;
+  // 🔧 新增：黄金三章状态标志
+  final ComposeReadyInfo? composeReady;
 
   const SettingGenerationReady({
     required this.strategies,
@@ -52,6 +54,7 @@ class SettingGenerationReady extends SettingGenerationState {
     this.activeSessionId,
     this.adjustmentPrompt = '',
     this.viewMode = 'compact',
+    this.composeReady,
   });
 
   @override
@@ -61,6 +64,7 @@ class SettingGenerationReady extends SettingGenerationState {
         activeSessionId,
         adjustmentPrompt,
         viewMode,
+        composeReady,
       ];
 
   SettingGenerationReady copyWith({
@@ -69,6 +73,7 @@ class SettingGenerationReady extends SettingGenerationState {
     String? activeSessionId,
     String? adjustmentPrompt,
     String? viewMode,
+    ComposeReadyInfo? composeReady,
   }) {
     return SettingGenerationReady(
       strategies: strategies ?? this.strategies,
@@ -76,6 +81,7 @@ class SettingGenerationReady extends SettingGenerationState {
       activeSessionId: activeSessionId ?? this.activeSessionId,
       adjustmentPrompt: adjustmentPrompt ?? this.adjustmentPrompt,
       viewMode: viewMode ?? this.viewMode,
+      composeReady: composeReady ?? this.composeReady,
     );
   }
 }
@@ -141,6 +147,8 @@ class SettingGenerationInProgress extends SettingGenerationState {
   final List<event_model.NodeCreatedEvent> pendingNodes;
   // 粘性警告（例如余额不足提醒），不会被后续普通事件覆盖
   final String? stickyWarning;
+  // 🔧 新增：黄金三章状态标志
+  final ComposeReadyInfo? composeReady;
 
   const SettingGenerationInProgress({
     required this.strategies,
@@ -162,6 +170,7 @@ class SettingGenerationInProgress extends SettingGenerationState {
     this.renderedNodeIds = const {},
     this.pendingNodes = const [],
     this.stickyWarning,
+    this.composeReady,
   });
 
   @override
@@ -184,6 +193,7 @@ class SettingGenerationInProgress extends SettingGenerationState {
     renderQueue,
     renderedNodeIds,
     stickyWarning,
+    composeReady,
   ];
 
   SettingGenerationInProgress copyWith({
@@ -206,6 +216,7 @@ class SettingGenerationInProgress extends SettingGenerationState {
     Set<String>? renderedNodeIds,
     List<event_model.NodeCreatedEvent>? pendingNodes,
     String? stickyWarning,
+    ComposeReadyInfo? composeReady,
   }) {
     return SettingGenerationInProgress(
       strategies: strategies ?? this.strategies,
@@ -227,6 +238,7 @@ class SettingGenerationInProgress extends SettingGenerationState {
       renderedNodeIds: renderedNodeIds ?? this.renderedNodeIds,
       pendingNodes: pendingNodes ?? this.pendingNodes,
       stickyWarning: stickyWarning ?? this.stickyWarning,
+      composeReady: composeReady ?? this.composeReady,
     );
   }
 
@@ -265,6 +277,8 @@ class SettingGenerationCompleted extends SettingGenerationState {
   final Map<String, NodeRenderInfo> nodeRenderStates;
   final Set<String> renderedNodeIds;
   final String? stickyWarning;
+  // 🔧 新增：黄金三章状态标志
+  final ComposeReadyInfo? composeReady;
 
   const SettingGenerationCompleted({
     required this.strategies,
@@ -282,6 +296,7 @@ class SettingGenerationCompleted extends SettingGenerationState {
     this.nodeRenderStates = const {},
     this.renderedNodeIds = const {},
     this.stickyWarning,
+    this.composeReady,
   });
 
   @override
@@ -301,6 +316,7 @@ class SettingGenerationCompleted extends SettingGenerationState {
     nodeRenderStates,
     renderedNodeIds,
     stickyWarning,
+    composeReady,
   ];
 
   SettingGenerationCompleted copyWith({
@@ -319,6 +335,7 @@ class SettingGenerationCompleted extends SettingGenerationState {
     Map<String, NodeRenderInfo>? nodeRenderStates,
     Set<String>? renderedNodeIds,
     String? stickyWarning,
+    ComposeReadyInfo? composeReady,
   }) {
     return SettingGenerationCompleted(
       strategies: strategies ?? this.strategies,
@@ -336,6 +353,7 @@ class SettingGenerationCompleted extends SettingGenerationState {
       nodeRenderStates: nodeRenderStates ?? this.nodeRenderStates,
       renderedNodeIds: renderedNodeIds ?? this.renderedNodeIds,
       stickyWarning: stickyWarning ?? this.stickyWarning,
+      composeReady: composeReady ?? this.composeReady,
     );
   }
 
@@ -370,6 +388,8 @@ class SettingGenerationNodeUpdating extends SettingGenerationState {
   // 渲染状态管理字段
   final Map<String, NodeRenderInfo> nodeRenderStates;
   final Set<String> renderedNodeIds;
+  // 🔧 新增：黄金三章状态标志
+  final ComposeReadyInfo? composeReady;
 
   const SettingGenerationNodeUpdating({
     required this.strategies,
@@ -390,6 +410,7 @@ class SettingGenerationNodeUpdating extends SettingGenerationState {
     this.isUpdating = false,
     this.nodeRenderStates = const {},
     this.renderedNodeIds = const {},
+    this.composeReady,
   });
 
   @override
@@ -412,6 +433,7 @@ class SettingGenerationNodeUpdating extends SettingGenerationState {
     isUpdating,
     nodeRenderStates,
     renderedNodeIds,
+    composeReady,
   ];
 
   SettingGenerationNodeUpdating copyWith({
@@ -433,6 +455,7 @@ class SettingGenerationNodeUpdating extends SettingGenerationState {
     bool? isUpdating,
     Map<String, NodeRenderInfo>? nodeRenderStates,
     Set<String>? renderedNodeIds,
+    ComposeReadyInfo? composeReady,
   }) {
     return SettingGenerationNodeUpdating(
       strategies: strategies ?? this.strategies,
@@ -453,6 +476,7 @@ class SettingGenerationNodeUpdating extends SettingGenerationState {
       isUpdating: isUpdating ?? this.isUpdating,
       nodeRenderStates: nodeRenderStates ?? this.nodeRenderStates,
       renderedNodeIds: renderedNodeIds ?? this.renderedNodeIds,
+      composeReady: composeReady ?? this.composeReady,
     );
   }
 
@@ -496,6 +520,8 @@ class SettingGenerationError extends SettingGenerationState {
   // 新增：保留会话列表和当前活跃会话 ID，避免 UI 在错误时丢失历史记录
   final List<SettingGenerationSession> sessions;
   final String? activeSessionId;
+  // 🔧 新增：黄金三章状态标志
+  final ComposeReadyInfo? composeReady;
 
   const SettingGenerationError({
     required this.message,
@@ -504,6 +530,7 @@ class SettingGenerationError extends SettingGenerationState {
     this.isRecoverable = true,
     this.sessions = const [],
     this.activeSessionId,
+    this.composeReady,
   });
 
   @override
@@ -514,6 +541,7 @@ class SettingGenerationError extends SettingGenerationState {
     isRecoverable,
     sessions,
     activeSessionId,
+    composeReady,
   ];
 
   SettingGenerationError copyWith({
@@ -523,6 +551,7 @@ class SettingGenerationError extends SettingGenerationState {
     bool? isRecoverable,
     List<SettingGenerationSession>? sessions,
     String? activeSessionId,
+    ComposeReadyInfo? composeReady,
   }) {
     return SettingGenerationError(
       message: message ?? this.message,
@@ -531,6 +560,7 @@ class SettingGenerationError extends SettingGenerationState {
       isRecoverable: isRecoverable ?? this.isRecoverable,
       sessions: sessions ?? this.sessions,
       activeSessionId: activeSessionId ?? this.activeSessionId,
+      composeReady: composeReady ?? this.composeReady,
     );
   }
 }

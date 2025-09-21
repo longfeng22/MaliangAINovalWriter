@@ -1,9 +1,11 @@
-import 'package:ainoval/models/user_ai_model_config_model.dart';
 import 'package:ainoval/services/api_service/repositories/user_ai_model_config_repository.dart';
 import 'package:ainoval/utils/logger.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:ainoval/widgets/common/top_toast.dart';
+import 'package:ainoval/widgets/common/model_display_selector.dart';
+import 'package:ainoval/models/unified_ai_model.dart';
+import 'package:ainoval/widgets/common/form_dialog_template.dart';
 
 /// 自动续写表单组件
 class ContinueWritingForm extends StatefulWidget {
@@ -29,17 +31,28 @@ class ContinueWritingForm extends StatefulWidget {
 class _ContinueWritingFormState extends State<ContinueWritingForm> {
   final _formKey = GlobalKey<FormState>();
   final _numberOfChaptersController = TextEditingController(text: '1');
-  final _contextChapterCountController = TextEditingController(text: '3');
+  final _contextChapterCountController = TextEditingController(text: '5');
   final _customContextController = TextEditingController();
   final _writingStyleController = TextEditingController();
 
-  List<UserAIModelConfigModel> _aiConfigs = [];
   bool _isLoadingConfigs = true;
   bool _isSubmitting = false;
 
+  // 滚动相关常量
+  static const double _maxFormHeight = 600.0; // 表单最大高度
+  static const double _cardBorderRadius = 16.0; // 卡片圆角半径
+
   String? _selectedSummaryConfigId;
   String? _selectedContentConfigId;
-  String _startContextMode = 'AUTO'; // 默认为自动模式
+  String _startContextMode = 'LAST_N_CHAPTERS'; // 默认为最近N章模式
+  
+  // 使用统一模型选择组件的选中项
+  UnifiedAIModel? _summaryModel;
+  UnifiedAIModel? _contentModel;
+
+  // 可选：提示词模板（UI 功能，当前后端未接收此字段）
+  String? _summaryPromptTemplateId;
+  String? _contentPromptTemplateId;
   
   @override
   void initState() {
@@ -68,13 +81,15 @@ class _ContinueWritingFormState extends State<ContinueWritingForm> {
       );
       
       setState(() {
-        _aiConfigs = configs;
         _isLoadingConfigs = false;
         
         // 如果有配置，预选第一个
         if (configs.isNotEmpty) {
           _selectedSummaryConfigId = configs.first.id;
           _selectedContentConfigId = configs.first.id;
+          // 同步到统一模型
+          _summaryModel = PrivateAIModel(configs.first);
+          _contentModel = PrivateAIModel(configs.first);
         }
       });
     } catch (e) {
@@ -118,6 +133,21 @@ class _ContinueWritingFormState extends State<ContinueWritingForm> {
       if (_writingStyleController.text.isNotEmpty) {
         parameters['writingStyle'] = _writingStyleController.text;
       }
+      // 追加：提示词模板（后端暂未使用，预留）
+      if (_summaryPromptTemplateId != null && _summaryPromptTemplateId!.isNotEmpty) {
+        parameters['summaryPromptTemplateId'] = _summaryPromptTemplateId;
+      }
+      if (_contentPromptTemplateId != null && _contentPromptTemplateId!.isNotEmpty) {
+        parameters['contentPromptTemplateId'] = _contentPromptTemplateId;
+      }
+      
+      // 公共模型配置ID（从统一模型选择器中获取）
+      if (_summaryModel != null && _summaryModel!.isPublic) {
+        parameters['summaryPublicModelConfigId'] = _summaryModel!.id;
+      }
+      if (_contentModel != null && _contentModel!.isPublic) {
+        parameters['contentPublicModelConfigId'] = _contentModel!.id;
+      }
       
       // 提交表单
       widget.onSubmit(parameters);
@@ -136,43 +166,62 @@ class _ContinueWritingFormState extends State<ContinueWritingForm> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final screenHeight = MediaQuery.of(context).size.height;
+    final availableHeight = screenHeight * 0.8; // 使用屏幕高度的80%
+    final formHeight = availableHeight < _maxFormHeight ? availableHeight : _maxFormHeight;
     
     return Card(
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(_cardBorderRadius),
       ),
       elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: formHeight,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 标题
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '自动续写设置',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: widget.onCancel,
-                  splashRadius: 20,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            
-            // 表单
-            Form(
-              key: _formKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            // 固定标题部分，不参与滚动
+            Padding(
+              padding: const EdgeInsets.only(
+                left: 24.0,
+                right: 24.0,
+                top: 24.0,
+                bottom: 16.0,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
+                  Text(
+                    '自动续写设置',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: widget.onCancel,
+                    splashRadius: 20,
+                  ),
+                ],
+              ),
+            ),
+            
+            // 可滚动的表单内容
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.only(
+                  left: 24.0,
+                  right: 24.0,
+                  bottom: 24.0,
+                ),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                   // 续写章节数
                   TextFormField(
                     controller: _numberOfChaptersController,
@@ -198,64 +247,88 @@ class _ContinueWritingFormState extends State<ContinueWritingForm> {
                   ),
                   const SizedBox(height: 16),
                   
-                  // 摘要模型选择
+                  // 摘要模型选择（统一模型选择器）
                   _isLoadingConfigs
                       ? const Center(child: CircularProgressIndicator())
-                      : DropdownButtonFormField<String>(
-                          decoration: const InputDecoration(
-                            labelText: '摘要生成模型',
-                            helperText: '选择用于生成章节摘要的AI模型',
-                            prefixIcon: Icon(Icons.summarize_outlined),
-                          ),
-                          value: _selectedSummaryConfigId,
-                          items: _aiConfigs
-                              .map((config) => DropdownMenuItem<String>(
-                                    value: config.id,
-                                    child: Text(config.alias ?? config.modelName),
-                                  ))
-                              .toList(),
-                          onChanged: (value) {
-                            setState(() {
-                              _selectedSummaryConfigId = value;
-                            });
-                          },
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return '请选择摘要生成模型';
-                            }
-                            return null;
-                          },
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('摘要生成模型', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                            const SizedBox(height: 8),
+                            ModelDisplaySelector(
+                              selectedModel: _summaryModel,
+                              onModelSelected: (model) {
+                                if (model == null) return;
+                                setState(() {
+                                  _summaryModel = model;
+                                  _selectedSummaryConfigId = model.isPublic ? null : model.id;
+                                });
+                              },
+                              size: ModelDisplaySize.large,
+                              showTags: true,
+                              showSettingsButton: true,
+                              height: 44,
+                              placeholder: '选择用于生成章节摘要的AI模型',
+                            ),
+                          ],
                         ),
                   const SizedBox(height: 16),
                   
-                  // 内容模型选择
+                  // 内容模型选择（统一模型选择器）
                   _isLoadingConfigs
                       ? const Center(child: CircularProgressIndicator())
-                      : DropdownButtonFormField<String>(
-                          decoration: const InputDecoration(
-                            labelText: '内容生成模型',
-                            helperText: '选择用于生成章节内容的AI模型',
-                            prefixIcon: Icon(Icons.text_fields),
-                          ),
-                          value: _selectedContentConfigId,
-                          items: _aiConfigs
-                              .map((config) => DropdownMenuItem<String>(
-                                    value: config.id,
-                                    child: Text(config.alias ?? config.modelName),
-                                  ))
-                              .toList(),
-                          onChanged: (value) {
-                            setState(() {
-                              _selectedContentConfigId = value;
-                            });
-                          },
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return '请选择内容生成模型';
-                            }
-                            return null;
-                          },
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('内容生成模型', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                            const SizedBox(height: 8),
+                            ModelDisplaySelector(
+                              selectedModel: _contentModel,
+                              onModelSelected: (model) {
+                                if (model == null) return;
+                                setState(() {
+                                  _contentModel = model;
+                                  _selectedContentConfigId = model.isPublic ? null : model.id;
+                                });
+                              },
+                              size: ModelDisplaySize.large,
+                              showTags: true,
+                              showSettingsButton: true,
+                              height: 44,
+                              placeholder: '选择用于生成章节内容的AI模型',
+                            ),
+                          ],
                         ),
+                  const SizedBox(height: 16),
+
+                  // 提示词模板选择（摘要）
+                  FormFieldFactory.createPromptTemplateSelectionField(
+                    selectedTemplateId: _summaryPromptTemplateId,
+                    onTemplateSelected: (id) {
+                      setState(() {
+                        _summaryPromptTemplateId = id;
+                      });
+                    },
+                    aiFeatureType: 'TEXT_SUMMARY',
+                    title: '摘要提示词模板 (可选)',
+                    description: '用于生成章节摘要的提示词模板',
+                    onTemporaryPromptsSaved: (sys, user) {},
+                  ),
+                  const SizedBox(height: 12),
+
+                  // 提示词模板选择（内容）
+                  FormFieldFactory.createPromptTemplateSelectionField(
+                    selectedTemplateId: _contentPromptTemplateId,
+                    onTemplateSelected: (id) {
+                      setState(() {
+                        _contentPromptTemplateId = id;
+                      });
+                    },
+                    aiFeatureType: 'SUMMARY_TO_SCENE',
+                    title: '内容提示词模板 (可选)',
+                    description: '用于从摘要生成章节内容的提示词模板',
+                    onTemporaryPromptsSaved: (sys, user) {},
+                  ),
                   const SizedBox(height: 16),
                   
                   // 上下文模式选择
@@ -274,7 +347,6 @@ class _ContinueWritingFormState extends State<ContinueWritingForm> {
                       Wrap(
                         spacing: 8,
                         children: [
-                          _buildContextModeRadio('自动', 'AUTO'),
                           _buildContextModeRadio('最近N章', 'LAST_N_CHAPTERS'),
                           _buildContextModeRadio('自定义', 'CUSTOM'),
                         ],
@@ -348,6 +420,7 @@ class _ContinueWritingFormState extends State<ContinueWritingForm> {
                     ),
                     maxLines: 1,
                   ),
+                  const SizedBox(height: 16),
                   
                   const SizedBox(height: 24),
                   
@@ -382,7 +455,9 @@ class _ContinueWritingFormState extends State<ContinueWritingForm> {
                       ),
                     ],
                   ),
-                ],
+                    ],
+                  ),
+                ),
               ),
             ),
           ],

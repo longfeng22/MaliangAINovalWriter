@@ -106,7 +106,11 @@ public class TaskContextImpl<P> implements TaskContext<P> {
     
     @Override
     public Mono<String> submitSubTask(String taskType, Object parameters) {
-        return taskSubmissionService.submitTask(userId, taskType, parameters, taskId);
+        // 修复子任务父子关系：
+        // - 若当前上下文已有 parentTaskId（说明自己已经是子任务），则继续将新子任务挂到这个“顶层父任务”之下；
+        // - 否则（当前为顶层任务），将新子任务挂到当前 taskId 之下。
+        final String effectiveParentId = (parentTaskId != null && !parentTaskId.isBlank()) ? parentTaskId : taskId;
+        return taskSubmissionService.submitTask(userId, taskType, parameters, effectiveParentId);
     }
     
     /**

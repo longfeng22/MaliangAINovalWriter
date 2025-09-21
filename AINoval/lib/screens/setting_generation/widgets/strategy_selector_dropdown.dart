@@ -71,7 +71,6 @@ class _StrategySelectorDropdownState extends State<StrategySelectorDropdown> {
             offset: Offset(0, size.height + 4),
             child: Material(
               elevation: 8,
-              borderRadius: BorderRadius.circular(12),
               color: WebTheme.getSurfaceColor(context),
               shadowColor: WebTheme.getShadowColor(context, opacity: 0.2),
               child: Container(
@@ -80,7 +79,6 @@ class _StrategySelectorDropdownState extends State<StrategySelectorDropdown> {
                   maxHeight: 320,
                 ),
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: WebTheme.getBorderColor(context).withOpacity(0.3),
                     width: 1,
@@ -111,7 +109,6 @@ class _StrategySelectorDropdownState extends State<StrategySelectorDropdown> {
 
   Widget _buildDropdownContent() {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
       child: SingleChildScrollView(
         physics: const BouncingScrollPhysics(),
         child: Column(
@@ -157,9 +154,6 @@ class _StrategySelectorDropdownState extends State<StrategySelectorDropdown> {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.vertical(
-          bottom: isLast ? const Radius.circular(12) : Radius.zero,
-        ),
         onTap: () {
           widget.onChanged?.call(strategy);
           _removeOverlay();
@@ -249,7 +243,6 @@ class _StrategySelectorDropdownState extends State<StrategySelectorDropdown> {
             color: Colors.transparent,
             child: InkWell(
               key: _buttonKey,
-              borderRadius: BorderRadius.circular(8),
               onTap: widget.isLoading ? null : _toggleDropdown,
               child: Container(
                 width: double.infinity,
@@ -262,7 +255,6 @@ class _StrategySelectorDropdownState extends State<StrategySelectorDropdown> {
                         : WebTheme.getBorderColor(context),
                     width: _isOpen ? 2 : 1,
                   ),
-                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: widget.isLoading 
                     ? _buildLoadingContent()

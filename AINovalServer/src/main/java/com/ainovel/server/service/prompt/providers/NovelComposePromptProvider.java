@@ -27,27 +27,21 @@ public class NovelComposePromptProvider extends BasePromptProvider {
 
     @Override
     public reactor.core.publisher.Mono<String> getSystemPrompt(String userId, java.util.Map<String, Object> parameters) {
-        // 先使用父类生成系统提示词；再在系统提示词末尾追加“用户特别指令”（如有）与按 mode 的输出规范说明
+        // 从参数中提取必要信息
+        String mode = asString(parameters.get("mode"), "");
+        String ins = asString(parameters.get("instructions"), "");
+        
+        // 只在系统提示词中保留基础提示词、用户特别指令和输出格式规范
         return super.getSystemPrompt(userId, parameters)
                 .map(system -> {
-                    String mode = parameters != null ? asString(parameters.get("mode"), "outline") : "outline";
-                    String ins = parameters != null ? asString(parameters.get("instructions"), "").trim() : "";
-                    String input = parameters != null ? asString(parameters.get("input"), "") : "";
-                    String context = parameters != null ? asString(parameters.get("context"), "") : "";
-                    String historyInitPrompt = parameters != null ? asString(parameters.get("historyInitPrompt"), "") : "";
-                    String style = parameters != null ? asString(parameters.get("style"), "") : "";
-                    String pov = parameters != null ? asString(parameters.get("pov"), "") : "";
-                    String length = parameters != null ? asString(parameters.get("length"), "") : "";
-                    String outlineText = parameters != null ? asString(parameters.get("outlineText"), "") : "";
-                    String prev = parameters != null ? asString(parameters.get("previousChaptersSummary"), "") : "";
-                    int chapterCount = parameters != null ? asInt(parameters.get("chapterCount"), 3) : 3;
-
                     StringBuilder sb = new StringBuilder(system);
+                    
+                    // 添加用户特别指令（如有）
                     if (!ins.isEmpty()) {
                         sb.append("\n\n# 用户特别指令\n").append(ins);
                     }
 
-                    // 明确输出结构：将原本在用户提示词中的 <outputSpec> 移动到系统提示词末尾
+                    // 只保留输出格式规范在系统提示词中
                     sb.append("\n\n");
                     if ("outline".equalsIgnoreCase(mode)) {
                         sb.append("  <outputSpec>\n")
@@ -71,21 +65,6 @@ public class NovelComposePromptProvider extends BasePromptProvider {
                           .append("  </outputSpec>\n");
                     }
 
-                    // 将 compose 参数块也附加到系统提示词末尾，避免覆盖用户提示词模板
-                    sb.append("\n<compose>\n");
-                    sb.append("  <mode>").append(mode).append("</mode>\n");
-                    if (!input.isEmpty()) sb.append("  <prompt>").append(escape(input)).append("</prompt>\n");
-                    if (!context.isEmpty()) sb.append("  <context>").append(escape(context)).append("</context>\n");
-                    if (!historyInitPrompt.isEmpty()) sb.append("  <historyInitPrompt>").append(escape(historyInitPrompt)).append("</historyInitPrompt>\n");
-                    if (!style.isEmpty()) sb.append("  <style>").append(escape(style)).append("</style>\n");
-                    if (!pov.isEmpty()) sb.append("  <pov>").append(escape(pov)).append("</pov>\n");
-                    if (!length.isEmpty()) sb.append("  <length>").append(escape(length)).append("</length>\n");
-                    if (chapterCount > 0) sb.append("  <chapterCount>").append(chapterCount).append("</chapterCount>\n");
-                    if (!outlineText.isEmpty()) sb.append("  <outlineText>").append(escape(outlineText)).append("</outlineText>\n");
-                    if (!prev.isEmpty()) sb.append("  <previous>").append(escape(prev)).append("</previous>\n");
-                    if (!ins.isEmpty()) sb.append("  <instructions>").append(escape(ins)).append("</instructions>\n");
-                    sb.append("</compose>");
-
                     return sb.toString();
                 });
     }
@@ -94,8 +73,42 @@ public class NovelComposePromptProvider extends BasePromptProvider {
 
     @Override
     public reactor.core.publisher.Mono<String> getUserPrompt(String userId, String templateId, Map<String, Object> parameters) {
-        // 改为使用父类逻辑，以启用增强提示词模板或用户自定义模板；无模板则回退到默认
-        return super.getUserPrompt(userId, templateId, parameters);
+        // 从参数中提取所有需要的信息
+        String mode = asString(parameters.get("mode"), "");
+        String input = asString(parameters.get("input"), "");
+        String context = asString(parameters.get("context"), "");
+        String historyInitPrompt = asString(parameters.get("historyInitPrompt"), "");
+        String style = asString(parameters.get("style"), "");
+        String pov = asString(parameters.get("pov"), "");
+        String length = asString(parameters.get("length"), "");
+        int chapterCount = asInt(parameters.get("chapterCount"), 0);
+        String outlineText = asString(parameters.get("outlineText"), "");
+        String prev = asString(parameters.get("previousChaptersSummary"), "");
+        String ins = asString(parameters.get("instructions"), "");
+        
+        // 使用父类逻辑获取基础用户提示词模板，然后在末尾添加compose参数块
+        return super.getUserPrompt(userId, templateId, parameters).map(basePrompt -> {
+            StringBuilder sb = new StringBuilder(basePrompt);
+            
+            // 在用户提示词末尾添加compose参数块
+            sb.append("\n\n<compose>\n");
+            sb.append("  <mode>").append(mode).append("</mode>\n");
+            if (!input.isEmpty()) sb.append("  <prompt>").append(escape(input)).append("</prompt>\n");
+            if (!context.isEmpty()) sb.append("  <context>").append(escape(context)).append("</context>\n");
+            if (!historyInitPrompt.isEmpty()) sb.append("  <historyInitPrompt>").append(escape(historyInitPrompt)).append("</historyInitPrompt>\n");
+            if (!style.isEmpty()) sb.append("  <style>").append(escape(style)).append("</style>\n");
+            if (!pov.isEmpty()) sb.append("  <pov>").append(escape(pov)).append("</pov>\n");
+            if (!length.isEmpty()) sb.append("  <length>").append(escape(length)).append("</length>\n");
+            if (chapterCount > 0) sb.append("  <chapterCount>").append(chapterCount).append("</chapterCount>\n");
+            if (!outlineText.isEmpty()) sb.append("  <outlineText>").append(escape(outlineText)).append("</outlineText>\n");
+            if (!prev.isEmpty()) sb.append("  <previous>").append(escape(prev)).append("</previous>\n");
+            if (!ins.isEmpty()) sb.append("  <instructions>").append(escape(ins)).append("</instructions>\n");
+            sb.append("</compose>");
+            
+            String result = sb.toString();
+            log.info("✅ 用户提示词最终长度: {} 字符", result.length());
+            return result;
+        });
     }
 
     // 由父类通过该方法初始化支持的占位符集合

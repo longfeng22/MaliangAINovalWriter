@@ -8,6 +8,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import com.ainovel.server.common.response.ApiResponse;
+import com.ainovel.server.common.response.PagedResponse;
 import com.ainovel.server.domain.model.User;
 import com.ainovel.server.service.AdminUserService;
 import com.ainovel.server.service.CreditService;
@@ -16,6 +17,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 
 /**
  * 管理员用户管理控制器
@@ -165,6 +168,72 @@ public class AdminUserController {
                     ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()))
                 ));
     }
+
+    /**
+     * 用户分页查询（支持筛选与排序）
+     */
+    @GetMapping("/page")
+    public Mono<ResponseEntity<ApiResponse<PagedResponse<User>>>> getUsersPaged(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long minCredits,
+            @RequestParam(required = false) String createdStart,
+            @RequestParam(required = false) String createdEnd,
+            @RequestParam(required = false) String lastLoginStart,
+            @RequestParam(required = false) String lastLoginEnd,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir
+    ) {
+        LocalDateTime cs = parseDateTime(createdStart);
+        LocalDateTime ce = parseDateTime(createdEnd);
+        LocalDateTime ls = parseDateTime(lastLoginStart);
+        LocalDateTime le = parseDateTime(lastLoginEnd);
+
+        User.AccountStatus st = null;
+        if (status != null && !status.isBlank()) {
+            try {
+                st = User.AccountStatus.valueOf(status);
+            } catch (IllegalArgumentException ignored) { }
+        }
+
+        return adminUserService.findUsersPaged(
+                keyword, st, minCredits, cs, ce, ls, le, sortBy, sortDir, page, size
+        ).map(paged -> ResponseEntity.ok(ApiResponse.success(paged)))
+        .onErrorResume(e -> Mono.just(ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()))));
+    }
+
+    /**
+     * 重置用户密码（支持默认或自定义）
+     */
+    @PostMapping("/{id}/reset-password")
+    public Mono<ResponseEntity<ApiResponse<String>>> resetUserPassword(
+            @PathVariable String id,
+            @RequestBody ResetPasswordRequest request) {
+        String newPassword = (request != null && request.getNewPassword() != null && !request.getNewPassword().isBlank())
+                ? request.getNewPassword()
+                : (request != null && request.getUseDefault() != null && request.getUseDefault())
+                    ? DefaultPasswordProvider.getDefaultPassword()
+                    : null;
+
+        if (newPassword == null || newPassword.isBlank()) {
+            return Mono.just(ResponseEntity.badRequest().body(ApiResponse.error("必须提供新密码或指定使用默认密码")));
+        }
+
+        return adminUserService.resetUserPassword(id, newPassword)
+                .then(Mono.just(ResponseEntity.ok(ApiResponse.success("密码已重置"))))
+                .onErrorResume(e -> Mono.just(ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()))));
+    }
+
+    private LocalDateTime parseDateTime(String input) {
+        if (input == null || input.isBlank()) return null;
+        try {
+            return LocalDateTime.parse(input);
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
     
     /**
      * 用户更新请求DTO
@@ -248,5 +317,28 @@ public class AdminUserController {
         
         public long getNewUsersThisMonth() { return newUsersThisMonth; }
         public void setNewUsersThisMonth(long newUsersThisMonth) { this.newUsersThisMonth = newUsersThisMonth; }
+    }
+
+    /**
+     * 重置密码请求DTO
+     */
+    public static class ResetPasswordRequest {
+        private String newPassword; // 可为空；为空时如果useDefault=true则使用默认密码
+        private Boolean useDefault; // 是否使用默认密码
+
+        public String getNewPassword() { return newPassword; }
+        public void setNewPassword(String newPassword) { this.newPassword = newPassword; }
+        public Boolean getUseDefault() { return useDefault; }
+        public void setUseDefault(Boolean useDefault) { this.useDefault = useDefault; }
+    }
+
+    /**
+     * 默认密码提供者（可替换为读取配置或环境变量）
+     */
+    static class DefaultPasswordProvider {
+        static String getDefaultPassword() {
+            // 可改为从配置读取，如: 环境变量 DEFAULT_USER_RESET_PASSWORD 或 application.yml
+            return "123456";
+        }
     }
 }

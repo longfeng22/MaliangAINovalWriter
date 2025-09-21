@@ -4,11 +4,11 @@ import 'package:flutter/material.dart';
 /// 包含编辑器的所有可定制化选项
 class EditorSettings {
   const EditorSettings({
-    // 字体相关设置
-    this.fontSize = 16.0,
-    this.fontFamily = 'serif', // 🚀 改为中文友好的默认字体
+    // 字体相关设置 - 优化1080p显示
+    this.fontSize = 14.0, // 从16.0降低到14.0，适配1080p屏幕
+    this.fontFamily = 'Noto Sans SC', // 🚀 默认中文友好字体，避免首帧方块/乱码
     this.fontWeight = FontWeight.normal,
-    this.lineSpacing = 1.5,
+    this.lineSpacing = 1.4, // 从1.5降低到1.4，减少行间距
     this.letterSpacing = 0.0, // 🚀 中文写作建议稍微调整字符间距
     
     // 间距和布局设置
@@ -223,7 +223,7 @@ class EditorSettings {
     
     return EditorSettings(
       fontSize: map['fontSize']?.toDouble() ?? 16.0,
-      fontFamily: map['fontFamily'] ?? 'Roboto',
+      fontFamily: map['fontFamily'] ?? 'Noto Sans SC',
       fontWeight: FontWeight.values[fontWeightIndex.clamp(0, FontWeight.values.length - 1)],
       lineSpacing: map['lineSpacing']?.toDouble() ?? 1.5,
       letterSpacing: map['letterSpacing']?.toDouble() ?? 0.0,
@@ -255,11 +255,11 @@ class EditorSettings {
 
   /// 获取可用的字体列表
   static List<String> get availableFontFamilies => [
+    'Noto Sans SC', // Google Noto 简体中文字体
     'Roboto',
     'serif', // 中文友好的衬线字体
     'sans-serif', // 中文友好的无衬线字体
     'monospace',
-    'Noto Sans SC', // Google Noto 简体中文字体
     'PingFang SC', // 苹果中文字体
     'Microsoft YaHei', // 微软雅黑
     'SimHei', // 黑体

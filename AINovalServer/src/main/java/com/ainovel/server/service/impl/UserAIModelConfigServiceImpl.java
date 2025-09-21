@@ -7,7 +7,6 @@ import java.util.Objects;
 
 import org.jasypt.encryption.StringEncryptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -176,46 +175,70 @@ public class UserAIModelConfigServiceImpl implements UserAIModelConfigService {
     public Mono<UserAIModelConfig> setDefaultConfiguration(String userId, String configId) {
         return configRepository.findByUserIdAndId(userId, configId)
                 .switchIfEmpty(Mono.error(new RuntimeException("配置不存在或无权访问")))
-                .flatMap(configToSetDefault -> {
-                    if (!configToSetDefault.getIsValidated()) {
+                .flatMap(targetConfig -> {
+                    if (!targetConfig.getIsValidated()) {
                         return Mono.error(new IllegalArgumentException("无法将未验证的配置设为默认"));
                     }
-                    if (configToSetDefault.isDefault()) {
-                        return Mono.just(configToSetDefault);
+                    if (targetConfig.isDefault()) {
+                        return Mono.just(targetConfig);
                     }
 
-                    return configRepository.findByUserIdAndIsDefaultIsTrue(userId)
+                    Mono<Void> clearCurrentDefault = configRepository.findByUserIdAndIsDefaultIsTrue(userId)
+                            .filter(currentDefault -> !currentDefault.getId().equals(configId))
                             .flatMap(currentDefault -> {
-                                if (!currentDefault.getId().equals(configId)) {
-                                    currentDefault.setDefault(false);
-                                    currentDefault.setUpdatedAt(LocalDateTime.now());
-                                    return configRepository.save(currentDefault);
-                                }
-                                return Mono.empty();
+                                currentDefault.setDefault(false);
+                                currentDefault.setUpdatedAt(LocalDateTime.now());
+                                return configRepository.save(currentDefault);
                             })
-                            .thenMany(configRepository.findByUserIdAndIsDefaultIsFalse(userId))
-                            .filter(config -> !config.getId().equals(configId))
-                            .flatMap(config -> {
-                                if (config.isDefault()) {
-                                    config.setDefault(false);
-                                    config.setUpdatedAt(LocalDateTime.now());
-                                    return configRepository.save(config);
-                                }
-                                return Mono.empty();
+                            .then();
+
+                    return clearCurrentDefault.then(Mono.defer(() -> {
+                        targetConfig.setDefault(true);
+                        targetConfig.setUpdatedAt(LocalDateTime.now());
+                        return configRepository.save(targetConfig);
+                    }));
+                });
+    }
+
+    @Override
+    @Transactional
+    public Mono<UserAIModelConfig> setToolDefaultConfiguration(String userId, String configId) {
+        return configRepository.findByUserIdAndId(userId, configId)
+                .switchIfEmpty(Mono.error(new RuntimeException("配置不存在或无权访问")))
+                .flatMap(targetConfig -> {
+                    if (!targetConfig.getIsValidated()) {
+                        return Mono.error(new IllegalArgumentException("无法将未验证的配置设为工具调用默认"));
+                    }
+                    if (targetConfig.isToolDefault()) {
+                        return Mono.just(targetConfig);
+                    }
+
+                    Mono<Void> clearCurrentToolDefault = configRepository.findByUserIdAndIsToolDefaultIsTrue(userId)
+                            .filter(currentDefault -> !currentDefault.getId().equals(configId))
+                            .flatMap(currentDefault -> {
+                                currentDefault.setToolDefault(false);
+                                currentDefault.setUpdatedAt(LocalDateTime.now());
+                                return configRepository.save(currentDefault);
                             })
-                            .then()
-                            .then(Mono.fromCallable(() -> {
-                                configToSetDefault.setDefault(true);
-                                configToSetDefault.setUpdatedAt(LocalDateTime.now());
-                                return configToSetDefault;
-                            }))
-                            .flatMap(configRepository::save);
+                            .then();
+
+                    return clearCurrentToolDefault.then(Mono.defer(() -> {
+                        targetConfig.setToolDefault(true);
+                        targetConfig.setUpdatedAt(LocalDateTime.now());
+                        return configRepository.save(targetConfig);
+                    }));
                 });
     }
 
     @Override
     public Mono<UserAIModelConfig> getValidatedDefaultConfiguration(String userId) {
         return configRepository.findByUserIdAndIsDefaultIsTrue(userId)
+                .filter(config -> config.getIsValidated());
+    }
+
+    @Override
+    public Mono<UserAIModelConfig> getValidatedToolDefaultConfiguration(String userId) {
+        return configRepository.findByUserIdAndIsToolDefaultIsTrue(userId)
                 .filter(config -> config.getIsValidated());
     }
 
@@ -257,7 +280,7 @@ public class UserAIModelConfigServiceImpl implements UserAIModelConfigService {
 
     @Override
     public Mono<String> getDecryptedApiKey(String userId, String configId) {
-        log.debug("获取解密的API密钥: userId={}, configId={}", userId, configId);
+        //log.debug("获取解密的API密钥: userId={}, configId={}", userId, configId);
         return getConfigurationById(userId, configId)
             .flatMap(config -> {
                 try {

@@ -26,6 +26,8 @@ import lombok.NoArgsConstructor;
 @CompoundIndex(name = "user_provider_model_idx", def = "{'userId' : 1, 'provider': 1, 'modelName': 1}", unique = true)
 // 索引 userId 和 isDefault 方便查找默认设置
 @CompoundIndex(name = "user_default_idx", def = "{'userId' : 1, 'isDefault': 1}")
+// 索引 userId 和 isToolDefault 方便查找工具调用默认设置
+@CompoundIndex(name = "user_tool_default_idx", def = "{'userId' : 1, 'isToolDefault': 1}")
 public class UserAIModelConfig {
 
     @Id
@@ -54,6 +56,10 @@ public class UserAIModelConfig {
     // 新增字段：是否为用户默认模型
     @Builder.Default
     private boolean isDefault = false;
+
+    // 新增字段：是否为用户默认的工具调用模型（用于工具编排阶段，例如增量解析）
+    @Builder.Default
+    private boolean isToolDefault = false;
 
     private LocalDateTime createdAt;
 

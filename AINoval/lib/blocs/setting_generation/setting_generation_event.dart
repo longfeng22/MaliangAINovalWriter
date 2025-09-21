@@ -117,12 +117,16 @@ class UpdateNodeEvent extends SettingGenerationBlocEvent {
   final String modificationPrompt;
   final String modelConfigId;
   final String scope; // 'self' | 'self_and_children' | 'children_only'
+  final bool? isPublicModel;
+  final String? publicModelConfigId;
 
   const UpdateNodeEvent({
     required this.nodeId,
     required this.modificationPrompt,
     required this.modelConfigId,
     this.scope = 'self',
+    this.isPublicModel,
+    this.publicModelConfigId,
   });
 
   @override
@@ -131,6 +135,8 @@ class UpdateNodeEvent extends SettingGenerationBlocEvent {
         modificationPrompt,
         modelConfigId,
         scope,
+        isPublicModel,
+        publicModelConfigId,
       ];
 }
 

@@ -14,6 +14,7 @@ import com.ainovel.server.domain.model.observability.LLMTrace;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import org.springframework.transaction.reactive.TransactionalOperator;
 
 @Service
@@ -25,12 +26,30 @@ public class BillingCompensationService {
     private final CreditTransactionRepository txRepo;
     private final ReactiveMongoTransactionManager tm;
     private final LLMTraceService traceService;
+    private final com.ainovel.server.service.SystemConfigService systemConfigService;
 
     // 每5分钟扫一次失败或挂起的交易进行补偿
     @Scheduled(fixedDelay = 300000L)
     public void compensate() {
-        Flux<CreditTransaction> candidates = txRepo.findAll()
-            .filter(tx -> "FAILED".equals(tx.getStatus()) || "PENDING".equals(tx.getStatus()));
+        // 读取时间窗口配置
+        Mono<java.time.Instant> sinceInstantMono = systemConfigService.getStringValue(com.ainovel.server.domain.model.SystemConfig.Keys.BILLING_PROCESS_SINCE_TIME, null)
+            .map(v -> {
+                try { return v != null && !v.isBlank() ? java.time.LocalDateTime.parse(v) : null; } catch (Exception e) { return null; }
+            })
+            .flatMap(v -> v != null ? reactor.core.publisher.Mono.just(v.atZone(java.time.ZoneId.systemDefault()).toInstant())
+                : systemConfigService.getIntegerValue(com.ainovel.server.domain.model.SystemConfig.Keys.BILLING_PROCESS_SINCE_HOURS, null)
+                    .map(hours -> hours != null ? java.time.LocalDateTime.now().minusHours(Math.max(1, hours)).atZone(java.time.ZoneId.systemDefault()).toInstant() : null))
+            .switchIfEmpty(reactor.core.publisher.Mono.empty());
+
+        Flux<CreditTransaction> candidates = sinceInstantMono.flatMapMany(since -> txRepo.findAll()
+            .filter(tx -> "FAILED".equals(tx.getStatus()) || "PENDING".equals(tx.getStatus()))
+            .filter(tx -> {
+                if (since == null) return true;
+                try {
+                    java.time.Instant created = tx.getCreatedAt();
+                    return created == null || !created.isBefore(since);
+                } catch (Exception e) { return true; }
+            }));
 
         candidates
             .flatMap(tx -> {
@@ -39,7 +58,13 @@ public class BillingCompensationService {
                     tx.getFeatureType() == null || tx.getFeatureType().isBlank()) {
                     log.warn("跳过补偿：交易记录缺少必要字段 - txId={}, userId={}, featureType={}", 
                             tx.getId(), tx.getUserId(), tx.getFeatureType());
-                    return reactor.core.publisher.Mono.empty();
+                    // 将交易标记为 INVALID，避免被定时补偿反复扫描
+                    try {
+                        tx.setStatus("INVALID");
+                        tx.setErrorMessage("交易缺少必要字段(userId/featureType)");
+                        tx.setUpdatedAt(java.time.Instant.now());
+                    } catch (Exception ignore) {}
+                    return txRepo.save(tx).then(reactor.core.publisher.Mono.empty());
                 }
                 
                 return TransactionalOperator.create(tm)
@@ -155,24 +180,47 @@ public class BillingCompensationService {
                                         tx.setUpdatedAt(java.time.Instant.now());
                                         return txRepo.save(tx);
                                     } else {
-                                        tx.setStatus("FAILED");
-                                        tx.setErrorMessage(res.getMessage());
-                                        tx.setUpdatedAt(java.time.Instant.now());
-                                        return txRepo.save(tx)
-                                            .then(reactor.core.publisher.Mono.error(new RuntimeException(res.getMessage())));
+                                        String message = res.getMessage();
+                                        boolean insufficient = message != null && (message.contains("积分余额不足") || message.toLowerCase().contains("insufficient"));
+                                        if (insufficient) {
+                                            tx.setStatus("NO_FUNDS");
+                                            tx.setErrorMessage(message);
+                                            tx.setUpdatedAt(java.time.Instant.now());
+                                            log.warn("补偿跳过：积分不足 - traceId={}, userId={}, provider={}, modelId={}, featureType={}, err={}",
+                                                    tx.getTraceId(), tx.getUserId(), tx.getProvider(), tx.getModelId(), tx.getFeatureType(), message);
+                                            return txRepo.save(tx).then(reactor.core.publisher.Mono.empty());
+                                        } else {
+                                            tx.setStatus("FAILED");
+                                            tx.setErrorMessage(message);
+                                            tx.setUpdatedAt(java.time.Instant.now());
+                                            return txRepo.save(tx)
+                                                .then(reactor.core.publisher.Mono.error(new RuntimeException(message)));
+                                        }
                                     }
                                 });
                         });
                     })
                     .onErrorResume(e -> {
-                        log.error("补偿事务失败: err={}, traceId={}, userId={}, provider={}, modelId={}, featureType={}",
-                                e.getMessage(),
-                                tx.getTraceId(),
-                                tx.getUserId(),
-                                tx.getProvider(),
-                                tx.getModelId(),
-                                tx.getFeatureType(),
-                                e);
+                        String msg = e != null && e.getMessage() != null ? e.getMessage() : "";
+                        boolean insufficient = msg.contains("积分余额不足") || msg.toLowerCase().contains("insufficient");
+                        if (e instanceof com.ainovel.server.common.exception.InsufficientCreditsException || insufficient) {
+                            log.warn("补偿事务失败（可预期，跳过重试）: err={}, traceId={}, userId={}, provider={}, modelId={}, featureType={}",
+                                    msg,
+                                    tx.getTraceId(),
+                                    tx.getUserId(),
+                                    tx.getProvider(),
+                                    tx.getModelId(),
+                                    tx.getFeatureType());
+                        } else {
+                            log.error("补偿事务失败: err={}, traceId={}, userId={}, provider={}, modelId={}, featureType={}",
+                                    msg,
+                                    tx.getTraceId(),
+                                    tx.getUserId(),
+                                    tx.getProvider(),
+                                    tx.getModelId(),
+                                    tx.getFeatureType(),
+                                    e);
+                        }
                         return reactor.core.publisher.Mono.empty();
                     });
             })

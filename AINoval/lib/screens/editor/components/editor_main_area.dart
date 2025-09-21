@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:ainoval/blocs/editor/editor_bloc.dart' as editor_bloc;
 import 'package:ainoval/blocs/sidebar/sidebar_bloc.dart';
@@ -25,6 +26,7 @@ import 'package:ainoval/screens/editor/components/scene_editor.dart';
 import 'package:ainoval/screens/editor/components/volume_navigation_buttons.dart';
 import 'package:ainoval/screens/editor/components/boundary_indicator.dart';
 import 'package:ainoval/screens/editor/utils/document_parser.dart';
+import 'package:ainoval/utils/quill_helper.dart';
 import 'package:ainoval/screens/editor/components/editor_data_manager.dart';
 import 'package:ainoval/screens/editor/components/center_anchor_list_builder.dart' as anchor;
 import 'package:ainoval/widgets/editor/overlay_scene_beat_manager.dart';
@@ -117,6 +119,9 @@ class EditorMainAreaState extends State<EditorMainArea> {
   // 🚀 重构：使用EditorItemManager替换原来的数据结构
   final EditorItemManager _editorItems = EditorItemManager();
   
+  // 🚀 粘滞center key缓存，避免锚点短暂失效时滚到顶部
+  Key? _lastCenterKey;
+  
   // 添加控制器创建时间跟踪
   final Map<String, DateTime> _controllerCreationTime = {};
   
@@ -170,9 +175,29 @@ class EditorMainAreaState extends State<EditorMainArea> {
   bool _isPreparingScrollPosition = false;
   double? _preparedScrollOffset;
   
+  // （移除重复声明）
+  
   // 🚀 新增：编辑器状态管理
   EditorScreenController? _editorController;
   EditorLayoutManager? _layoutManager;
+
+  /// 🚀 当锚点在本帧失效时，保留并恢复当前滚动位置，避免跳到顶部
+  void _preserveScrollPositionOnAnchorLoss() {
+    if (_isPreservingScrollPosition) return;
+    final controller = widget.scrollController;
+    if (!controller.hasClients) return;
+    final double current = controller.offset;
+    _isPreservingScrollPosition = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        if (controller.hasClients) {
+          controller.jumpTo(current);
+        }
+      } catch (_) {}
+      _isPreservingScrollPosition = false;
+    });
+  }
 
   // 🚀 场景的GlobalKey映射，用于追踪场景位置
   final Map<String, GlobalKey> _sceneGlobalKeys = {};
@@ -437,7 +462,13 @@ class EditorMainAreaState extends State<EditorMainArea> {
     );
     
     // 🚀 构建最终的slivers列表
-    final centerKey = listBuilder.getCenterAnchorKey();
+    // 粘滞center key：如果本次为null而上一帧有有效key，则沿用上一帧的key，避免跳到顶部
+    final Key? computedCenterKey = listBuilder.getCenterAnchorKey();
+    // 只在本次计算到有效key时更新缓存
+    if (computedCenterKey != null) {
+      _lastCenterKey = computedCenterKey;
+    }
+    final centerKey = computedCenterKey ?? _lastCenterKey;
     AppLogger.i('EditorMainArea', '开始构建最终slivers - centerKey: $centerKey, contentSlivers数量: ${contentSlivers.length}');
     
     final allSlivers = <Widget>[
@@ -469,10 +500,20 @@ class EditorMainAreaState extends State<EditorMainArea> {
         SliverToBoxAdapter(child: BoundaryIndicator(isTop: false)),
     ];
     
-    // 🚀 最终验证：确认center key在最终slivers中存在
+    // 🚀 最终验证：确认center key在最终slivers中存在，并决定最终传入的center
+    Key? finalCenterKey;
     if (centerKey != null) {
       final hasMatchingSliver = allSlivers.any((sliver) => sliver.key == centerKey);
       AppLogger.i('EditorMainArea', '最终验证center key - key: $centerKey, 找到匹配: $hasMatchingSliver, 总slivers: ${allSlivers.length}');
+      finalCenterKey = hasMatchingSliver ? centerKey : null;
+      if (!hasMatchingSliver) {
+        // 锚点短暂失效：保留并恢复当前滚动位置，避免跳到顶部
+        _preserveScrollPositionOnAnchorLoss();
+      }
+    } else {
+      finalCenterKey = null;
+      // 无center：同样兜底
+      _preserveScrollPositionOnAnchorLoss();
     }
     
     return Container(
@@ -480,7 +521,7 @@ class EditorMainAreaState extends State<EditorMainArea> {
       child: CustomScrollView(
         controller: widget.scrollController,
         // 🚀 关键：设置center anchor
-        center: listBuilder.getCenterAnchorKey(),
+        center: finalCenterKey,
         physics: const AlwaysScrollableScrollPhysics(
           parent: BouncingScrollPhysics(),
         ),
@@ -846,6 +887,11 @@ class EditorMainAreaState extends State<EditorMainArea> {
     }
 
     try {
+      // 🚀 修复：检查是否是新建场景，确保使用正确的空内容
+      String contentToUse = scene.content;
+      
+
+      
       // 先放一个空控制器占位，保持 UI 流畅
       final placeholderController = QuillController(
         document: Document.fromJson([{'insert': '\n'}]),
@@ -856,7 +902,7 @@ class EditorMainAreaState extends State<EditorMainArea> {
       _controllerCreationTime[sceneKey] = DateTime.now();
 
       // 异步解析实际文档（带缓存 + isolate）
-      final doc = await DocumentParser.parseDocumentSafely(scene.content);
+      final doc = await DocumentParser.parseDocumentSafely(contentToUse);
 
       // 如果组件仍在并且 map 仍指向 placeholder，则替换
       if (mounted && widget.sceneControllers[sceneKey] == placeholderController) {

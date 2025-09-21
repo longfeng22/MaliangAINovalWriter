@@ -1,19 +1,29 @@
-version: "3.8"
-
 services:
   mongo:
-    image: mongo:6.0
+    image: mongo:8.0
     container_name: ainoval-mongo
     restart: unless-stopped
-    # dev 开发模式：不启用认证（不要设置 MONGO_INITDB_*），首次启动请清空数据卷
+    # dev 开发模式：使用副本集支持事务，但简化认证配置
+    ports:
+      - "27017:27017"
     volumes:
       - mongo-data:/data/db
+      - mongo-config:/data/configdb
+      - ./mongo-init-replica.js:/docker-entrypoint-initdb.d/mongo-init-replica.js:ro
+      - ./mongo-keyfile:/data/keyfile
+    environment:
+      # 开发环境使用简单的用户名密码
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin123
+      - MONGO_INITDB_DATABASE=ainovel
+    entrypoint: ["bash", "-c"]
+    command: ["chmod 600 /data/keyfile && chown mongodb:mongodb /data/keyfile && exec docker-entrypoint.sh mongod --quiet --replSet rs0 --keyFile /data/keyfile --bind_ip_all"]
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
+      test: ["CMD-SHELL", "mongosh --quiet -u admin -p admin123 --authenticationDatabase admin --eval \"rs.status().ok\" || mongosh --quiet -u admin -p admin123 --authenticationDatabase admin --eval \"db.adminCommand('ping').ok\" || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   ainoval:
     image: ainoval/ainoval-server:latest
@@ -24,11 +34,11 @@ services:
     env_file:
       - ./production.env
     environment:
-      - SPRING_PROFILES_ACTIVE=dev
+      - SPRING_PROFILES_ACTIVE=open-dev
       - JVM_XMS=${JVM_XMS:-512m}
       - JVM_XMX=${JVM_XMX:-512m}
-      # 覆盖 dev 配置中的 localhost，直接指向 compose 中的 mongo 服务
-      - SPRING_DATA_MONGODB_URI=${SPRING_DATA_MONGODB_URI:-mongodb://mongo:27017/ainovel}
+      # 覆盖 dev 配置中的 localhost，直接指向 compose 中的 mongo 服务，使用副本集和认证
+      - SPRING_DATA_MONGODB_URI=${SPRING_DATA_MONGODB_URI:-mongodb://admin:admin123@mongo:27017/ainovel?replicaSet=rs0&authSource=admin&retryWrites=true&retryReads=true}
       - STORAGE_PROVIDER=${STORAGE_PROVIDER:-local}
       - AINOVEL_STORAGE_TEST_ON_STARTUP=${AINOVEL_STORAGE_TEST_ON_STARTUP:-false}
       - PROXY_ENABLED=${PROXY_ENABLED:-false}
@@ -43,5 +53,6 @@ services:
 
 volumes:
   mongo-data:
+  mongo-config:
 
 

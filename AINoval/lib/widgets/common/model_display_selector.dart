@@ -352,10 +352,14 @@ class _ModelDisplaySelectorState extends State<ModelDisplaySelector> {
                       child: Wrap(
                         spacing: 4,
                         runSpacing: 2,
-                        children: tags
-                            .take(showTagCount)
-                            .map((t) => _TagChip(text: t))
-                            .toList(),
+                        children: [
+                          ...tags
+                              .take(showTagCount)
+                              .map((t) => _TagChip(text: t))
+                              .toList(),
+                          if (sel is PrivateAIModel && sel.userConfig.isToolDefault)
+                            _TagChip(text: '工具默认'),
+                        ],
                       ),
                     ),
                 ],

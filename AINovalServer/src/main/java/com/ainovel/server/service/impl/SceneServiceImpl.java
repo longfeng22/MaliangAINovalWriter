@@ -539,19 +539,25 @@ public class SceneServiceImpl implements SceneService {
     }
 
     @Override
-    public Mono<Scene> addScene(String novelId, String chapterId, String title, String summaryText, Integer position) {
+    public Mono<Scene> addScene(String novelId, String chapterId, String title, String summaryText, String content, Integer position) {
         // 创建新场景
         Scene newScene = new Scene();
         newScene.setId(UUID.randomUUID().toString());
         newScene.setNovelId(novelId);
         newScene.setChapterId(chapterId);
         newScene.setTitle(title);
-        newScene.setContent("[{\"insert\":\"\\n\"}]"); // 初始内容为标准空Quill格式
+        // 设置场景内容：如果提供了content则使用，否则使用空Quill格式
+        if (content != null && !content.trim().isEmpty()) {
+            newScene.setContent(content);
+            newScene.setWordCount(content.length()); // 设置实际字数
+        } else {
+            newScene.setContent("[{\"insert\":\"\\n\"}]"); // 初始内容为标准空Quill格式
+            newScene.setWordCount(0); // 初始字数为0
+        }
         newScene.setCreatedAt(LocalDateTime.now());
         newScene.setUpdatedAt(LocalDateTime.now());
         newScene.setVersion(1);
         newScene.setSummary(summaryText);
-        newScene.setWordCount(0); // 初始字数为0
 
         if (position != null) {
             newScene.setSequence(position);

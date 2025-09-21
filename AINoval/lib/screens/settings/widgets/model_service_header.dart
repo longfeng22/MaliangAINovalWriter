@@ -95,7 +95,7 @@ class ModelServiceHeader extends StatelessWidget {
                 flex: 2,
                 child: AppSearchField(
                   hintText: '搜索模型提供商...',
-                  height: 40,
+                  height: 48, // 调高搜索框高度以提升整体控件高度
                   borderRadius: 8,
                   onChanged: onSearch,
                   controller: TextEditingController(),
@@ -104,13 +104,15 @@ class ModelServiceHeader extends StatelessWidget {
 
               const SizedBox(width: 16),
 
-              // 筛选下拉框
-              SizedBox(
-                width: 140,
-                height: 40,
-                child: DropdownButtonFormField<String>(
+              // 筛选下拉框（增大高度与图标尺寸，添加Tooltip）
+              Tooltip(
+                message: '筛选',
+                child: SizedBox(
+                  width: 140,
+                  height: 48,
+                  child: DropdownButtonFormField<String>(
                   decoration: InputDecoration(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                       borderSide: BorderSide(
@@ -141,7 +143,7 @@ class ModelServiceHeader extends StatelessWidget {
                   ),
                   icon: Icon(
                     Icons.keyboard_arrow_down,
-                    size: 18,
+                    size: 24, // 放大下拉箭头图标
                     color: theme.colorScheme.onSurface.withOpacity(0.7),
                   ),
                   dropdownColor: theme.colorScheme.surface,
@@ -182,17 +184,20 @@ class ModelServiceHeader extends StatelessWidget {
                       onFilterChange(value);
                     }
                   },
+                  ),
                 ),
               ),
 
               const SizedBox(width: 12),
 
-              // 设置按钮
+              // 设置按钮（增大图标和按钮尺寸，添加Tooltip）
               IconButton(
                 onPressed: () {},
-                icon: const Icon(Icons.settings, size: 20),
+                icon: const Icon(Icons.settings, size: 24),
+                tooltip: '设置',
                 style: IconButton.styleFrom(
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(12),
+                  minimumSize: const Size(44, 44),
                   backgroundColor: Colors.transparent,
                   foregroundColor: theme.colorScheme.onSurface.withOpacity(0.7),
                   side: BorderSide(

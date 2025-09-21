@@ -19,6 +19,23 @@ class NovelStructureUpdatedEvent extends AppEvent {
   });
 }
 
+// 场景内容被外部更新（非当前编辑器直接输入）事件
+class SceneContentExternallyUpdatedEvent extends AppEvent {
+  final String novelId;
+  final String? actId; // 可能为空，监听方可自行查找
+  final String chapterId;
+  final String sceneId;
+  final String content; // 可以是纯文本，也可以是Quill JSON字符串
+
+  const SceneContentExternallyUpdatedEvent({
+    required this.novelId,
+    required this.chapterId,
+    required this.sceneId,
+    required this.content,
+    this.actId,
+  });
+}
+
 // 片段创建事件
 class SnippetCreatedEvent extends AppEvent {
   final NovelSnippet snippet;
@@ -36,6 +53,22 @@ class SnippetDeletedEvent extends AppEvent {
   final String snippetId;
   final String novelId;
   const SnippetDeletedEvent({required this.snippetId, required this.novelId});
+}
+
+// 任务事件（SSE）接收事件
+class TaskEventReceived extends AppEvent {
+  final Map<String, dynamic> event;
+  const TaskEventReceived({required this.event});
+}
+
+// 请求开始全局任务事件监听
+class StartTaskEventsListening extends AppEvent {
+  const StartTaskEventsListening();
+}
+
+// 请求停止全局任务事件监听
+class StopTaskEventsListening extends AppEvent {
+  const StopTaskEventsListening();
 }
 
 // 事件总线单例

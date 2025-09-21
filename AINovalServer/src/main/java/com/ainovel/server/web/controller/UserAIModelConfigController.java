@@ -17,6 +17,8 @@ import com.ainovel.server.domain.model.ModelInfo;
 import com.ainovel.server.domain.model.UserAIModelConfig;
 import com.ainovel.server.service.AIService;
 import com.ainovel.server.service.UserAIModelConfigService;
+import com.ainovel.server.service.ai.capability.ProviderCapabilityService;
+import com.ainovel.server.repository.ModelPricingRepository;
 import com.ainovel.server.web.dto.AIModelConfigDto;
 import com.ainovel.server.web.dto.CreateUserAIModelConfigRequest;
 import com.ainovel.server.web.dto.ListUserConfigsRequest;
@@ -25,6 +27,7 @@ import com.ainovel.server.web.dto.UpdateUserAIModelConfigRequest;
 import com.ainovel.server.web.dto.UserAIModelConfigResponse;
 import com.ainovel.server.web.dto.UserIdConfigIndexDto;
 import com.ainovel.server.web.dto.UserIdDto;
+import com.ainovel.server.web.dto.UserAIModelConfigEnrichedResponse;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -43,6 +46,10 @@ public class UserAIModelConfigController {
 
     private final UserAIModelConfigService configService;
     private final AIService aiService;
+    @Autowired
+    private ProviderCapabilityService capabilityService;
+    @Autowired
+    private ModelPricingRepository modelPricingRepository;
 
     @Autowired
     public UserAIModelConfigController(UserAIModelConfigService configService, AIService aiService) {
@@ -61,7 +68,9 @@ public class UserAIModelConfigController {
     public Flux<ModelInfo> listModelsForProvider(
             @Valid @RequestBody ProviderModelsRequest request) {
         log.info("请求获取提供商 '{}' 的模型信息列表 (Controller)", request.provider());
-        return aiService.getModelInfosForProvider(request.provider())
+        // 使用 CapabilityService 的默认模型，并尝试补齐定价信息
+        return capabilityService.getDefaultModels(request.provider())
+                .flatMap(this::enrichModelInfoPricing)
                 .doOnError(e -> log.error("在 Controller 层获取提供商 '{}' 的模型信息时出错: {}", request.provider(), e.getMessage(), e));
     }
 
@@ -92,7 +101,16 @@ public class UserAIModelConfigController {
     @ResponseStatus(HttpStatus.CREATED)
     public Mono<UserAIModelConfigResponse> addAIModelConfig(@RequestBody AIModelConfigDto aiModelConfigDto) {
         String userId = aiModelConfigDto.getUserId();
-        Map<String, Object> config = (Map<String, Object>) aiModelConfigDto.getConfig();
+        Object configObj = aiModelConfigDto.getConfig();
+        Map<String, Object> config = new java.util.HashMap<>();
+        if (configObj instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> e : map.entrySet()) {
+                Object k = e.getKey();
+                if (k instanceof String key) {
+                    config.put(key, e.getValue());
+                }
+            }
+        }
 
         String provider = (String) config.get("provider");
         String modelName = (String) config.get("modelName");
@@ -138,7 +156,16 @@ public class UserAIModelConfigController {
     public Mono<ResponseEntity<UserAIModelConfigResponse>> updateAIModelConfig(@RequestBody UserIdConfigIndexDto userIdConfigIndexDto) {
         String userId = userIdConfigIndexDto.getUserId();
         int configIndex = userIdConfigIndexDto.getConfigIndex();
-        Map<String, Object> configData = (Map<String, Object>) userIdConfigIndexDto.getConfig();
+        Object cfgObj = userIdConfigIndexDto.getConfig();
+        Map<String, Object> configData = new java.util.HashMap<>();
+        if (cfgObj instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> e : map.entrySet()) {
+                Object k = e.getKey();
+                if (k instanceof String key) {
+                    configData.put(key, e.getValue());
+                }
+            }
+        }
 
         log.debug("Request to update AI model config (legacy): userId={}, configIndex={}", userId, configIndex);
 
@@ -286,6 +313,95 @@ public class UserAIModelConfigController {
         return configsFlux.map(UserAIModelConfigResponse::fromEntity).collectList();
     }
 
+    @PostMapping("/users/{userId}/list-enriched")
+    @Operation(summary = "列出用户所有AI模型配置（带价格与标签信息）")
+    public Mono<List<UserAIModelConfigEnrichedResponse>> listConfigurationsEnriched(
+            @Parameter(description = "用户ID", required = true) @PathVariable String userId,
+            @RequestBody(required = false) ListUserConfigsRequest request) {
+        boolean validatedOnly = request != null && request.validatedOnly() != null && request.validatedOnly();
+        log.debug("Request to list enriched configs for user {}: validatedOnly={}", userId, validatedOnly);
+
+        Flux<UserAIModelConfig> configsFlux = validatedOnly
+                ? configService.listValidatedConfigurations(userId)
+                : configService.listConfigurations(userId);
+
+        // 将用户配置与AIService返回的模型信息合并（包含 CapabilityDetector 的标签与 AbstractTokenPricingCalculator 的价格）
+        return configsFlux.flatMap(config -> {
+            String provider = config.getProvider();
+            String modelName = config.getModelName();
+            // 使用 CapabilityService 默认模型，随后补齐价格
+            Mono<ModelInfo> infoMono = capabilityService.getDefaultModels(provider)
+                    .filter(mi -> modelName.equalsIgnoreCase(mi.getId()) || modelName.equalsIgnoreCase(mi.getName()))
+                    .next()
+                    .switchIfEmpty(Mono.just(ModelInfo.basic(modelName, modelName, provider)));
+
+            return infoMono.flatMap(this::enrichModelInfoPricing)
+                    .map(mi -> new UserAIModelConfigEnrichedResponse(
+                            config.getId(),
+                            config.getUserId(),
+                            config.getProvider(),
+                            config.getModelName(),
+                            config.getAlias() != null ? config.getAlias() : config.getModelName(),
+                            config.getApiEndpoint() != null ? config.getApiEndpoint() : "",
+                            config.getIsValidated(),
+                            config.isDefault(),
+                            config.isToolDefault(),
+                            config.getCreatedAt(),
+                            config.getUpdatedAt(),
+                            null, // apiKey 不在该接口返回
+                            // 定价字段从已补齐的 ModelInfo.pricing 读取
+                            mi.getPricing() != null ? mi.getPricing().get("input") : null,
+                            mi.getPricing() != null ? mi.getPricing().get("output") : null,
+                            mi.getPricing() != null ? mi.getPricing().get("unified") : null,
+                            mi.getMaxTokens(),
+                            mi.getDescription(),
+                            mi.getProperties()
+                    ));
+        }).collectList();
+    }
+
+    // 补齐模型的定价信息（基于 ModelPricingRepository）
+    private Mono<ModelInfo> enrichModelInfoPricing(ModelInfo modelInfo) {
+        if (modelInfo == null || modelInfo.getProvider() == null || modelInfo.getId() == null) {
+            return Mono.just(modelInfo);
+        }
+        // 如果已有价格，直接返回
+        Map<String, Double> pricingMap = modelInfo.getPricing();
+        if (pricingMap != null && (!pricingMap.isEmpty())) {
+            return Mono.just(modelInfo);
+        }
+        return modelPricingRepository.findByProviderAndModelIdAndActiveTrue(modelInfo.getProvider(), modelInfo.getId())
+                .map(pricing -> {
+                    Map<String, Double> map = modelInfo.getPricing();
+                    if (map == null) {
+                        map = new java.util.HashMap<>();
+                        modelInfo.setPricing(map);
+                    }
+                    if (pricing.getUnifiedPricePerThousandTokens() != null) {
+                        map.put("unified", pricing.getUnifiedPricePerThousandTokens());
+                    } else {
+                        if (pricing.getInputPricePerThousandTokens() != null) {
+                            map.put("input", pricing.getInputPricePerThousandTokens());
+                        }
+                        if (pricing.getOutputPricePerThousandTokens() != null) {
+                            map.put("output", pricing.getOutputPricePerThousandTokens());
+                        }
+                    }
+                    // 仅在缺失时补齐描述与上下文长度
+                    if (modelInfo.getMaxTokens() == null && pricing.getMaxContextTokens() != null) {
+                        modelInfo.setMaxTokens(pricing.getMaxContextTokens());
+                    }
+                    if ((modelInfo.getDescription() == null || modelInfo.getDescription().isEmpty()) && pricing.getDescription() != null) {
+                        modelInfo.setDescription(pricing.getDescription());
+                    }
+                    if (pricing.getSupportsStreaming() != null) {
+                        modelInfo.setSupportsStreaming(pricing.getSupportsStreaming());
+                    }
+                    return modelInfo;
+                })
+                .defaultIfEmpty(modelInfo);
+    }
+
     @PostMapping("/users/{userId}/list-with-api-keys")
     @Operation(summary = "列出用户所有的AI模型配置(包含解密后的API密钥)")
     public Mono<List<UserAIModelConfigResponse>> listConfigurationsWithApiKeys(
@@ -405,6 +521,28 @@ public class UserAIModelConfigController {
                 })
                 .onErrorResume(RuntimeException.class, e -> {
                     log.error("设置默认配置失败 (运行时错误): userId={}, configId={}, error={}", userId, configId, e.getMessage(), e);
+                    if (e.getMessage() != null && e.getMessage().contains("配置不存在")) {
+                        return Mono.just(ResponseEntity.notFound().build());
+                    }
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
+                });
+    }
+
+    @PostMapping("/users/{userId}/set-tool-default/{configId}")
+    @Operation(summary = "设置指定配置为用户的工具调用默认模型")
+    public Mono<ResponseEntity<UserAIModelConfigResponse>> setToolDefaultConfiguration(
+            @Parameter(description = "用户ID", required = true) @PathVariable String userId,
+            @Parameter(description = "配置ID", required = true) @PathVariable String configId) {
+        log.debug("Request to set tool-default config for user {}: configId={}", userId, configId);
+        return configService.setToolDefaultConfiguration(userId, configId)
+                .map(UserAIModelConfigResponse::fromEntity)
+                .map(ResponseEntity::ok)
+                .onErrorResume(IllegalArgumentException.class, e -> {
+                    log.warn("设置工具默认配置失败 (参数错误): userId={}, configId={}, error={}", userId, configId, e.getMessage());
+                    return Mono.just(ResponseEntity.badRequest().build());
+                })
+                .onErrorResume(RuntimeException.class, e -> {
+                    log.error("设置工具默认配置失败 (运行时错误): userId={}, configId={}, error={}", userId, configId, e.getMessage(), e);
                     if (e.getMessage() != null && e.getMessage().contains("配置不存在")) {
                         return Mono.just(ResponseEntity.notFound().build());
                     }

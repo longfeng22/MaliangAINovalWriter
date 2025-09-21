@@ -49,6 +49,8 @@ abstract class SettingGenerationRepository {
     required String modificationPrompt,
     required String modelConfigId,
     String scope = 'self',
+    bool? isPublicModel,
+    String? publicModelConfigId,
   });
 
   /// 基于会话整体调整生成

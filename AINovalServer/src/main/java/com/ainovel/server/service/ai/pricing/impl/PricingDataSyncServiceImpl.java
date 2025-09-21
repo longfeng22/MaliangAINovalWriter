@@ -36,15 +36,30 @@ public class PricingDataSyncServiceImpl implements PricingDataSyncService {
     @Autowired(required = false)
     private GeminiTokenPricingCalculator geminiCalculator;
     
+    @Autowired(required = false)
+    private GrokTokenPricingCalculator grokCalculator;
+    
+    @Autowired(required = false)
+    private DoubaoTokenPricingCalculator doubaoCalculator;
+    
+    @Autowired(required = false)
+    private ZhipuTokenPricingCalculator zhipuCalculator;
+    
+    @Autowired(required = false)
+    private QwenTokenPricingCalculator qwenCalculator;
+    
     /**
      * 支持自动同步的提供商映射
      */
-    private final Map<String, Boolean> supportedProviders = Map.of(
-            "openai", true,      // OpenAI有API支持
-            "anthropic", false,  // Anthropic暂时无公开API
-            "gemini", false,     // Gemini使用静态配置
-            "grok", false        // Grok使用静态配置
-    );
+    private final Map<String, Boolean> supportedProviders = new java.util.LinkedHashMap<>() {{
+            put("openai", true);
+            put("anthropic", false);
+            put("gemini", false);
+            put("grok", false);
+            put("doubao", false);
+            put("zhipu", false);
+            put("qwen", false);
+    }};
     
     /**
      * 同步状态缓存
@@ -75,6 +90,34 @@ public class PricingDataSyncServiceImpl implements PricingDataSyncService {
                     .map(pricingList -> createSuccessResult(provider, pricingList.size(), startTime))
                     .onErrorResume(error -> {
                         log.error("Failed to sync Gemini pricing", error);
+                        return Mono.just(createFailureResult(provider, List.of(error.getMessage()), startTime));
+                    });
+            
+            case "grok" -> syncGrokPricing()
+                    .map(pricingList -> createSuccessResult(provider, pricingList.size(), startTime))
+                    .onErrorResume(error -> {
+                        log.error("Failed to sync Grok pricing", error);
+                        return Mono.just(createFailureResult(provider, List.of(error.getMessage()), startTime));
+                    });
+            
+            case "doubao" -> syncDoubaoPricing()
+                    .map(pricingList -> createSuccessResult(provider, pricingList.size(), startTime))
+                    .onErrorResume(error -> {
+                        log.error("Failed to sync Doubao pricing", error);
+                        return Mono.just(createFailureResult(provider, List.of(error.getMessage()), startTime));
+                    });
+            
+            case "zhipu" -> syncZhipuPricing()
+                    .map(pricingList -> createSuccessResult(provider, pricingList.size(), startTime))
+                    .onErrorResume(error -> {
+                        log.error("Failed to sync Zhipu pricing", error);
+                        return Mono.just(createFailureResult(provider, List.of(error.getMessage()), startTime));
+                    });
+            
+            case "qwen" -> syncQwenPricing()
+                    .map(pricingList -> createSuccessResult(provider, pricingList.size(), startTime))
+                    .onErrorResume(error -> {
+                        log.error("Failed to sync Qwen pricing", error);
                         return Mono.just(createFailureResult(provider, List.of(error.getMessage()), startTime));
                     });
             
@@ -194,6 +237,57 @@ public class PricingDataSyncServiceImpl implements PricingDataSyncService {
             return Mono.just(List.of());
         }
         return geminiCalculator.getDefaultGeminiPricing()
+                .flatMap(pricingList -> 
+                    Flux.fromIterable(pricingList)
+                            .flatMap(this::saveOrUpdatePricing)
+                            .collectList()
+                );
+    }
+    
+    /**
+     * 同步Grok定价
+     */
+    private Mono<List<ModelPricing>> syncGrokPricing() {
+        if (grokCalculator == null) {
+            return Mono.just(List.of());
+        }
+        return grokCalculator.getDefaultGrokPricing()
+                .flatMap(pricingList -> 
+                    Flux.fromIterable(pricingList)
+                            .flatMap(this::saveOrUpdatePricing)
+                            .collectList()
+                );
+    }
+    
+    private Mono<List<ModelPricing>> syncDoubaoPricing() {
+        if (doubaoCalculator == null) {
+            return Mono.just(List.of());
+        }
+        return doubaoCalculator.getDefaultDoubaoPricing()
+                .flatMap(pricingList -> 
+                    Flux.fromIterable(pricingList)
+                            .flatMap(this::saveOrUpdatePricing)
+                            .collectList()
+                );
+    }
+    
+    private Mono<List<ModelPricing>> syncZhipuPricing() {
+        if (zhipuCalculator == null) {
+            return Mono.just(List.of());
+        }
+        return zhipuCalculator.getDefaultZhipuPricing()
+                .flatMap(pricingList -> 
+                    Flux.fromIterable(pricingList)
+                            .flatMap(this::saveOrUpdatePricing)
+                            .collectList()
+                );
+    }
+    
+    private Mono<List<ModelPricing>> syncQwenPricing() {
+        if (qwenCalculator == null) {
+            return Mono.just(List.of());
+        }
+        return qwenCalculator.getDefaultQwenPricing()
                 .flatMap(pricingList -> 
                     Flux.fromIterable(pricingList)
                             .flatMap(this::saveOrUpdatePricing)

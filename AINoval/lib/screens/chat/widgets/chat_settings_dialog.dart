@@ -194,15 +194,15 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
     
     // 添加临时调试
     if (widget.novel != null) {
-      print('Novel has ${widget.novel!.acts.length} acts');
-      print('Settings: ${widget.settings.length}');
-      print('Setting Groups: ${widget.settingGroups.length}');
-      print('Snippets: ${widget.snippets.length}');
+      //print('Novel has ${widget.novel!.acts.length} acts');
+      //print('Settings: ${widget.settings.length}');
+      //print('Setting Groups: ${widget.settingGroups.length}');
+      //print('Snippets: ${widget.snippets.length}');
       for (var act in widget.novel!.acts) {
-        print('Act: ${act.title} has ${act.chapters.length} chapters');
+        //print('Act: ${act.title} has ${act.chapters.length} chapters');
       }
     } else {
-      print('Novel is null');
+      //print('Novel is null');
     }
   }
   
@@ -356,9 +356,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
         _tempOverlay = null;
       },
     );
-    
-    // 将overlay插入到当前上下文
-    Overlay.of(context).insert(_tempOverlay!);
+    // 由 UnifiedAIModelDropdown.show 内部负责插入 OverlayEntry
   }
 
   OverlayEntry? _tempOverlay;
@@ -383,7 +381,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
       repository = RepositoryProvider.of<UniversalAIRepository>(context);
     } catch (e) {
       // 如果没有找到 Provider，创建一个新的实例
-      debugPrint('Warning: UniversalAIRepository not found in context, creating fallback instance');
+      //debug//print('Warning: UniversalAIRepository not found in context, creating fallback instance');
       repository = UniversalAIRepositoryImpl(
         apiClient: RepositoryProvider.of<ApiClient>(context),
       );
@@ -895,8 +893,8 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
 
 
   void _handleSave() async {
-    print('🔧 [ChatSettingsDialog] 保存聊天设置');
-    print('🔧 [ChatSettingsDialog] 选中的上下文: ${_contextSelectionData.selectedCount}');
+    //print('🔧 [ChatSettingsDialog] 保存聊天设置');
+    //print('🔧 [ChatSettingsDialog] 选中的上下文: ${_contextSelectionData.selectedCount}');
     
     // 🚀 检查必填字段
     if (_selectedUnifiedModel == null) {
@@ -905,7 +903,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
     }
     
     for (final item in _contextSelectionData.selectedItems.values) {
-      print('🔧 [ChatSettingsDialog] - ${item.title} (${item.type.displayName})');
+      //print('🔧 [ChatSettingsDialog] - ${item.title} (${item.type.displayName})');
     }
     
     // 🚀 构建新的聊天配置
@@ -917,7 +915,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
         novelId: widget.novel?.id,
       );
       
-      print('🔧 [ChatSettingsDialog] 基础配置已有上下文: ${baseConfig.contextSelections?.selectedCount ?? 0}');
+      //print('🔧 [ChatSettingsDialog] 基础配置已有上下文: ${baseConfig.contextSelections?.selectedCount ?? 0}');
       
       // 🚀 创建模型配置
       final modelConfig = createModelConfig(_selectedUnifiedModel!);
@@ -956,30 +954,30 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
       
       // 🚀 如果是公共模型，显示积分预估确认对话框
       if (_selectedUnifiedModel!.isPublic) {
-        print('🔧 [ChatSettingsDialog] 公共模型，显示积分预估确认');
+        //print('🔧 [ChatSettingsDialog] 公共模型，显示积分预估确认');
         final confirmed = await showCreditEstimationAndConfirm(updatedConfig);
         
         if (!confirmed) {
-          print('🔧 [ChatSettingsDialog] 用户取消了积分确认');
+          //print('🔧 [ChatSettingsDialog] 用户取消了积分确认');
           return;
         }
         
-        print('🔧 [ChatSettingsDialog] 用户确认积分消耗');
+        //print('🔧 [ChatSettingsDialog] 用户确认积分消耗');
       }
       
-      print('🔧 [ChatSettingsDialog] 调用配置变更回调');
-      print('🔧 [ChatSettingsDialog] 更新后配置上下文: ${updatedConfig.contextSelections?.selectedCount ?? 0}');
+      //print('🔧 [ChatSettingsDialog] 调用配置变更回调');
+      //print('🔧 [ChatSettingsDialog] 更新后配置上下文: ${updatedConfig.contextSelections?.selectedCount ?? 0}');
       
       // 调用配置变更回调
       widget.onConfigChanged!(updatedConfig);
       
-      print('🔧 [ChatSettingsDialog] 聊天配置已更新:');
-      print('🔧 [ChatSettingsDialog] - 指令: ${updatedConfig.instructions?.isNotEmpty == true ? "有" : "无"}');
-      print('🔧 [ChatSettingsDialog] - 上下文选择: ${updatedConfig.contextSelections?.selectedCount ?? 0}');
-      print('🔧 [ChatSettingsDialog] - 智能上下文: ${updatedConfig.enableSmartContext}');
-      print('🔧 [ChatSettingsDialog] - 记忆截断: ${updatedConfig.parameters['memoryCutoff']}');
+      //print('🔧 [ChatSettingsDialog] 聊天配置已更新:');
+      //print('🔧 [ChatSettingsDialog] - 指令: ${updatedConfig.instructions?.isNotEmpty == true ? "有" : "无"}');
+      //print('🔧 [ChatSettingsDialog] - 上下文选择: ${updatedConfig.contextSelections?.selectedCount ?? 0}');
+      //print('🔧 [ChatSettingsDialog] - 智能上下文: ${updatedConfig.enableSmartContext}');
+      //print('🔧 [ChatSettingsDialog] - 记忆截断: ${updatedConfig.parameters['memoryCutoff']}');
     } else {
-      print('🚨 [ChatSettingsDialog] 警告：没有配置变更回调！');
+      //print('🚨 [ChatSettingsDialog] 警告：没有配置变更回调！');
     }
     
     widget.onSettingsSaved?.call();
@@ -997,18 +995,18 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
   }
 
   void _handleExpandInstructions() {
-    debugPrint('Expand instructions editor');
+    //debug//print('Expand instructions editor');
   }
 
   void _handleCopyInstructions() {
-    debugPrint('Copy instructions content');
+    //debug//print('Copy instructions content');
   }
 
   void _handleContextSelectionChanged(ContextSelectionData newData) {
     setState(() {
       _contextSelectionData = newData;
     });
-    debugPrint('Context selection changed: ${newData.selectedCount} items selected');
+    //debug//print('Context selection changed: ${newData.selectedCount} items selected');
   }
 
   void _handleResetContexts() {
@@ -1032,7 +1030,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
         );
       }
     });
-    debugPrint('Context selection reset');
+    //debug//print('Context selection reset');
   }
 
   void _handleMemoryCutoffChanged(int? value) {
@@ -1062,7 +1060,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
     setState(() {
       _selectedPromptTemplateId = templateId;
     });
-    debugPrint('选中的提示词模板ID: $templateId');
+    //debug//print('选中的提示词模板ID: $templateId');
   }
 
   /// 🚀 新增：重置提示词模板选择
@@ -1070,7 +1068,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
     setState(() {
       _selectedPromptTemplateId = null;
     });
-    debugPrint('重置提示词模板选择');
+    //debug//print('重置提示词模板选择');
   }
 
   /// 🚀 新增：处理温度参数变化
@@ -1078,7 +1076,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
     setState(() {
       _temperature = value;
     });
-    debugPrint('温度参数已更改: $value');
+    //debug//print('温度参数已更改: $value');
   }
 
   /// 🚀 新增：重置温度参数
@@ -1086,7 +1084,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
     setState(() {
       _temperature = 0.7;
     });
-    debugPrint('温度参数已重置为默认值: 0.7');
+    //debug//print('温度参数已重置为默认值: 0.7');
   }
 
   /// 🚀 新增：处理Top-P参数变化
@@ -1094,7 +1092,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
     setState(() {
       _topP = value;
     });
-    debugPrint('Top-P参数已更改: $value');
+    //debug//print('Top-P参数已更改: $value');
   }
 
   /// 🚀 新增：重置Top-P参数
@@ -1102,7 +1100,7 @@ class _ChatSettingsDialogState extends State<ChatSettingsDialog> with AIDialogCo
     setState(() {
       _topP = 0.9;
     });
-    debugPrint('Top-P参数已重置为默认值: 0.9');
+    //debug//print('Top-P参数已重置为默认值: 0.9');
   }
 }
 

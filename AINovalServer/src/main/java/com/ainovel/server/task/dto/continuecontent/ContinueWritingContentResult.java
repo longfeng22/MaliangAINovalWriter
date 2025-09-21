@@ -2,6 +2,8 @@ package com.ainovel.server.task.dto.continuecontent;
 
 import com.ainovel.server.task.model.TaskStatus;
 import lombok.Builder;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
 import lombok.Data;
 
 import java.util.List;
@@ -11,6 +13,8 @@ import java.util.List;
  */
 @Data
 @Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class ContinueWritingContentResult {
     
     /**

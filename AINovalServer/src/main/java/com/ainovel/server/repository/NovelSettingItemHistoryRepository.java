@@ -35,9 +35,9 @@ public interface NovelSettingItemHistoryRepository extends ReactiveMongoReposito
     Mono<NovelSettingItemHistory> findBySettingItemIdAndVersion(String settingItemId, Integer version);
 
     /**
-     * 获取设定条目的最新版本号
+     * 获取设定条目的最新版本记录（按版本倒序的第一条）
+     * 使用派生查询以自动添加 limit(1)，避免非唯一结果错误
      */
-    @Query(value = "{ 'settingItemId': ?0 }", sort = "{ 'version': -1 }")
     Mono<NovelSettingItemHistory> findTopBySettingItemIdOrderByVersionDesc(String settingItemId);
 
     /**

@@ -334,17 +334,21 @@ class _SceneItemState extends State<_SceneItem> {
 
   void _navigateToScene() {
     AppLogger.i('PlanView', '准备跳转到场景: ${widget.actId} - ${widget.chapterId} - ${widget.scene.id}');
-    
-    // 🚀 修改：使用EditorBloc的NavigateToSceneFromPlan事件
-    widget.editorBloc.add(editor.NavigateToSceneFromPlan(
+    // 与章节目录一致：仅设置活动场景与章节，不触发加载或视图切换
+    widget.editorBloc.add(editor.SetActiveScene(
       actId: widget.actId,
       chapterId: widget.chapterId,
       sceneId: widget.scene.id,
     ));
-    
-    Future.delayed(const Duration(milliseconds: 300), () {
-      // 跳转后可在外部触发切换
-    });
+    widget.editorBloc.add(editor.SetActiveChapter(
+      actId: widget.actId,
+      chapterId: widget.chapterId,
+    ));
+    // 对齐章节目录：设置焦点章节并切换沉浸模式
+    widget.editorBloc.add(editor.SetFocusChapter(chapterId: widget.chapterId));
+    widget.editorBloc.add(editor.SwitchToImmersiveMode(chapterId: widget.chapterId));
+    // 切换到写作视图
+    widget.editorBloc.add(const editor.SwitchToWriteView());
   }
 
   @override
@@ -365,7 +369,7 @@ class _SceneItemState extends State<_SceneItem> {
         children: [
           // 工具栏区域 - 动态背景
           Container(
-            height: 27, // 🚀 修改：设置固定高度，场景头部比章节头部稍小
+            height: 32, // 放大头部高度，提升可点击性
             decoration: BoxDecoration(
               color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey100 : WebTheme.grey50,
               borderRadius: const BorderRadius.only(
@@ -373,7 +377,7 @@ class _SceneItemState extends State<_SceneItem> {
                 topRight: Radius.circular(6),
               ),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0), // 🚀 修改：去掉垂直内边距，使用固定高度
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), // 增加垂直内边距
             child: Row(
               children: [
                 // 拖拽手柄
@@ -422,52 +426,21 @@ class _SceneItemState extends State<_SceneItem> {
                 
                 const Spacer(),
                 
-                // 保存指示器
-                if (_hasUnsavedChanges) ...[
-                  Container(
-                    width: 6,
-                    height: 6,
-                   decoration: BoxDecoration(
-                     color: WebTheme.warning,
-                     shape: BoxShape.circle,
-                   ),
-                  ),
-                  const SizedBox(width: 6),
-                  GestureDetector(
-                    onTap: _saveSummary,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: WebTheme.success,
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                      child: Text(
-                        '保存',
-                        style: TextStyle(
-                          fontSize: 9,
-                          color: WebTheme.isDarkMode(context) ? Colors.white : Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                ],
                 
                 // 跳转按钮
                 _SmallIconButton(
                   icon: Icons.launch,
-                  size: 12,
+                  size: 16,
                   tooltip: '跳转到场景',
                   onPressed: _navigateToScene,
                 ),
                 
-                const SizedBox(width: 4),
+                const SizedBox(width: 6),
                 
                 // 编辑切换按钮
                 _SmallIconButton(
                   icon: _isEditing ? Icons.visibility : Icons.edit,
-                  size: 12,
+                  size: 16,
                   tooltip: _isEditing ? '预览模式' : '编辑模式',
                   onPressed: () {
                     setState(() {
@@ -476,7 +449,7 @@ class _SceneItemState extends State<_SceneItem> {
                   },
                 ),
                 
-                const SizedBox(width: 4),
+                const SizedBox(width: 6),
                 
                 // 更多操作菜单
                 PopupMenuButton<String>(
@@ -638,7 +611,7 @@ class _AddSceneButton extends StatelessWidget {
       child: OutlinedButton.icon(
         icon: Icon(Icons.add, size: 14, color: WebTheme.getSecondaryTextColor(context)),
         label: Text(
-          'New Scene',
+          '新场景',
           style: TextStyle(fontSize: 12, color: WebTheme.getSecondaryTextColor(context)),
         ),
         style: OutlinedButton.styleFrom(
@@ -1076,6 +1049,7 @@ class _VirtualizedPlanView extends StatelessWidget {
             chapters: item.chapters!,
             novelId: novelId,
             editorBloc: editorBloc,
+            onSwitchToWrite: onSwitchToWrite,
           ),
         );
         
@@ -1107,12 +1081,14 @@ class _ChapterBatchWidget extends StatelessWidget {
     required this.chapters,
     required this.novelId,
     required this.editorBloc,
+    this.onSwitchToWrite,
   });
 
   final novel_models.Act act;
   final List<novel_models.Chapter> chapters;
   final String novelId;
   final editor.EditorBloc editorBloc;
+  final VoidCallback? onSwitchToWrite;
   
 
   @override
@@ -1147,6 +1123,7 @@ class _ChapterBatchWidget extends StatelessWidget {
                         chapter: chapters[i],
                         novelId: novelId,
                         editorBloc: editorBloc,
+                        onSwitchToWrite: onSwitchToWrite,
                       ),
                     ),
                   ],
@@ -1162,18 +1139,45 @@ class _ChapterBatchWidget extends StatelessWidget {
 }
 
 /// 优化的章节卡片 - 保持原有功能但提升性能
-class _OptimizedChapterCard extends StatelessWidget {
+class _OptimizedChapterCard extends StatefulWidget {
   const _OptimizedChapterCard({
     required this.actId,
     required this.chapter,
     required this.novelId,
     required this.editorBloc,
+    this.onSwitchToWrite,
   });
 
   final String actId;
   final novel_models.Chapter chapter;
   final String novelId;
   final editor.EditorBloc editorBloc;
+  final VoidCallback? onSwitchToWrite;
+
+  @override
+  State<_OptimizedChapterCard> createState() => _OptimizedChapterCardState();
+}
+
+class _OptimizedChapterCardState extends State<_OptimizedChapterCard> {
+  bool _hasUnsavedInChapter = false;
+  String? _unsavedSceneId;
+  VoidCallback? _unsavedSceneSave;
+
+  void _handleSceneUnsavedChanged(String sceneId, bool hasUnsaved, String currentSummary, VoidCallback? saveCallback) {
+    setState(() {
+      if (hasUnsaved) {
+        _hasUnsavedInChapter = true;
+        _unsavedSceneId = sceneId;
+        _unsavedSceneSave = saveCallback;
+      } else {
+        if (_unsavedSceneId == sceneId) {
+          _hasUnsavedInChapter = false;
+          _unsavedSceneId = null;
+          _unsavedSceneSave = null;
+        }
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1199,9 +1203,9 @@ class _OptimizedChapterCard extends StatelessWidget {
         children: [
           // 章节标题栏
           _ChapterHeader(
-            actId: actId,
-            chapter: chapter,
-            editorBloc: editorBloc,
+            actId: widget.actId,
+            chapter: widget.chapter,
+            editorBloc: widget.editorBloc,
           ),
           // 场景列表 - 优化版本，限制显示数量
           Container(
@@ -1210,18 +1214,20 @@ class _OptimizedChapterCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // 场景列表 - 限制最多显示5个场景以提升性能
-                ...chapter.scenes.take(5).toList().asMap().entries.map((entry) => 
+                ...widget.chapter.scenes.take(5).toList().asMap().entries.map((entry) =>
                   _OptimizedSceneItem(
-                    actId: actId,
-                    chapterId: chapter.id,
+                    actId: widget.actId,
+                    chapterId: widget.chapter.id,
                     scene: entry.value,
                     sceneNumber: entry.key + 1,
-                    novelId: novelId,
-                    editorBloc: editorBloc,
+                    novelId: widget.novelId,
+                    editorBloc: widget.editorBloc,
+                    onUnsavedChanged: _handleSceneUnsavedChanged,
+                    onSwitchToWrite: widget.onSwitchToWrite,
                   ),
                 ),
                 // 如果有更多场景，显示省略提示
-                if (chapter.scenes.length > 5) ...[
+                if (widget.chapter.scenes.length > 5) ...[
                   Container(
                     margin: const EdgeInsets.only(top: 6),
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1230,7 +1236,7 @@ class _OptimizedChapterCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
-                      '还有 ${chapter.scenes.length - 5} 个场景...',
+                      '还有 ${widget.chapter.scenes.length - 5} 个场景...',
                       style: TextStyle(
                         fontSize: 11,
                         color: WebTheme.getSecondaryTextColor(context),
@@ -1240,11 +1246,44 @@ class _OptimizedChapterCard extends StatelessWidget {
                   ),
                 ],
                 const SizedBox(height: 8),
-                _AddSceneButton(
-                  actId: actId,
-                  chapterId: chapter.id,
-                  editorBloc: editorBloc,
-                ),
+                if (_hasUnsavedInChapter) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _unsavedSceneSave == null ? null : () {
+                            _unsavedSceneSave?.call();
+                            setState(() {
+                              _hasUnsavedInChapter = false;
+                              _unsavedSceneId = null;
+                              _unsavedSceneSave = null;
+                            });
+                          },
+                          icon: const Icon(Icons.save, size: 16),
+                          label: const Text('保存'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _AddSceneButton(
+                          actId: widget.actId,
+                          chapterId: widget.chapter.id,
+                          editorBloc: widget.editorBloc,
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else ...[
+                  _AddSceneButton(
+                    actId: widget.actId,
+                    chapterId: widget.chapter.id,
+                    editorBloc: widget.editorBloc,
+                  ),
+                ],
               ],
             ),
           ),
@@ -1263,6 +1302,8 @@ class _OptimizedSceneItem extends StatefulWidget {
     required this.sceneNumber,
     required this.novelId,
     required this.editorBloc,
+    required this.onUnsavedChanged,
+    this.onSwitchToWrite,
   });
 
   final String actId;
@@ -1271,6 +1312,8 @@ class _OptimizedSceneItem extends StatefulWidget {
   final int sceneNumber;
   final String novelId;
   final editor.EditorBloc editorBloc;
+  final void Function(String sceneId, bool hasUnsaved, String currentSummary, VoidCallback? saveCallback) onUnsavedChanged;
+  final VoidCallback? onSwitchToWrite;
 
   @override
   State<_OptimizedSceneItem> createState() => _OptimizedSceneItemState();
@@ -1300,6 +1343,12 @@ class _OptimizedSceneItemState extends State<_OptimizedSceneItem> {
       setState(() {
         _hasUnsavedChanges = hasChanges;
       });
+      widget.onUnsavedChanged(
+        widget.scene.id,
+        _hasUnsavedChanges,
+        _summaryController.text,
+        _hasUnsavedChanges ? _saveSummary : null,
+      );
     }
   }
 
@@ -1316,19 +1365,35 @@ class _OptimizedSceneItemState extends State<_OptimizedSceneItem> {
         _hasUnsavedChanges = false;
         _isEditing = false;
       });
+      widget.onUnsavedChanged(
+        widget.scene.id,
+        false,
+        _summaryController.text,
+        null,
+      );
     }
   }
 
   void _navigateToScene() {
-    widget.editorBloc.add(editor.NavigateToSceneFromPlan(
+    // 与章节目录一致：仅设置活动场景与章节，不触发加载或视图切换
+    widget.editorBloc.add(editor.SetActiveScene(
       actId: widget.actId,
       chapterId: widget.chapterId,
       sceneId: widget.scene.id,
     ));
-    
-    Future.delayed(const Duration(milliseconds: 300), () {
-      // 跳转后可在外部触发切换
-    });
+    widget.editorBloc.add(editor.SetActiveChapter(
+      actId: widget.actId,
+      chapterId: widget.chapterId,
+    ));
+    // 对齐章节目录：设置焦点章节并切换沉浸模式
+    widget.editorBloc.add(editor.SetFocusChapter(chapterId: widget.chapterId));
+    widget.editorBloc.add(editor.SwitchToImmersiveMode(chapterId: widget.chapterId));
+    // 切换到写作视图：优先调用上层回调以关闭Plan覆盖层
+    if (widget.onSwitchToWrite != null) {
+      widget.onSwitchToWrite!();
+    } else {
+      widget.editorBloc.add(const editor.SwitchToWriteView());
+    }
   }
 
   @override
@@ -1349,7 +1414,7 @@ class _OptimizedSceneItemState extends State<_OptimizedSceneItem> {
         children: [
           // 工具栏区域 - 简化版
           Container(
-            height: 24, // 减少高度
+            height: 28, // 放大高度
             decoration: BoxDecoration(
               color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey100 : WebTheme.grey50,
               borderRadius: const BorderRadius.only(
@@ -1357,7 +1422,7 @@ class _OptimizedSceneItemState extends State<_OptimizedSceneItem> {
                 topRight: Radius.circular(6),
               ),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             child: Row(
               children: [
                 // 场景标签
@@ -1394,40 +1459,20 @@ class _OptimizedSceneItemState extends State<_OptimizedSceneItem> {
                 
                 const Spacer(),
                 
-                // 保存指示器
-                if (_hasUnsavedChanges) ...[
-                  GestureDetector(
-                    onTap: _saveSummary,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: Colors.green.shade600,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                      child: const Text(
-                        '保存',
-                        style: TextStyle(
-                          fontSize: 8,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                ],
                 
                 // 跳转按钮
                 _SmallIconButton(
                   icon: Icons.launch,
-                  size: 10,
+                  size: 14,
+                  tooltip: '跳转到场景',
                   onPressed: _navigateToScene,
                 ),
                 
                 // 编辑切换按钮
                 _SmallIconButton(
                   icon: _isEditing ? Icons.visibility : Icons.edit,
-                  size: 10,
+                  size: 14,
+                  tooltip: _isEditing ? '预览模式' : '编辑模式',
                   onPressed: () {
                     setState(() {
                       _isEditing = !_isEditing;

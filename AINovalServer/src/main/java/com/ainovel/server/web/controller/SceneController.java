@@ -297,6 +297,7 @@ public class SceneController extends ReactiveBaseController {
             String chapterId = (String) requestData.get("chapterId");
             String title = (String) requestData.get("title");
             String summary = (String) requestData.get("summary");
+            String content = (String) requestData.get("content"); // 新增：支持同时设置内容
             Integer position = requestData.get("position") != null ? 
                     Integer.valueOf(requestData.get("position").toString()) : null;
             
@@ -310,7 +311,7 @@ public class SceneController extends ReactiveBaseController {
             
             log.info("细粒度添加场景: novelId={}, chapterId={}, title={}", novelId, chapterId, title);
             
-            return sceneService.addScene(novelId, chapterId, title, summary, position)
+            return sceneService.addScene(novelId, chapterId, title, summary, content, position)
                     .doOnSuccess(scene -> log.info("细粒度添加场景成功: sceneId={}", scene.getId()));
         } catch (Exception e) {
             log.error("细粒度添加场景失败", e);

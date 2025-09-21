@@ -11,6 +11,7 @@ import 'package:ainoval/utils/logger.dart';
 import 'package:get_it/get_it.dart';
 import 'package:flutter/services.dart';
 import 'package:ainoval/widgets/common/top_toast.dart';
+import 'package:ainoval/widgets/analytics/multi_series_line_chart.dart';
 
 class LLMObservabilityScreen extends StatefulWidget {
   const LLMObservabilityScreen({super.key});
@@ -73,7 +74,10 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
         _loadMoreTracesCursor();
       }
     });
-    _initializeData();
+    _initializeData().then((_) {
+      // 初始化后自动加载趋势（默认：调用次数 + 未选择功能时加载总体）
+      _loadAndRenderTrendsMulti();
+    });
   }
 
   @override
@@ -407,7 +411,7 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('趋势图（实验）', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const Text('趋势图', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             Wrap(
               spacing: 12,
@@ -416,18 +420,18 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
               children: [
                 _buildTrendMetricDropdown(),
                 _buildTrendIntervalDropdown(),
-                _buildTrendBusinessTypeDropdown(),
+                _buildTrendFeatureMultiSelect(),
                 _buildTrendModelField(),
                 _buildTrendProviderField(),
                 ElevatedButton.icon(
-                  onPressed: _loadAndRenderTrends,
+                  onPressed: _loadAndRenderTrendsMulti,
                   icon: const Icon(Icons.show_chart),
                   label: const Text('生成趋势'),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            _buildTrendChartPlaceholder(),
+            _buildTrendChart(),
           ],
         ),
       ),
@@ -435,24 +439,37 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
   }
 
   // 以下为简化的趋势控件与展示占位，后续可替换为真正折线图组件
-  String _trendMetric = 'successRate';
+  String _trendMetric = 'count';
   String _trendInterval = 'hour';
   String? _trendBusinessType;
   final _trendModelCtrl = TextEditingController();
   final _trendProviderCtrl = TextEditingController();
-  List<Map<String, Object>> _trendSeries = const [];
+  // 多线折线图数据
+  final List<Color> _trendPalette = const [
+    Color(0xFF3B82F6),
+    Color(0xFF8B5CF6),
+    Color(0xFF10B981),
+    Color(0xFFF59E0B),
+    Color(0xFFEF4444),
+    Color(0xFF06B6D4),
+    Color(0xFF6366F1),
+    Color(0xFF14B8A6),
+  ];
+  final List<String> _trendSelectedFeatures = [];
+  List<LineSeries> _trendMultiSeries = const [];
 
   Widget _buildTrendMetricDropdown() {
     return DropdownButton<String>(
       value: _trendMetric,
       items: const [
+        DropdownMenuItem(value: 'count', child: Text('调用次数')),
         DropdownMenuItem(value: 'successRate', child: Text('成功率')),
         DropdownMenuItem(value: 'avgLatency', child: Text('平均延迟')),
         DropdownMenuItem(value: 'p90Latency', child: Text('TP90')),
         DropdownMenuItem(value: 'p95Latency', child: Text('TP95')),
         DropdownMenuItem(value: 'tokens', child: Text('Token用量')),
       ],
-      onChanged: (v) => setState(() => _trendMetric = v ?? 'successRate'),
+      onChanged: (v) => setState(() => _trendMetric = v ?? 'count'),
     );
   }
 
@@ -467,26 +484,51 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
     );
   }
 
-  Widget _buildTrendBusinessTypeDropdown() {
-    return SizedBox(
-      width: 220,
-      child: DropdownButtonFormField<String?>(
-        value: _trendBusinessType,
-        decoration: const InputDecoration(labelText: 'AI功能类型'),
-        items: const [
-          DropdownMenuItem<String?>(value: null, child: Text('全部')),
-          DropdownMenuItem(value: 'TEXT_EXPANSION', child: Text('文本扩写')),
-          DropdownMenuItem(value: 'TEXT_REFACTOR', child: Text('文本润色')),
-          DropdownMenuItem(value: 'TEXT_SUMMARY', child: Text('文本总结')),
-          DropdownMenuItem(value: 'AI_CHAT', child: Text('AI对话')),
-          DropdownMenuItem(value: 'SCENE_TO_SUMMARY', child: Text('场景转摘要')),
-          DropdownMenuItem(value: 'SUMMARY_TO_SCENE', child: Text('摘要转场景')),
-          DropdownMenuItem(value: 'NOVEL_GENERATION', child: Text('小说生成')),
-          DropdownMenuItem(value: 'PROFESSIONAL_FICTION_CONTINUATION', child: Text('专业续写')),
-          DropdownMenuItem(value: 'SCENE_BEAT_GENERATION', child: Text('场景节拍生成')),
-          DropdownMenuItem(value: 'SETTING_TREE_GENERATION', child: Text('设定树生成')),
+  Widget _buildTrendFeatureMultiSelect() {
+    const List<Map<String, String>> options = [
+      {'key': 'TEXT_EXPANSION', 'label': '文本扩写'},
+      {'key': 'TEXT_REFACTOR', 'label': '文本润色'},
+      {'key': 'TEXT_SUMMARY', 'label': '文本总结'},
+      {'key': 'AI_CHAT', 'label': 'AI对话'},
+      {'key': 'SCENE_TO_SUMMARY', 'label': '场景转摘要'},
+      {'key': 'SUMMARY_TO_SCENE', 'label': '摘要转场景'},
+      {'key': 'NOVEL_GENERATION', 'label': '小说生成'},
+      {'key': 'PROFESSIONAL_FICTION_CONTINUATION', 'label': '专业续写'},
+      {'key': 'SCENE_BEAT_GENERATION', 'label': '场景节拍生成'},
+      {'key': 'SETTING_TREE_GENERATION', 'label': '设定树生成'},
+    ];
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 820),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          ...options.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final item = entry.value;
+            final selected = _trendSelectedFeatures.contains(item['key']);
+            final color = _trendPalette[idx % _trendPalette.length];
+            return FilterChip(
+              selected: selected,
+              label: Text(item['label']!),
+              avatar: Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              onSelected: (v) {
+                setState(() {
+                  if (v) {
+                    _trendSelectedFeatures.add(item['key']!);
+                  } else {
+                    _trendSelectedFeatures.remove(item['key']!);
+                  }
+                });
+              },
+            );
+          }).toList(),
         ],
-        onChanged: (v) => setState(() => _trendBusinessType = v),
       ),
     );
   }
@@ -511,57 +553,121 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
     );
   }
 
-  Future<void> _loadAndRenderTrends() async {
+  Future<void> _loadAndRenderTrendsMulti() async {
     try {
-      final data = await _repository.getTrends(
-        metric: _trendMetric,
-        businessType: _trendBusinessType,
-        model: _trendModelCtrl.text.isEmpty ? null : _trendModelCtrl.text,
-        provider: _trendProviderCtrl.text.isEmpty ? null : _trendProviderCtrl.text,
-        interval: _trendInterval,
-        startTime: _startTime,
-        endTime: _endTime,
-      );
-      final series = (data['series'] as List?)?.cast<Map<String, Object>>() ?? [];
+      final List<String> features = _trendSelectedFeatures.isEmpty && _trendBusinessType != null
+          ? [_trendBusinessType!]
+          : _trendSelectedFeatures.toList();
+
+      final bool renderOverallOnly = features.isEmpty;
+
+      final List<Future<Map<String, dynamic>>> futures = [];
+      if (renderOverallOnly) {
+        futures.add(_repository.getTrends(
+          metric: _trendMetric,
+          businessType: null,
+          model: _trendModelCtrl.text.isEmpty ? null : _trendModelCtrl.text,
+          provider: _trendProviderCtrl.text.isEmpty ? null : _trendProviderCtrl.text,
+          interval: _trendInterval,
+          startTime: _startTime,
+          endTime: _endTime,
+        ));
+      } else {
+        for (final f in features) {
+          futures.add(_repository.getTrends(
+            metric: _trendMetric,
+            businessType: f,
+            model: _trendModelCtrl.text.isEmpty ? null : _trendModelCtrl.text,
+            provider: _trendProviderCtrl.text.isEmpty ? null : _trendProviderCtrl.text,
+            interval: _trendInterval,
+            startTime: _startTime,
+            endTime: _endTime,
+          ));
+        }
+      }
+
+      final results = await Future.wait(futures);
+      final List<LineSeries> lines = [];
+      if (renderOverallOnly) {
+        final series = (results.first['series'] as List?)?.cast<Map>() ?? const [];
+        lines.add(LineSeries(
+          name: '总体',
+          color: _trendPalette.first,
+          points: series.map((p) => LinePoint(label: (p['timestamp'] ?? '').toString(), value: (p['value'] as num?)?.toDouble() ?? 0)).toList(),
+        ));
+      } else {
+        for (int i = 0; i < results.length; i++) {
+          final series = (results[i]['series'] as List?)?.cast<Map>() ?? const [];
+          final color = _trendPalette[i % _trendPalette.length];
+          final name = features[i];
+          lines.add(LineSeries(
+            name: _formatFeatureName(name),
+            color: color,
+            points: series.map((p) => LinePoint(label: (p['timestamp'] ?? '').toString(), value: (p['value'] as num?)?.toDouble() ?? 0)).toList(),
+          ));
+        }
+      }
+
       setState(() {
-        _trendSeries = series;
+        _trendMultiSeries = lines;
       });
     } catch (e) {
       TopToast.error(context, '加载趋势失败: $e');
     }
   }
 
-  Widget _buildTrendChartPlaceholder() {
-    if (_trendSeries.isEmpty) {
-      return Container(
-        height: 220,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.grey.withOpacity(0.05),
-          border: Border.all(color: Colors.grey.withOpacity(0.2)),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: const Text('生成后显示趋势数据（可替换为真实折线图组件）'),
-      );
-    }
-    // 简易表格预览（后续换折线图）
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.withOpacity(0.2)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('趋势数据', style: TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          ..._trendSeries.take(50).map((p) => Text('${p['timestamp']}: ${p['value']}')),
-          if (_trendSeries.length > 50)
-            Text('... 共 ${_trendSeries.length} 点'),
-        ],
-      ),
+  Widget _buildTrendChart() {
+    return MultiSeriesLineChart(
+      title: _metricDisplayName(_trendMetric),
+      seriesList: _trendMultiSeries,
+      height: 280,
+      showArea: false,
     );
+  }
+
+  String _metricDisplayName(String? m) {
+    switch (m) {
+      case 'count':
+        return '调用次数';
+      case 'avgLatency':
+        return '平均延迟(ms)';
+      case 'p90Latency':
+        return 'TP90延迟(ms)';
+      case 'p95Latency':
+        return 'TP95延迟(ms)';
+      case 'tokens':
+        return 'Token用量';
+      case 'successRate':
+      default:
+        return '成功率(%)';
+    }
+  }
+
+  String _formatFeatureName(String key) {
+    switch (key) {
+      case 'TEXT_EXPANSION':
+        return '文本扩写';
+      case 'TEXT_REFACTOR':
+        return '文本润色';
+      case 'TEXT_SUMMARY':
+        return '文本总结';
+      case 'AI_CHAT':
+        return 'AI对话';
+      case 'SCENE_TO_SUMMARY':
+        return '场景转摘要';
+      case 'SUMMARY_TO_SCENE':
+        return '摘要转场景';
+      case 'NOVEL_GENERATION':
+        return '小说生成';
+      case 'PROFESSIONAL_FICTION_CONTINUATION':
+        return '专业续写';
+      case 'SCENE_BEAT_GENERATION':
+        return '场景节拍生成';
+      case 'SETTING_TREE_GENERATION':
+        return '设定树生成';
+      default:
+        return key;
+    }
   }
 
   Widget _buildTracesTab() {

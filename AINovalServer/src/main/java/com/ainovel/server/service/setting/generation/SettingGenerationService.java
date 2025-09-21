@@ -62,6 +62,7 @@ public class SettingGenerationService implements ISettingGenerationService {
     private final com.ainovel.server.service.ai.orchestration.ToolStreamingOrchestrator toolStreamingOrchestrator;
     private final com.ainovel.server.service.PublicModelConfigService publicModelConfigService;
     private final com.ainovel.server.service.CreditService creditService;
+    private final com.ainovel.server.service.UserAIModelConfigService userAIModelConfigService;
     @SuppressWarnings("unused")
     private final com.ainovel.server.service.PublicAIApplicationService publicAIApplicationService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
@@ -389,55 +390,64 @@ public class SettingGenerationService implements ISettingGenerationService {
                 return providerMonoEffective
                     .flatMap(provider -> {
                         log.debug("[TextPhase] Provider resolved. shouldUsePublic={}, providerIsNull={}", shouldUsePublic, (provider == null));
-                        // 2.2) 选择工具阶段模型（公共或回退用户）
-                        Mono<String[]> toolConfigMono = publicModelConfigService.findByFeatureType(com.ainovel.server.domain.model.AIFeatureType.SETTING_TREE_GENERATION)
-                            .doOnSubscribe(s -> log.debug("[Tool][Orchestrator] Fetching orchestrator model for feature: SETTING_TREE_GENERATION"))
-                            .collectList()
-                            .flatMap(list -> {
-                                java.util.Set<String> lcProviders = new java.util.HashSet<>(
-                                    java.util.Arrays.asList(
-                                        "openai", "anthropic", "gemini", "siliconflow", "togetherai",
-                                        "doubao", "ark", "volcengine", "bytedance", "zhipu", "glm",
-                                        "qwen", "dashscope", "tongyi", "alibaba"
-                                    )
-                                );
-                                com.ainovel.server.domain.model.PublicModelConfig chosen = null;
-                                for (com.ainovel.server.domain.model.PublicModelConfig c : list) {
-                                    String p = c.getProvider();
-                                    if (p != null && lcProviders.contains(p.toLowerCase())) { chosen = c; break; }
-                                }
-                                if (chosen == null) {
-                                    for (com.ainovel.server.domain.model.PublicModelConfig c : list) {
-                                        String p = c.getProvider();
-                                        if (p != null && lcProviders.contains(p.toLowerCase()) && c.getTags() != null && c.getTags().contains("jsonify")) { chosen = c; break; }
-                                    }
-                                }
-                                if (chosen == null) {
-                                    for (com.ainovel.server.domain.model.PublicModelConfig c : list) {
-                                        if (c.getTags() != null && c.getTags().contains("jsonify")) { chosen = c; break; }
-                                    }
-                                }
-                                if (chosen == null && !list.isEmpty()) { chosen = list.get(0); }
-                                if (chosen != null) {
-                                    String providerName = chosen.getProvider();
-                                    String modelId = chosen.getModelId();
-                                    String apiEndpoint = chosen.getApiEndpoint();
-                                    log.info("[Tool][Orchestrator] chosen provider={}, modelId={}, endpoint={}", providerName, modelId, apiEndpoint);
-                                    return publicModelConfigService.getActiveDecryptedApiKey(providerName, modelId)
-                                        .map(apiKey -> new String[] { providerName, modelId, apiKey, apiEndpoint });
-                                }
+                        // 2.2) 选择工具阶段模型（优先用户“工具调用默认”→公共→回退用户默认）
+                        Mono<String[]> toolConfigMono = userAIModelConfigService.getValidatedToolDefaultConfiguration(session.getUserId())
+                            .flatMap(cfg -> userAIModelConfigService.getDecryptedApiKey(session.getUserId(), cfg.getId())
+                                .map(apiKey -> new String[] { cfg.getProvider(), cfg.getModelName(), apiKey, cfg.getApiEndpoint() }))
+                            .onErrorResume(err -> {
+                                log.warn("[Tool][Orchestrator] 读取用户工具默认模型失败，将尝试公共模型: {}", err != null ? err.getMessage() : "");
                                 return Mono.empty();
                             })
-                            .timeout(java.time.Duration.ofSeconds(12))
-                            .onErrorResume(err -> {
-                                log.warn("[Tool][Orchestrator] 获取编排器模型配置失败或超时，将回退到用户默认模型: {}", err != null ? err.getMessage() : "");
-                                return novelAIService.getAIModelProvider(session.getUserId(), null)
-                                    .map(p -> new String[] { p.getProviderName(), p.getModelName(), p.getApiKey(), p.getApiEndpoint() });
-                            })
-                            .switchIfEmpty(Mono.defer(() ->
-                                novelAIService.getAIModelProvider(session.getUserId(), null)
-                                    .map(p -> new String[] { p.getProviderName(), p.getModelName(), p.getApiKey(), p.getApiEndpoint() })
-                            ));
+                            .switchIfEmpty(
+                                publicModelConfigService.findByFeatureType(com.ainovel.server.domain.model.AIFeatureType.SETTING_TREE_GENERATION)
+                                    .doOnSubscribe(s -> log.debug("[Tool][Orchestrator] Fetching orchestrator model for feature: SETTING_TREE_GENERATION"))
+                                    .collectList()
+                                    .flatMap(list -> {
+                                        java.util.Set<String> lcProviders = new java.util.HashSet<>(
+                                            java.util.Arrays.asList(
+                                                "openai", "anthropic", "gemini", "siliconflow", "togetherai",
+                                                "doubao", "ark", "volcengine", "bytedance", "zhipu", "glm",
+                                                "qwen", "dashscope", "tongyi", "alibaba"
+                                            )
+                                        );
+                                        com.ainovel.server.domain.model.PublicModelConfig chosen = null;
+                                        for (com.ainovel.server.domain.model.PublicModelConfig c : list) {
+                                            String p = c.getProvider();
+                                            if (p != null && lcProviders.contains(p.toLowerCase())) { chosen = c; break; }
+                                        }
+                                        if (chosen == null) {
+                                            for (com.ainovel.server.domain.model.PublicModelConfig c : list) {
+                                                String p = c.getProvider();
+                                                if (p != null && lcProviders.contains(p.toLowerCase()) && c.getTags() != null && c.getTags().contains("jsonify")) { chosen = c; break; }
+                                            }
+                                        }
+                                        if (chosen == null) {
+                                            for (com.ainovel.server.domain.model.PublicModelConfig c : list) {
+                                                if (c.getTags() != null && c.getTags().contains("jsonify")) { chosen = c; break; }
+                                            }
+                                        }
+                                        if (chosen == null && !list.isEmpty()) { chosen = list.get(0); }
+                                        if (chosen != null) {
+                                            String providerName = chosen.getProvider();
+                                            String modelId = chosen.getModelId();
+                                            String apiEndpoint = chosen.getApiEndpoint();
+                                            log.info("[Tool][Orchestrator] chosen provider={}, modelId={}, endpoint={}", providerName, modelId, apiEndpoint);
+                                            return publicModelConfigService.getActiveDecryptedApiKey(providerName, modelId)
+                                                .map(apiKey -> new String[] { providerName, modelId, apiKey, apiEndpoint });
+                                        }
+                                        return Mono.empty();
+                                    })
+                                    .timeout(java.time.Duration.ofSeconds(12))
+                                    .onErrorResume(err -> {
+                                        log.warn("[Tool][Orchestrator] 获取编排器模型配置失败或超时，将回退到用户默认模型: {}", err != null ? err.getMessage() : "");
+                                        return novelAIService.getAIModelProvider(session.getUserId(), null)
+                                            .map(p -> new String[] { p.getProviderName(), p.getModelName(), p.getApiKey(), p.getApiEndpoint() });
+                                    })
+                                    .switchIfEmpty(Mono.defer(() ->
+                                        novelAIService.getAIModelProvider(session.getUserId(), null)
+                                            .map(p -> new String[] { p.getProviderName(), p.getModelName(), p.getApiKey(), p.getApiEndpoint() })
+                                    ))
+                            );
 
                         final java.util.concurrent.atomic.AtomicReference<String> accumulatedText = new java.util.concurrent.atomic.AtomicReference<>("");
                         final int iterations = Math.max(1, textPhaseIterations);
@@ -1631,7 +1641,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
     
     @Override
     public Mono<Void> modifyNode(String sessionId, String nodeId, String modificationPrompt,
-                                String modelConfigId, String scope) {
+                                String modelConfigId, String scope, Boolean isPublicModel, String publicModelConfigId) {
 
     // 获取或创建会话锁
     Object lock = sessionLocks.computeIfAbsent(sessionId, k -> new Object());
@@ -1670,8 +1680,24 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                         session.getMetadata().put("modificationScope", "self");
                     }
 
-                    // 步骤 5: 准备并异步执行修改
-                    // 将删除逻辑移动到 modifyNodeAsync 中，确保时序
+                    // 步骤 5: 记录 scope
+                    if (scope != null && !scope.isBlank()) {
+                        session.getMetadata().put("modificationScope", scope);
+                    } else {
+                        session.getMetadata().put("modificationScope", "self");
+                    }
+
+                    // 步骤 6: 准备并异步执行修改（根据私有/公共模型分支）
+                    boolean usePublic = Boolean.TRUE.equals(isPublicModel);
+                    if (usePublic) {
+                        if (publicModelConfigId == null || publicModelConfigId.isBlank()) {
+                            emitErrorEvent(session.getSessionId(), "MODEL_CONFIG_ERROR", "缺少公共模型配置ID", nodeToModify.getId(), true);
+                            return Mono.error(new IllegalArgumentException("Missing publicModelConfigId for public model modification"));
+                        }
+                        session.getMetadata().put("modificationPublicModelConfigId", publicModelConfigId);
+                        return modifyNodeAsyncPublic(session, nodeToModify, modificationPrompt, publicModelConfigId);
+                    }
+
                     return modifyNodeAsync(session, nodeToModify, modificationPrompt, modelConfigId);
                 });
         }
@@ -1686,13 +1712,12 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
         log.info("Updating content for node {} in session {}", nodeId, sessionId);
         
         return sessionManager.getSession(sessionId)
-            .switchIfEmpty(Mono.error(new IllegalArgumentException("Session not found: " + sessionId)))
             .flatMap(session -> {
-                // 直接在会话的节点映射中查找并更新节点
+                // 会话存在，在会话中查找并更新节点
                 SettingNode node = session.getGeneratedNodes().get(nodeId);
                 
                 if (node == null) {
-                    return Mono.error(new IllegalArgumentException("Node not found: " + nodeId));
+                    return Mono.error(new IllegalArgumentException("Node not found in session: " + nodeId));
                 }
                 
                 // 保存旧内容作为previousVersion（可选）
@@ -1721,9 +1746,45 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                             new SettingGenerationEvent.NodeUpdatedEvent(node, previousVersion);
                         emitEvent(sessionId, updateEvent);
                         
-                        log.info("Node content updated successfully: {}", nodeId);
-                    }));
-            });
+                        log.info("Node content updated successfully in session: {}", nodeId);
+                    }))
+                    // 关键：发出一个非空信号，避免触发 switchIfEmpty 回退
+                    .thenReturn(Boolean.TRUE);
+            })
+            .switchIfEmpty(Mono.defer(() -> {
+                // 会话不存在，尝试直接更新数据库中的设定条目
+                return updateSettingItemDirectly(nodeId, newContent)
+                    .doOnSuccess(v -> log.info("Node content updated directly in database: {}", nodeId))
+                    .doOnError(e -> log.warn("Failed to update node {} directly in database: {}", nodeId, e.getMessage()))
+                    .thenReturn(Boolean.FALSE);
+            }))
+            .then();
+    }
+    
+    /**
+     * 直接更新数据库中的设定条目
+     * 当会话不存在时的回退方案
+     */
+    private Mono<Void> updateSettingItemDirectly(String nodeId, String newContent) {
+        log.info("Attempting to update setting item directly in database: {}", nodeId);
+        
+        return novelSettingService.getSettingItemById(nodeId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Setting item not found: " + nodeId)))
+            .flatMap(settingItem -> {
+                // 更新设定条目的描述内容
+                settingItem.setDescription(newContent);
+                settingItem.setUpdatedAt(LocalDateTime.now());
+                
+                // 在metadata中标记这是一个直接更新
+                if (settingItem.getMetadata() == null) {
+                    settingItem.setMetadata(new HashMap<>());
+                }
+                settingItem.getMetadata().put("lastDirectUpdate", LocalDateTime.now().toString());
+                settingItem.getMetadata().put("updateSource", "direct_node_update");
+                
+                return novelSettingService.updateSettingItem(nodeId, settingItem);
+            })
+            .then();
     }
     
 
@@ -1736,7 +1797,16 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
     @Override
     public Mono<SaveResult> saveGeneratedSettings(String sessionId, String novelId, boolean updateExisting, String targetHistoryId) {
         return sessionManager.getSession(sessionId)
-            .switchIfEmpty(Mono.error(new IllegalArgumentException("Session not found: " + sessionId)))
+            .switchIfEmpty(Mono.defer(() -> {
+                // 当请求为更新现有历史且内存中找不到会话时，尝试基于历史记录恢复会话
+                if (updateExisting) {
+                    String historyId = (targetHistoryId != null && !targetHistoryId.isBlank()) ? targetHistoryId : sessionId;
+                    log.info("Session not found in memory. Attempting to restore from history for update: {}", historyId);
+                    return createSessionFromHistory(historyId)
+                        .onErrorResume(err -> Mono.error(new IllegalArgumentException("Session not found and history restore failed: " + historyId, err)));
+                }
+                return Mono.error(new IllegalArgumentException("Session not found: " + sessionId));
+            }))
             .flatMap(session -> {
                 // 幂等处理：若已在生成完成时自动创建过历史记录，且此次不是要求更新现有历史，则直接返回该历史
                 if (!updateExisting) {
@@ -1748,9 +1818,24 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                     }
                 }
 
-                if (session.getStatus() != SettingGenerationSession.SessionStatus.COMPLETED) {
-                    return Mono.error(new IllegalStateException("Session not completed: " + sessionId));
+                // 检查会话是否有可保存的内容，而不是严格要求COMPLETED状态
+                // 允许保存GENERATING、ERROR、CANCELLED状态的会话，只要有生成的节点
+                SettingGenerationSession.SessionStatus status = session.getStatus();
+                //List<SettingNode> generatedNodes = session.getGeneratedNodes();
+
+                if (status == SettingGenerationSession.SessionStatus.INITIALIZING) {
+                    return Mono.error(new IllegalStateException("Session is still initializing: " + sessionId));
                 }
+                
+//                if (generatedNodes == null || generatedNodes.isEmpty()) {
+//                    return Mono.error(new IllegalStateException("No generated content to save in session: " + sessionId));
+//                }
+                
+//                // 记录保存未完成会话的情况
+//                if (status != SettingGenerationSession.SessionStatus.COMPLETED) {
+//                    log.info("Saving session {} with status {} - has {} generated nodes",
+//                        sessionId, status, generatedNodes.size());
+//                }
                 
                 log.info("Saving settings for session {} to novel {}", sessionId, novelId);
                 
@@ -2335,7 +2420,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                                    - 使用 `create_setting_node` 或 `create_setting_nodes` 工具
                                    - **严格按照上述规则设置 ID 和 parentId**
                                 
-                                3. **完成后调用** `markModificationComplete`
+                                3. **完成后** 将自动结束本次修改，无需额外调用完成标记
                                 
                                 ## ⚠️ 关键提醒
                                 - **修改当前节点**: id=`{{currentNodeId}}`, parentId=`{{originalParentId}}`
@@ -2356,7 +2441,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                                 aiConfig.get("apiKey"),
                                 aiConfig.get("apiEndpoint"),
                                 aiConfig,
-                                10
+                                1
                     ).onErrorResume(toolError -> {
                         // 🔧 修复：捕获工具执行失败的错误，发送错误事件给前端
                         log.error("Failed to execute tool loop for session: {}, node: {}, error: {}", 
@@ -2373,7 +2458,23 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                         
                         // 返回错误以终止流程
                         return Mono.error(toolError);
-                    }).doFinally(signalType -> {
+                    })
+                    // ✅ 成功路径自动发送完成事件并结束事件流
+                    .then(Mono.fromRunnable(() -> {
+                        log.info("Auto-completing modification for session {}", session.getSessionId());
+                        SettingGenerationEvent.GenerationCompletedEvent event = 
+                            new SettingGenerationEvent.GenerationCompletedEvent(
+                                session.getGeneratedNodes().size(),
+                                java.time.Duration.between(session.getCreatedAt(), LocalDateTime.now()).toMillis(),
+                                "MODIFICATION_SUCCESS"
+                            );
+                        emitEvent(session.getSessionId(), event);
+                        Sinks.Many<SettingGenerationEvent> sink = eventSinks.get(session.getSessionId());
+                        if (sink != null) {
+                            sink.tryEmitComplete();
+                        }
+                    }))
+                    .doFinally(signalType -> {
                         // 确保在所有情况下都清理工具上下文
                         log.debug("Cleaning up modification tool context for session: {}, node: {}, signal: {}", 
                             session.getSessionId(), node.getId(), signalType);
@@ -2385,6 +2486,180 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                         }
                     }).subscribeOn(Schedulers.boundedElastic()).then();
                 });
+    }
+
+    /**
+     * 异步修改节点 - 公共模型分支
+     * 复用工具编排AI调用与完成/错误事件发送逻辑，重点在于公共模型鉴权与计费标记注入。
+     */
+    private Mono<Void> modifyNodeAsyncPublic(SettingGenerationSession session, SettingNode node,
+                                            String modificationPrompt, String publicModelConfigId) {
+        String contextId = "modification-" + session.getSessionId() + "-" + node.getId();
+        log.info("🔄 [Public] 开始修改节点（保留原节点）: {} in session: {}, publicModelConfigId={}", node.getName(), session.getSessionId(), publicModelConfigId);
+
+        return publicModelConfigService.findById(publicModelConfigId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("指定的公共模型配置不存在: " + publicModelConfigId)))
+            .flatMap(pub -> {
+                if (!Boolean.TRUE.equals(pub.getEnabled())) {
+                    return Mono.error(new IllegalArgumentException("该公共模型当前不可用"));
+                }
+                if (!pub.isEnabledForFeature(com.ainovel.server.domain.model.AIFeatureType.NOVEL_GENERATION)) {
+                    return Mono.error(new IllegalArgumentException("该公共模型不支持当前功能: NOVEL_GENERATION"));
+                }
+
+                Map<String, String> aiConfig = new HashMap<>();
+                // 透传身份信息，供AIRequest写入并被LLMTrace记录
+                if (session.getUserId() != null && !session.getUserId().isBlank()) aiConfig.put("userId", session.getUserId());
+                if (session.getSessionId() != null && !session.getSessionId().isBlank()) aiConfig.put("sessionId", session.getSessionId());
+                // 标记公共模型，用于计费归一化
+                aiConfig.put("isPublicModel", "true");
+                aiConfig.put("publicModelConfigId", publicModelConfigId);
+                aiConfig.put("provider", pub.getProvider());
+                aiConfig.put("modelId", pub.getModelId());
+
+                // 创建工具上下文
+                ToolExecutionService.ToolCallContext context = createToolContext(contextId);
+                registerModificationTools(context, session);
+
+                // 获取策略适配器（可选）
+                ConfigurableStrategyAdapter strategyAdapter = (ConfigurableStrategyAdapter) session.getMetadata().get("strategyAdapter");
+
+                List<ToolSpecification> toolSpecs = toolRegistry.getSpecificationsForContext(contextId);
+
+                // 构建提示上下文（与私有分支一致）
+                String parentPath = buildParentPath(node.getParentId(), session);
+                String sessionOverview = session.getGeneratedNodes().values().stream()
+                    .map(n -> " - " + n.getName() + " (ID: " + n.getId() + ")")
+                    .collect(Collectors.joining("\n"));
+
+                Map<String, Object> promptContext = new HashMap<>();
+                promptContext.put("nodeId", node.getId());
+                promptContext.put("nodeName", node.getName());
+                promptContext.put("nodeType", node.getType().toString());
+                promptContext.put("nodeDescription", node.getDescription());
+                promptContext.put("modificationPrompt", modificationPrompt);
+                promptContext.put("originalNode", node.getName() + ": " + node.getDescription());
+                promptContext.put("targetChanges", modificationPrompt);
+                promptContext.put("context", sessionOverview);
+                promptContext.put("parentNode", parentPath);
+                promptContext.put("originalParentId", node.getParentId());
+
+                StringBuilder availableParents = new StringBuilder();
+                session.getGeneratedNodes().values().forEach(n -> {
+                    availableParents.append(String.format("- %s (ID: %s, 路径: %s)\n",
+                        n.getName(), n.getId(), buildParentPath(n.getId(), session)));
+                });
+                promptContext.put("availableParents", availableParents.toString());
+                promptContext.put("currentNodeId", node.getId());
+                session.getMetadata().put("currentNodeIdForModification", node.getId());
+                String scopeValue = (String) session.getMetadata().getOrDefault("modificationScope", "self");
+                promptContext.put("scope", scopeValue);
+
+                List<ChatMessage> messages = new ArrayList<>();
+                String systemPromptWithScope = promptProvider.getDefaultSystemPrompt()
+                        + "\n\n" + getModificationToolUsageInstructions()
+                        + "\n\n" + buildScopeConstraintSystemBlock(scopeValue, node.getId(), node.getParentId());
+                messages.add(new SystemMessage(systemPromptWithScope));
+
+                String userPromptTemplate = """
+                                ## 修改任务
+                                **当前节点**: {{nodeName}}
+                                **节点ID**: {{currentNodeId}}
+                                **当前描述**: {{nodeDescription}}
+                                **修改要求**: {{modificationPrompt}}
+                                **节点路径**: {{parentNode}} -> {{nodeName}}
+                                
+                                ## 🚨 重要：修改规则
+                                根据用户的修改要求，你可以进行以下两种操作：
+                                
+                                ### 1. 修改当前节点本身
+                                - **如果**用户要求修改当前节点的内容、描述等
+                                - **必须**使用相同的节点ID: `{{currentNodeId}}`
+                                - **必须**保持相同的 parentId: `{{originalParentId}}`
+                                - 工具调用示例：`create_setting_node(id="{{currentNodeId}}", parentId="{{originalParentId}}", ...)`
+                                
+                                ### 2. 为当前节点创建子节点
+                                - **如果**用户要求"以此设定为父节点"、"完善设定"、"创建子设定"等
+                                - **必须**将新子节点的 parentId 设置为: `{{currentNodeId}}`
+                                - 工具调用示例：`create_setting_node(parentId="{{currentNodeId}}", ...)`
+                                
+                                ## 🔒 修改范围(scope) 约束（必须严格遵守）
+                                - scope=`self`：仅允许修改当前节点本身；禁止创建或修改任何其他节点
+                                - scope=`children_only`：仅允许为当前节点创建或修改子节点；禁止修改当前节点本身
+                                - scope=`self_and_children`：可同时修改当前节点并创建/修改其子节点
+                                - 任何超出scope的操作都视为无效，必须忽略
+                                
+                                ## 可用的节点列表（供参考）
+                                {{availableParents}}
+                                
+                                ## 当前会话结构
+                                {{context}}
+                                
+                                ## 执行步骤
+                                1. **仔细分析**用户的修改要求：
+                                   - 是要修改当前节点？→ 使用相同ID `{{currentNodeId}}`
+                                   - 是要为当前节点创建子节点？→ 设置 parentId=`{{currentNodeId}}`
+                                
+                                2. **使用工具创建**：
+                                   - 使用 `create_setting_node` 或 `create_setting_nodes` 工具
+                                   - **严格按照上述规则设置 ID 和 parentId**
+                                
+                                3. **完成后** 将自动结束本次修改，无需额外调用完成标记
+                                
+                                ## ⚠️ 关键提醒
+                                - **修改当前节点**: id=`{{currentNodeId}}`, parentId=`{{originalParentId}}`
+                                - **创建子节点**: parentId=`{{currentNodeId}}`（id自动生成新的UUID）
+                                - **绝不能**随意更改节点的层级关系！
+                                """;
+                messages.add(new UserMessage(
+                    promptProvider.renderPrompt(userPromptTemplate, promptContext).block()
+                ));
+
+                // 计费标记与提供商信息
+                aiConfig.put("isPublicModel", "true");
+                aiConfig.put("publicModelConfigId", publicModelConfigId);
+                aiConfig.put("provider", pub.getProvider());
+                aiConfig.put("modelId", pub.getModelId());
+
+                // 将工具上下文ID透传
+                aiConfig.put("toolContextId", contextId);
+
+                // 获取公共模型的解密API Key
+                Mono<String> apiKeyMono = publicModelConfigService
+                    .getActiveDecryptedApiKey(pub.getProvider(), pub.getModelId())
+                    .switchIfEmpty(Mono.error(new IllegalArgumentException("公共模型API密钥不可用")));
+
+                return apiKeyMono.flatMap(apiKey -> aiService.executeToolCallLoop(
+                            messages,
+                            toolSpecs,
+                            pub.getModelId(),
+                            apiKey,
+                            pub.getApiEndpoint(),
+                            aiConfig,
+                            1
+                        )
+                ).onErrorResume(toolError -> {
+                    log.error("[Public] Failed to execute tool loop for session: {}, node: {}, error: {}",
+                        session.getSessionId(), node.getId(), toolError.getMessage());
+                    emitErrorEvent(session.getSessionId(), "MODIFICATION_FAILED", "节点修改失败: " + toolError.getMessage(), node.getId(), true);
+                    return Mono.error(toolError);
+                }).then(Mono.fromRunnable(() -> {
+                    log.info("[Public] Auto-completing modification for session {}", session.getSessionId());
+                    SettingGenerationEvent.GenerationCompletedEvent event = 
+                        new SettingGenerationEvent.GenerationCompletedEvent(
+                            session.getGeneratedNodes().size(),
+                            java.time.Duration.between(session.getCreatedAt(), LocalDateTime.now()).toMillis(),
+                            "MODIFICATION_SUCCESS"
+                        );
+                    emitEvent(session.getSessionId(), event);
+                    Sinks.Many<SettingGenerationEvent> sink = eventSinks.get(session.getSessionId());
+                    if (sink != null) sink.tryEmitComplete();
+                })).doFinally(signalType -> {
+                    log.debug("[Public] Cleaning up modification tool context for session: {}, node: {}, signal: {}", 
+                        session.getSessionId(), node.getId(), signalType);
+                    try { context.close(); } catch (Exception e) { log.warn("Failed to close modification tool context (public) for session: {}, node: {}", session.getSessionId(), node.getId(), e); }
+                }).subscribeOn(Schedulers.boundedElastic()).then();
+            });
     }
     
     /**
@@ -2607,32 +2882,32 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
             return true;
         };
         
-        // 创建修改完成处理器
-        MarkModificationCompleteTool.CompletionHandler completionHandler = message -> {
-            log.info("Modification for session {} marked as complete with message: {}", session.getSessionId(), message);
+        // // 创建修改完成处理器
+        // MarkModificationCompleteTool.CompletionHandler completionHandler = message -> {
+        //     log.info("Modification for session {} marked as complete with message: {}", session.getSessionId(), message);
             
-            // 发送修改完成事件
-            SettingGenerationEvent.GenerationCompletedEvent event = 
-                new SettingGenerationEvent.GenerationCompletedEvent(
-                    session.getGeneratedNodes().size(),
-                    java.time.Duration.between(session.getCreatedAt(), LocalDateTime.now()).toMillis(),
-                    "MODIFICATION_SUCCESS"
-                );
-            emitEvent(session.getSessionId(), event);
+        //     // 发送修改完成事件
+        //     SettingGenerationEvent.GenerationCompletedEvent event = 
+        //         new SettingGenerationEvent.GenerationCompletedEvent(
+        //             session.getGeneratedNodes().size(),
+        //             java.time.Duration.between(session.getCreatedAt(), LocalDateTime.now()).toMillis(),
+        //             "MODIFICATION_SUCCESS"
+        //         );
+        //     emitEvent(session.getSessionId(), event);
             
-            // 完成事件流
-            Sinks.Many<SettingGenerationEvent> sink = eventSinks.get(session.getSessionId());
-            if (sink != null) {
-                sink.tryEmitComplete();
-            }
+        //     // 完成事件流
+        //     Sinks.Many<SettingGenerationEvent> sink = eventSinks.get(session.getSessionId());
+        //     if (sink != null) {
+        //         sink.tryEmitComplete();
+        //     }
             
-            return true; 
-        };
+        //     return true; 
+        // };
 
         // 注册工具
         context.registerTool(new CreateSettingNodeTool(nodeHandler));
         context.registerTool(new BatchCreateNodesTool(nodeHandler, crossBatchTempIdMap));
-        context.registerTool(new MarkModificationCompleteTool(completionHandler));
+        // 不再注册 MarkModificationCompleteTool，改为自动完成
     }
     
     /**
@@ -2646,7 +2921,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
             **【可用工具】**
             - create_setting_node：创建单个新设定节点
             - create_setting_nodes：批量创建多个新设定节点（推荐使用）
-            - markModificationComplete：当所有修改和创建操作完成后，调用此工具结束修改流程
+
             
             **【修改操作指南】**
             根据用户的修改要求，可以进行两种操作：
@@ -2674,9 +2949,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
               - parentId = `{{currentNodeId}}`（当前节点成为父节点）
             - **绝对禁止**：随意更改节点的层级关系或ID规则
             
-            **【重要】**
-            - **完成所有节点的创建或修改后，必须调用 `markModificationComplete` 工具来结束本次修改。**
-            - 如果不调用 `markModificationComplete`，系统将无法知道修改已完成，并可能导致超时或错误。
+
             
             **【描述质量要求】**
             - **根节点描述：必须50-80字**，清晰概括该线的核心内容
@@ -2688,7 +2961,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
             - 优先使用批量创建，可以同时创建多个相关设定
             - 使用tempId建立同批次内的父子关系
             - 确保新设定与用户修改要求完全一致
-            - **完成所有修改后，务必调用 `markModificationComplete`**
+
 """;
     }
     

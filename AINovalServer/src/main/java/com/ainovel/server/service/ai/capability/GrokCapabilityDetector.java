@@ -36,28 +36,74 @@ public class GrokCapabilityDetector implements ProviderCapabilityDetector {
 
     @Override
     public Flux<ModelInfo> getDefaultModels() {
-        // 返回默认的X.AI模型列表
+        // 返回默认的X.AI模型列表（与GrokTokenPricingCalculator保持一致）
         List<ModelInfo> models = new ArrayList<>();
 
+        // Grok 3 Beta
         models.add(ModelInfo.builder()
             .id("x-ai/grok-3-beta")
-            .name("Grok-3-beta")
-            .description("X.AI的Grok-3-beta模型，支持强大的自然语言理解和生成能力")
-            .maxTokens(128000)
+            .name("Grok 3 Beta")
+            .description("Grok 3 Beta 通用模型")
+            .maxTokens(131072)
             .provider("x-ai")
             .build()
-            .withInputPrice(0.003)    // $0.003 per 1K input tokens
-            .withOutputPrice(0.006)); // $0.006 per 1K output tokens
+            .withInputPrice(0.003)
+            .withOutputPrice(0.006));
 
+        // Grok 3
         models.add(ModelInfo.builder()
-            .id("x-ai/grok-3-fast-beta")
-            .name("Grok-3-fast-beta")
-            .description("X.AI的Grok-3-fast-beta模型，更快的响应速度，适合对话场景")
-            .maxTokens(128000)
+            .id("x-ai/grok-3")
+            .name("Grok 3")
+            .description("Grok 3 通用模型")
+            .maxTokens(131072)
             .provider("x-ai")
             .build()
-            .withInputPrice(0.0015)    // $0.0015 per 1K input tokens
-            .withOutputPrice(0.003)); // $0.003 per 1K output tokens
+            .withInputPrice(0.003)
+            .withOutputPrice(0.006));
+
+        // Grok 3 Fast
+        models.add(ModelInfo.builder()
+            .id("x-ai/grok-3-fast")
+            .name("Grok 3 Fast")
+            .description("Grok 3 Fast 高速版")
+            .maxTokens(131072)
+            .provider("x-ai")
+            .build()
+            .withInputPrice(0.0015)
+            .withOutputPrice(0.003));
+
+        // Grok 3 Mini
+        models.add(ModelInfo.builder()
+            .id("x-ai/grok-3-mini")
+            .name("Grok 3 Mini")
+            .description("Grok 3 Mini 轻量版")
+            .maxTokens(131072)
+            .provider("x-ai")
+            .build()
+            .withInputPrice(0.0006)
+            .withOutputPrice(0.0012));
+
+        // Grok 3 Mini Fast
+        models.add(ModelInfo.builder()
+            .id("x-ai/grok-3-mini-fast")
+            .name("Grok 3 Mini Fast")
+            .description("Grok 3 Mini Fast 更高速版本")
+            .maxTokens(131072)
+            .provider("x-ai")
+            .build()
+            .withInputPrice(0.0003)
+            .withOutputPrice(0.0006));
+
+        // Grok 2 Vision
+        models.add(ModelInfo.builder()
+            .id("x-ai/grok-2-vision-1212")
+            .name("Grok 2 Vision")
+            .description("Grok 2 视觉模型")
+            .maxTokens(131072)
+            .provider("x-ai")
+            .build()
+            .withInputPrice(0.003)
+            .withOutputPrice(0.006));
 
         return Flux.fromIterable(models);
     }

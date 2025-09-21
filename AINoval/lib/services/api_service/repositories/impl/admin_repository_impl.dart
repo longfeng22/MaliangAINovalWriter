@@ -1,4 +1,5 @@
 import '../../../../models/admin/admin_models.dart';
+import '../../../../models/admin/llm_observability_models.dart' show PagedResponse;
 import '../../../../models/admin/admin_auth_models.dart';
 import '../../../../models/public_model_config.dart';
 import '../../../../models/preset_models.dart';
@@ -116,6 +117,59 @@ class AdminRepositoryImpl {
       return data.map((json) => AdminUser.fromJson(json as Map<String, dynamic>)).toList();
     } catch (e) {
       AppLogger.e(_tag, '❌ 获取用户列表失败', e);
+      rethrow;
+    }
+  }
+
+  // 新增：分页+筛选+排序获取用户列表
+  Future<PagedResponse<AdminUser>> getUsersPaged({
+    int page = 0,
+    int size = 20,
+    String? keyword,
+    String? status,
+    int? minCredits,
+    DateTime? createdStart,
+    DateTime? createdEnd,
+    DateTime? lastLoginStart,
+    DateTime? lastLoginEnd,
+    String sortBy = 'createdAt',
+    String sortDir = 'desc',
+  }) async {
+    try {
+      AppLogger.d(_tag, '🔍 分页获取用户: page=$page, size=$size, keyword=$keyword, status=$status, sort=$sortBy $sortDir');
+
+      final params = <String, dynamic>{
+        'page': page,
+        'size': size,
+        'sortBy': sortBy,
+        'sortDir': sortDir,
+      };
+      if (keyword != null && keyword.isNotEmpty) params['keyword'] = keyword;
+      if (status != null && status.isNotEmpty) params['status'] = status;
+      if (minCredits != null) params['minCredits'] = minCredits;
+      if (createdStart != null) params['createdStart'] = createdStart.toIso8601String();
+      if (createdEnd != null) params['createdEnd'] = createdEnd.toIso8601String();
+      if (lastLoginStart != null) params['lastLoginStart'] = lastLoginStart.toIso8601String();
+      if (lastLoginEnd != null) params['lastLoginEnd'] = lastLoginEnd.toIso8601String();
+
+      final response = await _apiClient.getWithParams('/admin/users/page', queryParameters: params);
+
+      dynamic raw;
+      if (response is Map<String, dynamic> && response.containsKey('data')) {
+        raw = response['data'];
+      } else {
+        raw = response;
+      }
+
+      if (raw is Map<String, dynamic>) {
+        final paged = PagedResponse.fromJson(raw, (json) => AdminUser.fromJson(json as Map<String, dynamic>));
+        AppLogger.d(_tag, '✅ 分页获取用户成功: page=${paged.page}, size=${paged.size}, total=${paged.totalElements}');
+        return paged;
+      }
+
+      throw ApiException(-1, '用户分页数据格式错误');
+    } catch (e) {
+      AppLogger.e(_tag, '❌ 分页获取用户失败', e);
       rethrow;
     }
   }
@@ -351,6 +405,22 @@ class AdminRepositoryImpl {
       });
     } catch (e) {
       AppLogger.e(_tag, '为用户添加积分失败', e);
+      rethrow;
+    }
+  }
+
+  Future<void> resetUserPassword(String userId, {String? newPassword, bool useDefault = false}) async {
+    try {
+      AppLogger.d(_tag, '重置用户密码: userId=$userId, useDefault=$useDefault');
+      final Map<String, dynamic> body = {};
+      if (newPassword != null && newPassword.trim().isNotEmpty) {
+        body['newPassword'] = newPassword.trim();
+      } else {
+        body['useDefault'] = true;
+      }
+      await _apiClient.post('/admin/users/$userId/reset-password', data: body);
+    } catch (e) {
+      AppLogger.e(_tag, '重置用户密码失败', e);
       rethrow;
     }
   }

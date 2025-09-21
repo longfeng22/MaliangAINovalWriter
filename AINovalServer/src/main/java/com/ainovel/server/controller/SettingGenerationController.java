@@ -27,6 +27,7 @@ import reactor.core.publisher.Mono;
 // import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 设定生成控制器
@@ -224,31 +225,49 @@ public class SettingGenerationController {
             @Parameter(description = "会话ID") @PathVariable String sessionId,
             @Valid @RequestBody UpdateNodeRequest request) {
         
-        log.info("Updating node {} in session {} for user {} with modelConfigId {}", 
-            request.getNodeId(), sessionId, user.getId(), request.getModelConfigId());
+        log.info("Updating node {} in session {} for user {} with modelConfigId {}, isPublicModel={}, publicModelConfigId={}", 
+            request.getNodeId(), sessionId, user.getId(), request.getModelConfigId(), request.getPublicModel(), request.getPublicModelConfigId());
         
-        // 显式追加完成事件，确保前端能立即关闭SSE连接
+        // 周期性心跳，避免长时间无事件导致 HTTP/2 中间层（如 CDN/浏览器）断开连接
+        @SuppressWarnings({"rawtypes","unchecked"})
+        ServerSentEvent<SettingGenerationEvent> keepAliveSse = (ServerSentEvent<SettingGenerationEvent>)(ServerSentEvent) ServerSentEvent.builder()
+            .comment("keepalive")
+            .build();
+        // 标准 complete 事件，供前端及时收尾（事件名=complete，数据负载与OpenAI风格一致）
         @SuppressWarnings({"rawtypes","unchecked"})
         ServerSentEvent<SettingGenerationEvent> completeSse = (ServerSentEvent<SettingGenerationEvent>)(ServerSentEvent) ServerSentEvent.builder()
             .event("complete")
             .data(java.util.Map.of("data", "[DONE]"))
             .build();
 
-        // 先获取事件流，然后启动修改操作
-        // 这样可以在修改过程中实时返回事件，避免竞态条件
-        return settingGenerationService.getModificationEventStream(sessionId)
+        // 先获取事件流，然后启动修改操作（仅启动一次），并对流进行共享，避免多处订阅导致重复启动
+        final AtomicBoolean started = new AtomicBoolean(false);
+        Flux<ServerSentEvent<SettingGenerationEvent>> eventSseFlux = settingGenerationService.getModificationEventStream(sessionId)
+            // 与 start 接口对齐：屏蔽可恢复错误（recoverable=true）的 GENERATION_ERROR 事件
+            .filter(event -> {
+                if (event instanceof SettingGenerationEvent.GenerationErrorEvent err) {
+                    Boolean recoverable = err.getRecoverable();
+                    return recoverable == null || !recoverable;
+                }
+                return true;
+            })
             .doOnSubscribe(subscription -> {
-                // 在客户端订阅后启动修改操作
-                settingGenerationService.modifyNode(
-                    sessionId,
-                    request.getNodeId(),
-                    request.getModificationPrompt(),
-                    request.getModelConfigId(),
-                    request.getScope() == null ? "self" : request.getScope()
-                ).subscribe(
-                    result -> log.info("Node modification completed for session: {}", sessionId),
-                    error -> log.error("Node modification failed for session: {}", sessionId, error)
-                );
+                if (started.compareAndSet(false, true)) {
+                    settingGenerationService.modifyNode(
+                        sessionId,
+                        request.getNodeId(),
+                        request.getModificationPrompt(),
+                        request.getModelConfigId(),
+                        request.getScope() == null ? "self" : request.getScope(),
+                        request.getPublicModel(),
+                        request.getPublicModelConfigId()
+                    ).subscribe(
+                        result -> log.info("Node modification completed for session: {}", sessionId),
+                        error -> log.error("Node modification failed for session: {}", sessionId, error)
+                    );
+                } else {
+                    log.debug("update-node stream already started for session: {}", sessionId);
+                }
             })
             .takeUntil(event -> {
                 if (event instanceof SettingGenerationEvent.GenerationCompletedEvent) {
@@ -265,8 +284,9 @@ public class SettingGenerationController {
                 .data(event)
                 .build()
             )
-            // 正常完成时，追加一个标准complete事件
-            .concatWith(Mono.just(completeSse))
+            // 共享上游订阅，避免 heartbeat 与主流各自订阅导致重复启动
+            .publish()
+            .refCount(1)
             .onErrorResume(error -> {
                 log.error("Failed to update node", error);
                 SettingGenerationEvent.GenerationErrorEvent errorEvent = 
@@ -275,15 +295,25 @@ public class SettingGenerationController {
                 errorEvent.setErrorCode("UPDATE_FAILED");
                 errorEvent.setErrorMessage(error.getMessage());
                 errorEvent.setNodeId(request.getNodeId());
-                // 修改：控制器级错误一律视为不可恢复，立即结束SSE
                 errorEvent.setRecoverable(false);
                 ServerSentEvent<SettingGenerationEvent> errorSse = ServerSentEvent.<SettingGenerationEvent>builder()
                     .event("GenerationErrorEvent")
                     .data(errorEvent)
                     .build();
-                // 错误时也追加complete，确保前端及时关闭SSE
+                // 错误时也返回 complete，确保前端及时收尾
                 return Flux.just(errorSse, completeSse);
             });
+
+        // 15s 心跳流（仅注释行，不携带数据），跟随事件流完成
+        Flux<ServerSentEvent<SettingGenerationEvent>> heartbeatFlux = Flux
+            .interval(java.time.Duration.ofSeconds(15))
+            .map(tick -> keepAliveSse)
+            // 事件流完成（正常完成或错误）时，心跳自动结束
+            .takeUntilOther(eventSseFlux.ignoreElements().then(Mono.just("stop")));
+
+        // 合并实际事件与心跳，并在业务完成后显式拼接 complete
+        return Flux.merge(eventSseFlux, heartbeatFlux)
+            .concatWith(Mono.just(completeSse));
     }
     
     /**
@@ -1072,6 +1102,17 @@ public class SettingGenerationController {
          * 修改范围：self | children_only | self_and_children
          */
         private String scope;
+
+        /**
+         * 是否使用公共模型（可选）。若为true，优先使用 publicModelConfigId 分支。
+         * 命名为 publicModel 以适配标准布尔JavaBean访问器（getPublicModel）。
+         */
+        private Boolean publicModel;
+
+        /**
+         * 公共模型配置ID（可选）。仅当 isPublicModel=true 时生效。
+         */
+        private String publicModelConfigId;
     }
 
     /**

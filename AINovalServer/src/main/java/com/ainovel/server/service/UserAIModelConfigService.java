@@ -99,12 +99,24 @@ public interface UserAIModelConfigService {
     Mono<UserAIModelConfig> setDefaultConfiguration(String userId, String configId);
 
     /**
+     * 设置用户的默认工具调用模型配置。
+     * 要求该配置必须是已验证的。
+     * 该方法会清除用户此前的工具调用默认配置标记。
+     */
+    Mono<UserAIModelConfig> setToolDefaultConfiguration(String userId, String configId);
+
+    /**
      * 获取用户的默认模型配置 (必须是已验证的)
      *
      * @param userId 用户ID
      * @return 已验证的默认配置，如果不存在或未验证则返回 empty Mono
      */
     Mono<UserAIModelConfig> getValidatedDefaultConfiguration(String userId);
+
+    /**
+     * 获取用户的默认工具调用模型配置 (必须是已验证的)
+     */
+    Mono<UserAIModelConfig> getValidatedToolDefaultConfiguration(String userId);
 
     /**
      * 获取用户最近使用的已验证模型配置 (简化实现：获取第一个已验证的)

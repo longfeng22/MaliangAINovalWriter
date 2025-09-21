@@ -1540,6 +1540,15 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
       color: WebTheme.getTextColor(context),
       fontSize: settings.fontSize,
       fontFamily: settings.fontFamily,
+      fontFamilyFallback: const [
+        'PingFang SC',
+        'Microsoft YaHei',
+        'Noto Sans CJK SC',
+        'Source Han Sans SC',
+        'Source Han Sans CN',
+        'Droid Sans Fallback',
+        'sans-serif'
+      ],
       fontWeight: settings.fontWeight,
       height: settings.lineSpacing,
       letterSpacing: settings.letterSpacing,

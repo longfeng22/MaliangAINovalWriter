@@ -13,15 +13,31 @@ class LoadUsers extends AdminEvent {
   final int page;
   final int size;
   final String? search;
+  final String? status;
+  final int? minCredits;
+  final DateTime? createdStart;
+  final DateTime? createdEnd;
+  final DateTime? lastLoginStart;
+  final DateTime? lastLoginEnd;
+  final String sortBy;
+  final String sortDir;
 
   const LoadUsers({
     this.page = 0,
     this.size = 20,
     this.search,
+    this.status,
+    this.minCredits,
+    this.createdStart,
+    this.createdEnd,
+    this.lastLoginStart,
+    this.lastLoginEnd,
+    this.sortBy = 'createdAt',
+    this.sortDir = 'desc',
   });
 
   @override
-  List<Object?> get props => [page, size, search];
+  List<Object?> get props => [page, size, search, status, minCredits, createdStart, createdEnd, lastLoginStart, lastLoginEnd, sortBy, sortDir];
 }
 
 class LoadRoles extends AdminEvent {}
@@ -76,6 +92,16 @@ class UpdateModelConfig extends AdminEvent {
 
   @override
   List<Object> get props => [configId, config];
+}
+
+class ResetUserPassword extends AdminEvent {
+  final String userId;
+  final String? newPassword; // 若为空，后端可使用默认密码
+
+  const ResetUserPassword({required this.userId, this.newPassword});
+
+  @override
+  List<Object?> get props => [userId, newPassword];
 }
 
 class UpdateSystemConfig extends AdminEvent {

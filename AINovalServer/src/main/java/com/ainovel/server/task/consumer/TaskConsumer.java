@@ -15,6 +15,8 @@ import com.ainovel.server.task.service.TaskSubmissionService;
 import com.ainovel.server.config.TaskConversionConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.ainovel.server.task.dto.continuecontent.ContinueWritingContentResult;
+import com.ainovel.server.task.model.TaskStatus;
 import com.rabbitmq.client.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -617,12 +619,25 @@ public class TaskConsumer {
      */
     private Mono<Void> handleSuccessResult(BackgroundTask task, Object result) {
         log.info("任务执行成功: taskId={}, taskType={}", task.getId(), task.getTaskType());
-        
-        // 发布任务完成事件
-        eventPublisher.publishEvent(new TaskCompletedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), result));
-        
-        // 更新数据库状态
-        return taskStateService.recordCompletion(task.getId(), result);
+        try {
+            // 针对父任务 CONTINUE_WRITING_CONTENT：返回 RUNNING 仅表示已进入子任务驱动流程，不应标记完成
+            if (result instanceof ContinueWritingContentResult cResult) {
+                if (cResult.getStatus() == TaskStatus.RUNNING) {
+                    log.info("父任务初始结果为 RUNNING，记录进度，不发布 Completed: taskId={}", task.getId());
+                    return taskStateService.recordProgress(task.getId(), cResult);
+                }
+            }
+        } catch (Throwable ignore) {}
+
+        // 其他任务（如子任务）仍按完成处理：先持久化，再发布 Completed 事件
+        return taskStateService.recordCompletion(task.getId(), result)
+                .doOnSuccess(v -> {
+                    try {
+                        eventPublisher.publishEvent(new TaskCompletedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), result));
+                    } catch (Throwable ex) {
+                        log.warn("发布 TaskCompletedEvent 失败: taskId={} error={}", task.getId(), ex.toString());
+                    }
+                });
     }
     
     /**

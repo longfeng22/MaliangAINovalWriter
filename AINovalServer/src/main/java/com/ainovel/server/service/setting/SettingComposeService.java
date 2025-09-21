@@ -372,96 +372,17 @@ public class SettingComposeService {
 
             Mono<String> wholeTreeContextMono = maybeBuildWholeSettingTreeContext(request);
             Flux<UniversalAIResponseDto> chaptersFlux = outlinesMono.flatMapMany(outlines -> {
-                List<Flux<UniversalAIResponseDto>> perChapter = new ArrayList<>();
-                StringBuilder prevSummary = new StringBuilder();
-                // 缓存每章正文以便完成后统一入库
-                List<StringBuilder> chapterBuffers = new ArrayList<>();
-                return wholeTreeContextMono.flatMapMany(ctx -> {
-                    try { log.info("[Compose][Context] Outline+Chapters mode ctx.length={}", (ctx != null ? ctx.length() : -1)); } catch (Exception ignore) {}
-                    for (int i = 0; i < outlines.size(); i++) {
-                        String outlineText = outlines.get(i);
-                        int chapterIndex = i + 1;
-                        chapterBuffers.add(new StringBuilder());
-                        final int currentIndex = i;
-                        // 使用 SUMMARY_TO_SCENE 生成章节正文：将单章大纲作为输入
-                        UniversalAIRequestDto s2sReq = cloneWithParam(request, Map.of(
-                                "chapterIndex", chapterIndex,
-                                "outlineText", outlineText,
-                                "previousChaptersSummary", prevSummary.toString()
-                        ));
-                        // 切换功能类型为 SUMMARY_TO_SCENE，并将大纲作为 prompt 传入
-                        s2sReq.setRequestType(AIFeatureType.SUMMARY_TO_SCENE.name());
-                        s2sReq.setPrompt(outlineText);
-                        // 注入整棵设定树上下文
-                        if (ctx != null && !ctx.isBlank()) {
-                            s2sReq.getParameters().put("context", ctx);
-                        }
-                        // 若前端传入 s2sTemplateId，则映射为本次 S2S 请求的 promptTemplateId
-                        if (request.getParameters() != null && request.getParameters().get("s2sTemplateId") instanceof String) {
-                            String s2sTemplateId = (String) request.getParameters().get("s2sTemplateId");
-                            if (s2sTemplateId != null && !s2sTemplateId.isEmpty()) {
-                                s2sReq.getParameters().put("promptTemplateId", s2sTemplateId);
-                            }
-                        }
-
-                        // 在章节正文开始前，先向前端输出章节大纲与正文起始的标记，便于前端解析展示
-                        Flux<UniversalAIResponseDto> preOutline = Flux.just(
-                                buildSystemChunk(AIFeatureType.SUMMARY_TO_SCENE.name(),
-                                        "[CHAPTER_" + chapterIndex + "_OUTLINE]\n" + outlineText + "\n"));
-                        Flux<UniversalAIResponseDto> preContentStart = Flux.just(
-                                buildSystemChunk(AIFeatureType.SUMMARY_TO_SCENE.name(),
-                                        "[CHAPTER_" + chapterIndex + "_CONTENT]"));
-
-                        try {
-                            com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
-                                s2sReq,
-                                true,
-                                true,
-                                AIFeatureType.NOVEL_COMPOSE.name(),
-                                resolveModelConfigId(s2sReq),
-                                null,
-                                null,
-                                s2sReq.getSettingSessionId() != null ? s2sReq.getSettingSessionId() : s2sReq.getSessionId(),
-                                null
-                            );
-                        } catch (Exception ignore) {}
-                        Flux<UniversalAIResponseDto> chapterStream = universalAIService.processStreamRequest(s2sReq)
-                                .doOnNext(evt -> {
-                                    if (evt != null && evt.getContent() != null) {
-                                        chapterBuffers.get(currentIndex).append(evt.getContent());
-                                    }
-                                })
-                                .doOnComplete(() -> {
-                                    // 聚合摘要
-                                    prevSummary.append("\n").append(outlineText);
-                                });
-                        // 顺序：大纲标签 → 正文开始标签 → 正文流
-                        perChapter.add(Flux.concat(preOutline, preContentStart, chapterStream));
-                    }
-                    int concurrency = Math.max(1, getIntParam(request, "concurrency", 3));
-                    Flux<UniversalAIResponseDto> merged = (concurrency <= 1)
-                            ? Flux.concat(perChapter)
-                            : Flux.fromIterable(perChapter).flatMapSequential(stream -> stream, concurrency);
-                    // 统一在所有章节流完成后进行保存与绑定
-                    Mono<UniversalAIResponseDto> tail = merged.ignoreElements().then(Mono.defer(() -> {
-                        String novelId = request.getNovelId();
-                        if (novelId != null && !novelId.isEmpty()) {
-                            List<Mono<Void>> saves = new ArrayList<>();
-                            for (int i = 0; i < outlines.size(); i++) {
-                                String outlineText = outlines.get(i);
-                                String content = chapterBuffers.get(i).toString();
-                                String chapterTitle = defaultChapterTitle(i + 1);
-                                saves.add(saveChapter(novelId, chapterTitle, outlineText, content));
-                            }
-                            Mono<Void> all = saves.isEmpty() ? Mono.empty() : reactor.core.publisher.Flux.fromIterable(saves).concatMap(m -> m).then();
-                            // 在保存完成后同步刷新字数统计，再发送绑定信号
-                            return all
-                                    .then(novelService.updateNovelWordCount(novelId))
-                                    .then(bindNovelToSessionAndSignal(novelId, request.getSettingSessionId()));
-                        }
-                        return bindNovelToSessionAndSignal(null, request.getSettingSessionId());
-                    }));
-                    return Flux.concat(merged, tail.flux());
+                // 🚀 新的串行生成逻辑：改为逐章串行生成，确保章节间依赖关系正确
+                log.info("[Compose][Serial] 开始串行生成 {} 章节", outlines.size());
+                
+                return wholeTreeContextMono.flatMapMany(settingTreeContext -> {
+                    try { 
+                        log.info("[Compose][Context] Outline+Chapters mode settingTreeContext.length={}", 
+                                (settingTreeContext != null ? settingTreeContext.length() : -1)); 
+                    } catch (Exception ignore) {}
+                    
+                    // 🚀 使用递归方式串行生成章节
+                    return generateChaptersSequentially(request, outlines, settingTreeContext, 0, new ArrayList<>(), new StringBuilder());
                 });
             });
 
@@ -470,6 +391,228 @@ public class SettingComposeService {
 
         // 兜底：按普通流式处理
         return universalAIService.processStreamRequest(request);
+    }
+
+    /**
+     * 🚀 新增：串行生成章节，确保章节间依赖关系正确
+     * @param request 原始请求
+     * @param outlines 所有章节的大纲列表
+     * @param settingTreeContext 设定树上下文
+     * @param currentIndex 当前生成章节的索引
+     * @param chapterBuffers 已生成章节内容的缓存
+     * @param previousContext 前面章节的累积上下文
+     * @return 流式响应
+     */
+    private Flux<UniversalAIResponseDto> generateChaptersSequentially(
+            UniversalAIRequestDto request, 
+            List<String> outlines, 
+            String settingTreeContext,
+            int currentIndex, 
+            List<StringBuilder> chapterBuffers,
+            StringBuilder previousContext) {
+        
+        // 递归终止条件：所有章节生成完毕
+        if (currentIndex >= outlines.size()) {
+            log.info("[Compose][Serial] 所有章节生成完毕，开始保存到数据库");
+            
+            // 在最后统一保存所有章节并绑定小说
+            Mono<UniversalAIResponseDto> saveMono = Mono.defer(() -> {
+                String novelId = request.getNovelId();
+                if (novelId != null && !novelId.isEmpty()) {
+                    List<Mono<Void>> saves = new ArrayList<>();
+                    for (int i = 0; i < outlines.size(); i++) {
+                        String outlineText = outlines.get(i);
+                        String content = chapterBuffers.get(i).toString();
+                        String chapterTitle = defaultChapterTitle(i + 1);
+                        saves.add(saveChapter(novelId, chapterTitle, outlineText, content));
+                    }
+                    Mono<Void> all = saves.isEmpty() ? Mono.empty() : 
+                            reactor.core.publisher.Flux.fromIterable(saves).concatMap(m -> m).then();
+                    
+                    return all
+                            .then(novelService.updateNovelWordCount(novelId))
+                            .then(bindNovelToSessionAndSignal(novelId, request.getSettingSessionId()));
+                }
+                return bindNovelToSessionAndSignal(null, request.getSettingSessionId());
+            });
+            
+            return saveMono.flux();
+        }
+        
+        // 生成当前章节
+        String outlineText = outlines.get(currentIndex);
+        int chapterIndex = currentIndex + 1;
+        chapterBuffers.add(new StringBuilder());
+        
+        log.info("[Compose][Serial] 开始生成第 {} 章，前文上下文长度: {}", 
+                chapterIndex, previousContext.length());
+        
+        // 构建当前章节的生成请求
+        UniversalAIRequestDto s2sReq = cloneWithParam(request, Map.of(
+                "chapterIndex", chapterIndex,
+                "outlineText", outlineText,
+                "previousChaptersContent", previousContext.toString(), // 🚀 传递前面章节的完整内容
+                "totalChapters", outlines.size()
+        ));
+        
+        // 切换功能类型为 SUMMARY_TO_SCENE，并将大纲作为 prompt 传入
+        s2sReq.setRequestType(AIFeatureType.SUMMARY_TO_SCENE.name());
+        s2sReq.setPrompt(outlineText);
+        
+        // 🚀 上游仅传入设定树给 context，由占位符解析器统一合并previousChaptersContent，避免重复
+        if (settingTreeContext != null && !settingTreeContext.isBlank()) {
+            s2sReq.getParameters().put("context", settingTreeContext);
+        }
+        if (previousContext.length() > 0) {
+            s2sReq.getParameters().put("previousChaptersContent", previousContext.toString());
+        }
+        
+        // 🚀 透传前端模型/提示词相关参数：instructions、length、topP、topK（若提供）
+        try {
+            if (request.getInstructions() != null && !request.getInstructions().isEmpty()) {
+                s2sReq.setInstructions(request.getInstructions());
+                s2sReq.getParameters().put("instructions", request.getInstructions());
+            }
+            if (request.getParameters() != null) {
+                Object len = request.getParameters().get("length");
+                if (len != null) {
+                    s2sReq.getParameters().put("length", len);
+                }
+                Object topP = request.getParameters().get("topP");
+                if (topP != null) {
+                    s2sReq.getParameters().put("topP", topP);
+                }
+                Object topK = request.getParameters().get("topK");
+                if (topK != null) {
+                    s2sReq.getParameters().put("topK", topK);
+                }
+            }
+        } catch (Exception ignore) {}
+        
+        // 若前端传入 s2sTemplateId，则映射为本次 S2S 请求的 promptTemplateId
+        if (request.getParameters() != null && request.getParameters().get("s2sTemplateId") instanceof String) {
+            String s2sTemplateId = (String) request.getParameters().get("s2sTemplateId");
+            if (s2sTemplateId != null && !s2sTemplateId.isEmpty()) {
+                s2sReq.getParameters().put("promptTemplateId", s2sTemplateId);
+            }
+        }
+        
+        // 输出章节大纲和正文开始标记
+        Flux<UniversalAIResponseDto> preOutline = Flux.just(
+                buildSystemChunk(AIFeatureType.SUMMARY_TO_SCENE.name(),
+                        "[CHAPTER_" + chapterIndex + "_OUTLINE]\n" + outlineText + "\n"));
+        Flux<UniversalAIResponseDto> preContentStart = Flux.just(
+                buildSystemChunk(AIFeatureType.SUMMARY_TO_SCENE.name(),
+                        "[CHAPTER_" + chapterIndex + "_CONTENT]"));
+        
+        // 计费归一化处理
+        try {
+            com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
+                s2sReq,
+                true,
+                true,
+                AIFeatureType.SUMMARY_TO_SCENE.name(),
+                resolveModelConfigId(s2sReq),
+                null,
+                null,
+                s2sReq.getSettingSessionId() != null ? s2sReq.getSettingSessionId() : s2sReq.getSessionId(),
+                null
+            );
+        } catch (Exception ignore) {}
+        
+        // 🚀 生成当前章节内容，并在完成后递归生成下一章
+        Flux<UniversalAIResponseDto> currentChapterFlux = universalAIService.processStreamRequest(s2sReq)
+                .doOnNext(evt -> {
+                    if (evt != null && evt.getContent() != null) {
+                        chapterBuffers.get(currentIndex).append(evt.getContent());
+                    }
+                })
+                .doOnComplete(() -> {
+                    String generatedContent = chapterBuffers.get(currentIndex).toString();
+                    log.info("[Compose][Serial] 第 {} 章生成完成，内容长度: {} 字符", 
+                            chapterIndex, generatedContent.length());
+                    
+                    // 🚀 将当前章节的摘要和内容添加到上下文中，供下一章使用
+                    previousContext.append("\n\n==== 第").append(chapterIndex).append("章 ====\n");
+                    previousContext.append("摘要: ").append(outlineText).append("\n");
+                    previousContext.append("内容: ").append(generatedContent);
+                    
+                    // 🚀 智能管理上下文窗口，避免过长
+                    manageContextWindow(previousContext);
+                });
+
+        // 返回：大纲标记 → 正文开始标记 → 当前章节内容 →（当前完成后）下一章节内容...
+        return Flux.concat(preOutline, preContentStart, currentChapterFlux)
+                .concatWith(reactor.core.publisher.Flux.defer(() ->
+                        generateChaptersSequentially(request, outlines, settingTreeContext,
+                                currentIndex + 1, chapterBuffers, previousContext)
+                ));
+    }
+    
+    /**
+     * 🚀 新增：智能管理上下文窗口，避免上下文过长
+     * @param context 当前累积的上下文
+     */
+    private void manageContextWindow(StringBuilder context) {
+        final int MAX_CONTEXT_LENGTH = 160000; // 设置合理的上下文最大长度
+        final int KEEP_LAST_CHAPTERS = 5; // 保留最近几章的详细内容
+        
+        if (context.length() <= MAX_CONTEXT_LENGTH) {
+            return; // 未超过限制，无需处理
+        }
+        
+        log.info("[Compose][Serial] 上下文长度超出限制 ({} > {}), 启用智能窗口管理", 
+                context.length(), MAX_CONTEXT_LENGTH);
+        
+        // 查找章节分隔标记，提取各章节内容
+        String contextStr = context.toString();
+        String[] sections = contextStr.split("==== 第\\d+章 ====");
+        
+        if (sections.length <= KEEP_LAST_CHAPTERS + 1) {
+            // 章节数量不多，但总长度超限，需要压缩内容
+            String header = sections[0]; // 保留小说基本信息
+            
+            // 如果header太长，需要截断
+            if (header.length() > MAX_CONTEXT_LENGTH / 3) {
+                header = header.substring(0, MAX_CONTEXT_LENGTH / 3) + "\n...(部分内容省略)...\n";
+            }
+            
+            // 重建上下文，只保留头部信息和最后N章
+            context.setLength(0);
+            context.append(header);
+            for (int i = Math.max(1, sections.length - KEEP_LAST_CHAPTERS); i < sections.length; i++) {
+                context.append("==== 第").append(i).append("章 ====");
+                context.append(sections[i]);
+            }
+        } else {
+            // 章节数量超过保留限制，只保留前文概要和最近N章
+            String header = sections[0]; // 小说基本信息
+            
+            // 创建前文概要
+            StringBuilder summary = new StringBuilder(header);
+            summary.append("\n\n==== 前文概要 ====\n");
+            for (int i = 1; i <= sections.length - KEEP_LAST_CHAPTERS - 1; i++) {
+                // 只保留每章的摘要部分
+                String section = sections[i];
+                String[] lines = section.split("\n");
+                for (String line : lines) {
+                    if (line.startsWith("摘要:")) {
+                        summary.append("第").append(i).append("章").append(line).append("\n");
+                        break;
+                    }
+                }
+            }
+            
+            // 重建上下文：头部 + 前文概要 + 最近N章完整内容
+            context.setLength(0);
+            context.append(summary.toString());
+            for (int i = Math.max(1, sections.length - KEEP_LAST_CHAPTERS); i < sections.length; i++) {
+                context.append("==== 第").append(i).append("章 ====");
+                context.append(sections[i]);
+            }
+        }
+        
+        log.info("[Compose][Serial] 上下文窗口管理完成，新长度: {}", context.length());
     }
 
     /**
@@ -1059,9 +1202,27 @@ public class SettingComposeService {
                         promptParams.put("chapterCount", chapterCount);
                         promptParams.put("novelId", request.getNovelId());
                         promptParams.put("userId", request.getUserId());
+                        
+                        // 🚀 确保传递用户输入内容
+                        String inputContent = "";
+                        if (request.getSelectedText() != null && !request.getSelectedText().isEmpty()) {
+                            inputContent = request.getSelectedText();
+                        } else if (request.getPrompt() != null && !request.getPrompt().isEmpty()) {
+                            inputContent = request.getPrompt();
+                        }
+                        promptParams.put("input", inputContent);
+                        
+                        // 🚀 确保传递用户指令
+                        if (request.getInstructions() != null && !request.getInstructions().isEmpty()) {
+                            promptParams.put("instructions", request.getInstructions());
+                        }
+                        
+                        // 🚀 传递设定树上下文
                         if (ctx != null && !ctx.isBlank()) {
                             promptParams.put("context", ctx);
                         }
+                        
+                        // 🚀 传递历史初始提示词
                         if (historyInitPrompt != null && !historyInitPrompt.isBlank()) {
                             promptParams.put("historyInitPrompt", historyInitPrompt);
                         }

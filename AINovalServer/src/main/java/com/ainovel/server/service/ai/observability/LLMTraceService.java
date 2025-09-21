@@ -492,7 +492,12 @@ public class LLMTraceService {
             Map<String, Object> point = new HashMap<>();
             point.put("timestamp", key);
 
-            switch (metric == null ? "successRate" : metric) {
+            switch (metric == null ? "count" : metric) {
+                case "count": {
+                    int cnt = bucket.size();
+                    point.put("value", cnt);
+                    break;
+                }
                 case "avgLatency": {
                     double avg = bucket.stream()
                             .filter(t -> t.getPerformance() != null && t.getPerformance().getTotalDurationMs() != null)

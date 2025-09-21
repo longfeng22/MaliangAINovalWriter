@@ -600,17 +600,20 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       return;
     }
     
-    // 未登录时不发起网络请求
-    final String? uid = AppConfig.userId;
-    if (uid == null || uid.isEmpty) {
-      AppLogger.i(_tag, '未登录，跳过加载策略与历史记录');
-      return;
-    }
-    
+    // 未登录时：加载公开策略；已登录：加载可用策略+历史
     try {
+      final String? uid = AppConfig.userId;
       emit(const SettingGenerationLoading(message: '正在加载生成策略...'));
       
-      final strategies = await _repository.getAvailableStrategies();
+      late final List<StrategyTemplateInfo> strategies;
+      if (uid == null || uid.isEmpty) {
+        final publicList = await _repository.getPublicStrategies();
+        strategies = publicList
+            .map((e) => StrategyTemplateInfo.fromJson(e as Map<String, dynamic>))
+            .toList();
+      } else {
+        strategies = await _repository.getAvailableStrategies();
+      }
       
       // 游客模式下不拉取历史记录；仅已登录且有 userId 时加载
       List<Map<String, dynamic>> histories = [];
@@ -638,8 +641,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
         sessions: sessions,
       ));
       // 若已登录但 sessions 为空，尝试主动加载一次历史记录列表
-      final uid = AppConfig.userId;
-      if ((uid != null && uid.isNotEmpty) && sessions.isEmpty) {
+      final String? uid2 = AppConfig.userId;
+      if ((uid2 != null && uid2.isNotEmpty) && sessions.isEmpty) {
         add(const GetUserHistoriesEvent());
       }
     } catch (e, stackTrace) {
@@ -1034,8 +1037,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       renderedNodeIds = currentState.renderedNodeIds;
     } else if (state is SettingGenerationCompleted) {
       final currentState = state as SettingGenerationCompleted;
-      // 🔧 关键修复：使用historyId作为sessionId
-      sessionId = currentState.activeSession.historyId ?? currentState.activeSession.sessionId;
+      // 🔧 修正：节点修改必须使用真实 sessionId（不要传 historyId）
+      sessionId = currentState.activeSession.sessionId;
       activeSession = currentState.activeSession;
       strategies = currentState.strategies;
       sessions = currentState.sessions;
@@ -1070,6 +1073,26 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
 
 
     
+    // 🔧 校验会话ID与会话对象
+    if (sessionId == null || sessionId.isEmpty) {
+      AppLogger.e(_tag, '❌ 无有效的会话ID，无法进行节点修改（state=${state.runtimeType}）');
+      emit(SettingGenerationError(
+        message: '没有有效的会话，无法修改节点',
+        sessions: sessions,
+        activeSessionId: null,
+      ));
+      return;
+    }
+    if (activeSession == null) {
+      AppLogger.e(_tag, '❌ 无有效会话对象，无法进行节点修改');
+      emit(SettingGenerationError(
+        message: '会话无效，无法修改节点',
+        sessions: sessions,
+        activeSessionId: sessionId,
+      ));
+      return;
+    }
+
     try {
       AppLogger.i(_tag, '🔧 开始节点修改 - sessionId: $sessionId, nodeId: ${event.nodeId}');
       
@@ -1077,8 +1100,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       emit(SettingGenerationNodeUpdating(
         strategies: strategies,
         sessions: sessions,
-        activeSessionId: sessionId,
-        activeSession: activeSession,
+        activeSessionId: sessionId!,
+        activeSession: activeSession!,
         selectedNodeId: selectedNodeId,
         viewMode: viewMode,
         adjustmentPrompt: adjustmentPrompt,
@@ -1100,11 +1123,13 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
 
       _updateStreamSubscription?.cancel();
       _updateStreamSubscription = _repository.updateNode(
-        sessionId: sessionId,
+        sessionId: sessionId!,
         nodeId: event.nodeId,
         modificationPrompt: event.modificationPrompt,
         modelConfigId: event.modelConfigId,
         scope: event.scope,
+        isPublicModel: event.isPublicModel,
+        publicModelConfigId: event.publicModelConfigId,
       ).listen(
         (generationEvent) {
           AppLogger.i(_tag, '📡 收到节点修改事件: ${generationEvent.eventType}');
@@ -1518,8 +1543,14 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       final String? historyId = saveResult.historyId;
       final String successMessage = _getSuccessMessage(event.novelId, event.updateExisting);
 
-      // 更新会话状态
-      _updateSessionAfterSave(emit, historyId, successMessage);
+      // 更新会话状态；仅当创建独立快照（非更新现有历史）时插入并切换到新快照
+      final bool isStandaloneSnapshot = event.novelId == null && !event.updateExisting;
+      _updateSessionAfterSave(
+        emit,
+        historyId,
+        successMessage,
+        switchToNewHistory: isStandaloneSnapshot,
+      );
       
     } catch (e, stackTrace) {
       AppLogger.error(_tag, '保存设定失败', e, stackTrace);
@@ -1621,67 +1652,164 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
     return [];
   }
   
+  /// 🔧 新增：获取当前composeReady状态的辅助方法
+  ComposeReadyInfo? _getCurrentComposeReady() {
+    if (state is SettingGenerationReady) {
+      return (state as SettingGenerationReady).composeReady;
+    } else if (state is SettingGenerationInProgress) {
+      return (state as SettingGenerationInProgress).composeReady;
+    } else if (state is SettingGenerationCompleted) {
+      return (state as SettingGenerationCompleted).composeReady;
+    } else if (state is SettingGenerationNodeUpdating) {
+      return (state as SettingGenerationNodeUpdating).composeReady;
+    } else if (state is SettingGenerationError) {
+      return (state as SettingGenerationError).composeReady;
+    }
+    return null;
+  }
+  
   /// 获取保存成功消息
   String _getSuccessMessage(String? novelId, bool updateExisting) {
+    if (updateExisting) {
+      return '历史记录已成功更新';
+    }
     if (novelId == null) {
       return '设定已成功保存为独立快照';
-    } else if (updateExisting) {
-      return '历史记录已成功更新';
-    } else {
-      return '设定已成功保存到小说中';
     }
+    return '设定已成功保存到小说中';
   }
 
   /// 保存后更新会话状态
   void _updateSessionAfterSave(
     Emitter<SettingGenerationState> emit,
     String? historyId,
-    String message,
-  ) {
+    String message, {
+    bool switchToNewHistory = false,
+  }) {
     if (state is SettingGenerationInProgress) {
       final s = state as SettingGenerationInProgress;
       final updatedActive = s.activeSession.copyWith(
         status: SessionStatus.saved,
-        sessionId: historyId ?? s.activeSession.sessionId,
+        // ✅ 不再覆盖 sessionId，保持真实会话ID
         historyId: historyId,
       );
-      final updatedSessions = s.sessions.map((sess) {
+      List<SettingGenerationSession> updatedSessions = s.sessions.map((sess) {
         return sess.sessionId == s.activeSessionId ? updatedActive : sess;
       }).toList();
 
-      emit(SettingGenerationCompleted(
-        strategies: s.strategies,
-        sessions: updatedSessions,
-        activeSessionId: updatedActive.sessionId,
-        activeSession: updatedActive,
-        selectedNodeId: s.selectedNodeId,
-        viewMode: s.viewMode,
-        adjustmentPrompt: s.adjustmentPrompt,
-        pendingChanges: s.pendingChanges,
-        highlightedNodeIds: s.highlightedNodeIds,
-        editHistory: s.editHistory,
-        events: s.events,
-        message: message,
-        nodeRenderStates: s.nodeRenderStates,
-        renderedNodeIds: s.renderedNodeIds,
-      ));
+      // 独立快照：在历史列表中插入新快照并高亮切换
+      if (switchToNewHistory && historyId != null && historyId.isNotEmpty) {
+        final placeholder = SettingGenerationSession(
+          sessionId: historyId,
+          userId: updatedActive.userId,
+          novelId: null,
+          initialPrompt: updatedActive.initialPrompt,
+          strategy: updatedActive.strategy,
+          modelConfigId: updatedActive.modelConfigId,
+          status: SessionStatus.saved,
+          rootNodes: const [],
+          allNodes: const {},
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          errorMessage: null,
+          metadata: updatedActive.metadata,
+          historyId: historyId,
+        );
+        updatedSessions = [placeholder, ...updatedSessions];
+
+        emit(SettingGenerationCompleted(
+          strategies: s.strategies,
+          sessions: updatedSessions,
+          activeSessionId: placeholder.sessionId,
+          activeSession: placeholder,
+          selectedNodeId: s.selectedNodeId,
+          viewMode: s.viewMode,
+          adjustmentPrompt: s.adjustmentPrompt,
+          pendingChanges: s.pendingChanges,
+          highlightedNodeIds: s.highlightedNodeIds,
+          editHistory: s.editHistory,
+          events: s.events,
+          message: message,
+          nodeRenderStates: s.nodeRenderStates,
+          renderedNodeIds: s.renderedNodeIds,
+        ));
+
+        // 异步加载新快照的完整数据
+        add(CreateSessionFromHistoryEvent(
+          historyId: historyId,
+          userId: updatedActive.userId,
+          editReason: '保存后查看历史',
+          modelConfigId: updatedActive.modelConfigId ?? 'default',
+        ));
+      } else {
+        emit(SettingGenerationCompleted(
+          strategies: s.strategies,
+          sessions: updatedSessions,
+          activeSessionId: updatedActive.sessionId,
+          activeSession: updatedActive,
+          selectedNodeId: s.selectedNodeId,
+          viewMode: s.viewMode,
+          adjustmentPrompt: s.adjustmentPrompt,
+          pendingChanges: s.pendingChanges,
+          highlightedNodeIds: s.highlightedNodeIds,
+          editHistory: s.editHistory,
+          events: s.events,
+          message: message,
+          nodeRenderStates: s.nodeRenderStates,
+          renderedNodeIds: s.renderedNodeIds,
+        ));
+      }
     } else if (state is SettingGenerationCompleted) {
       final s = state as SettingGenerationCompleted;
       final updatedActive = s.activeSession.copyWith(
         status: SessionStatus.saved,
-        sessionId: historyId ?? s.activeSession.sessionId,
+        // ✅ 不再覆盖 sessionId，保持真实会话ID
         historyId: historyId,
       );
-      final updatedSessions = s.sessions.map((sess) {
+      List<SettingGenerationSession> updatedSessions = s.sessions.map((sess) {
         return sess.sessionId == s.activeSessionId ? updatedActive : sess;
       }).toList();
 
-      emit(s.copyWith(
-        sessions: updatedSessions,
-        activeSession: updatedActive,
-        activeSessionId: updatedActive.sessionId,
-        message: message,
-      ));
+      if (switchToNewHistory && historyId != null && historyId.isNotEmpty) {
+        final placeholder = SettingGenerationSession(
+          sessionId: historyId,
+          userId: updatedActive.userId,
+          novelId: null,
+          initialPrompt: updatedActive.initialPrompt,
+          strategy: updatedActive.strategy,
+          modelConfigId: updatedActive.modelConfigId,
+          status: SessionStatus.saved,
+          rootNodes: const [],
+          allNodes: const {},
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          errorMessage: null,
+          metadata: updatedActive.metadata,
+          historyId: historyId,
+        );
+        updatedSessions = [placeholder, ...updatedSessions];
+
+        emit(s.copyWith(
+          sessions: updatedSessions,
+          activeSession: placeholder,
+          activeSessionId: placeholder.sessionId,
+          message: message,
+        ));
+
+        add(CreateSessionFromHistoryEvent(
+          historyId: historyId,
+          userId: updatedActive.userId,
+          editReason: '保存后查看历史',
+          modelConfigId: updatedActive.modelConfigId ?? 'default',
+        ));
+      } else {
+        emit(s.copyWith(
+          sessions: updatedSessions,
+          activeSession: updatedActive,
+          activeSessionId: updatedActive.sessionId,
+          message: message,
+        ));
+      }
     }
   }
 
@@ -1774,12 +1902,24 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       
       // 如果选择的是历史会话，需要切换到对应的状态
       if (event.isHistorySession && session.status == SessionStatus.saved) {
+        // 🔧 新增：为历史会话设置默认的composeReady状态
+        final defaultComposeReady = ComposeReadyInfo(
+          ready: true,
+          reason: '历史会话已选择，可以开始创作',
+          novelId: cleared.novelId ?? '',
+          sessionId: cleared.sessionId,
+        );
+        
         emit(SettingGenerationCompleted(
           strategies: currentState.strategies,
           sessions: currentState.sessions,
           activeSessionId: cleared.sessionId,
           activeSession: cleared,
           message: '已切换到历史会话',
+          // 🔧 关键修复：确保所有节点都可见
+          renderedNodeIds: _collectAllNodeIds(cleared.rootNodes).toSet(),
+          // 🔧 新增：设置默认的composeReady状态
+          composeReady: defaultComposeReady,
         ));
       }
       return;
@@ -1800,12 +1940,24 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       ));
       // 如果被选中的会话已经生成完成或已保存，则直接切换到 Completed 状态，避免动画
       if (session.status == SessionStatus.completed || session.status == SessionStatus.saved) {
+        // 🔧 新增：为完成/保存的会话设置默认的composeReady状态
+        final defaultComposeReady = ComposeReadyInfo(
+          ready: true,
+          reason: '会话已完成，可以开始创作',
+          novelId: cleared.novelId ?? '',
+          sessionId: cleared.sessionId,
+        );
+        
         emit(SettingGenerationCompleted(
           strategies: s.strategies,
           sessions: s.sessions,
           activeSessionId: cleared.sessionId,
           activeSession: cleared,
           message: '已切换到完成会话',
+          // 🔧 关键修复：确保所有节点都可见
+          renderedNodeIds: _collectAllNodeIds(cleared.rootNodes).toSet(),
+          // 🔧 新增：设置默认的composeReady状态
+          composeReady: defaultComposeReady,
         ));
       }
       return;
@@ -1816,12 +1968,29 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       final session = s.sessions.firstWhere((ss) => ss.sessionId == event.sessionId,
           orElse: () => s.sessions.isNotEmpty ? s.sessions.first : s.activeSession);
       final cleared = session.copyWith(novelId: '');
+      
+      // 🔧 新增：确保composeReady状态正确传递
+      ComposeReadyInfo? composeReady = s.composeReady;
+      if (composeReady == null) {
+        // 如果当前状态没有composeReady，为会话创建默认状态
+        composeReady = ComposeReadyInfo(
+          ready: true,
+          reason: '会话已切换，可以开始创作',
+          novelId: cleared.novelId ?? '',
+          sessionId: cleared.sessionId,
+        );
+      }
+      
       emit(s.copyWith(
         activeSessionId: cleared.sessionId,
         activeSession: cleared,
         selectedNodeId: null,
         viewMode: 'compact',
         adjustmentPrompt: '',
+        // 🔧 关键修复：确保所有节点都可见
+        renderedNodeIds: _collectAllNodeIds(cleared.rootNodes).toSet(),
+        // 🔧 新增：保持或设置composeReady状态
+        composeReady: composeReady,
       ));
       return;
     }
@@ -1861,6 +2030,14 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       }
       
       // 🔧 修复：确保所有必要的状态字段都被正确初始化
+      // 🔧 新增：为从错误状态恢复的会话设置默认的composeReady状态
+      final defaultComposeReady = ComposeReadyInfo(
+        ready: true,
+        reason: '会话已恢复，可以开始创作',
+        novelId: session.novelId ?? '',
+        sessionId: session.sessionId,
+      );
+      
       emit(SettingGenerationCompleted(
         strategies: strategies, // 使用重新加载的策略数据而不是空数组
         sessions: currentState.sessions,
@@ -1877,6 +2054,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
         highlightedNodeIds: const {},
         editHistory: const {},
         events: const [],
+        // 🔧 新增：设置默认的composeReady状态
+        composeReady: defaultComposeReady,
       ));
       
       AppLogger.i(_tag, '✅ 成功从错误状态恢复并加载历史记录: ${session.sessionId}');
@@ -1891,6 +2070,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
         stackTrace: stackTrace,
         isRecoverable: true,
         sessions: (state as SettingGenerationError).sessions,
+        // 🔧 新增：保留当前composeReady状态
+        composeReady: _getCurrentComposeReady(),
         activeSessionId: event.sessionId,
       ));
     }
@@ -1969,6 +2150,14 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       }
 
       // 🔧 修复：确保所有字段都被正确初始化
+      // 🔧 新增：为历史记录设置默认的composeReady状态，允许开始创作
+      final defaultComposeReady = ComposeReadyInfo(
+        ready: true,
+        reason: '历史记录已加载，可以开始创作',
+        novelId: session.novelId ?? '',
+        sessionId: session.sessionId,
+      );
+      
       // 根据编辑原因决定emit的状态类型
       if (event.editReason.contains('修改') || event.editReason.contains('编辑')) {
         // 编辑模式：emit SettingGenerationInProgress状态，支持节点修改
@@ -1990,6 +2179,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
           editHistory: const {},
           events: const [],
           renderQueue: const [],
+          // 🔧 新增：设置默认的composeReady状态
+          composeReady: defaultComposeReady,
         ));
         AppLogger.i(_tag, '✅ 进入编辑模式: ${session.sessionId}, 节点数: ${session.rootNodes.length}');
       } else {
@@ -2010,6 +2201,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
           highlightedNodeIds: const {},
           editHistory: const {},
           events: const [],
+          // 🔧 新增：设置默认的composeReady状态
+          composeReady: defaultComposeReady,
         ));
         AppLogger.i(_tag, '✅ 查看模式: ${session.sessionId}, 节点数: ${session.rootNodes.length}');
       }
@@ -2035,6 +2228,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
         error: e,
         stackTrace: stackTrace,
         sessions: sessions,
+        // 🔧 新增：保留当前状态的composeReady
+        composeReady: _getCurrentComposeReady(),
       ));
     }
   }
@@ -2644,6 +2839,25 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       emit(currentState.copyWith(
         isGenerating: false,
         currentOperation: null,
+      ));
+    } else if (state is SettingGenerationNodeUpdating) {
+      // 🔧 兼容：当后端未显式发送完成事件但流已结束时，将节点修改状态回落为 Completed
+      final s = state as SettingGenerationNodeUpdating;
+      emit(SettingGenerationCompleted(
+        strategies: s.strategies,
+        sessions: s.sessions,
+        activeSessionId: s.activeSessionId,
+        activeSession: s.activeSession,
+        selectedNodeId: s.selectedNodeId,
+        viewMode: s.viewMode,
+        adjustmentPrompt: s.adjustmentPrompt,
+        pendingChanges: s.pendingChanges,
+        highlightedNodeIds: s.highlightedNodeIds,
+        editHistory: s.editHistory,
+        events: s.events,
+        message: s.message.isNotEmpty ? s.message : '节点修改完成',
+        nodeRenderStates: s.nodeRenderStates,
+        renderedNodeIds: s.renderedNodeIds,
       ));
     }
   }
