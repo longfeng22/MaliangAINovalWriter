@@ -71,6 +71,7 @@ class AISettingGenerationBloc extends Bloc<AISettingGenerationEvent, AISettingGe
         settingTypes: event.settingTypes,
         maxSettingsPerType: event.maxSettingsPerType,
         additionalInstructions: event.additionalInstructions,
+        modelConfigId: event.modelConfigId, // 后端会自己查询已有设定
       );
       // 保持当前的Novel引用
       final currentNovel = (state is AISettingGenerationDataLoaded) ? (state as AISettingGenerationDataLoaded).novel : null;

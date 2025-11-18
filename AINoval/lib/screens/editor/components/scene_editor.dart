@@ -42,6 +42,7 @@ import 'package:ainoval/models/editor_settings.dart';
 // import 'package:ainoval/models/public_model_config.dart';
 import 'package:ainoval/widgets/editor/overlay_scene_beat_manager.dart';
 import 'package:ainoval/blocs/credit/credit_bloc.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 
 /// 场景编辑器组件，用于编辑小说中的单个场景
@@ -206,6 +207,13 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
   static const double _summaryTopMargin = 16.0; // 摘要顶部边距
   static const double _summaryBottomMargin = 24.0; // 摘要底部边距
   static const double _bottomToolbarHeight = 40.0; // 🚀 新增：底部工具栏预留高度
+  
+  // 🚀 新增：摘要折叠控制变量
+  static const double _summaryExpandedWidth = 280.0; // 展开时的宽度
+  static const double _summaryCollapsedWidth = 40.0; // 折叠时的宽度（只显示按钮）
+  static const double _summarySpacing = 16.0; // 摘要与编辑器的间距
+  static const String _summaryCollapsedKey = 'scene_editor_summary_collapsed'; // 本地存储key
+  bool _isSummaryCollapsed = false; // 摘要是否折叠
 
   // 🚀 新增：LayerLink目标的GlobalKey，用于工具栏检测位置
   final GlobalKey _toolbarTargetKey = GlobalKey();
@@ -215,6 +223,10 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
   // 添加一个延迟初始化标志
   bool _isEditorFullyInitialized = false;
   Timer? _streamingTimer;
+  
+  // 🎯 设定引用悬停状态管理
+  final _hoverManager = SettingReferenceHoverManager();
+  String? _hoveredSettingId;
   
   // ==================== Controller listeners管理 ====================
   StreamSubscription? _docChangeSub; // 监听 document.changes 的订阅，便于在 controller 切换时取消
@@ -247,6 +259,9 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
       // 监听焦点变化
       _focusNode.addListener(_onEditorFocusChange);
       _summaryFocusNode.addListener(_onSummaryFocusChange);
+      
+      // 🎯 监听设定引用悬停状态变化
+      _hoverManager.addListener(_onSettingHoverChanged);
 
       // 添加控制器内容监听器（保存订阅以便后续取消）
       _docChangeSub = widget.controller.document.changes.listen(_onDocumentChange);
@@ -269,6 +284,9 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
       // 🚀 新增：设置摘要滚动固定监听
       _setupSummaryScrollListener();
       
+      // 🚀 新增：从本地存储加载摘要折叠状态
+      _loadSummaryCollapsedState();
+      
       // 延迟完整初始化，优先显示基础UI
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // 在渲染完成后再初始化复杂功能
@@ -288,6 +306,41 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
         });
       });
 
+  }
+
+  /// 🚀 新增：从本地存储加载摘要折叠状态
+  Future<void> _loadSummaryCollapsedState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final collapsed = prefs.getBool(_summaryCollapsedKey) ?? false;
+      if (mounted) {
+        setState(() {
+          _isSummaryCollapsed = collapsed;
+        });
+      }
+    } catch (e) {
+      AppLogger.e('SceneEditor', '加载摘要折叠状态失败: $e');
+    }
+  }
+
+  /// 🚀 新增：保存摘要折叠状态到本地存储
+  Future<void> _saveSummaryCollapsedState(bool collapsed) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_summaryCollapsedKey, collapsed);
+      AppLogger.v('SceneEditor', '保存摘要折叠状态: $collapsed');
+    } catch (e) {
+      AppLogger.e('SceneEditor', '保存摘要折叠状态失败: $e');
+    }
+  }
+
+  /// 🎯 处理设定引用悬停状态变化
+  void _onSettingHoverChanged() {
+    if (!mounted) return;
+    
+    setState(() {
+      _hoveredSettingId = _hoverManager.hoveredSettingId;
+    });
   }
 
   void _onEditorFocusChange() {
@@ -876,6 +929,8 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
     
     _focusNode.removeListener(_onEditorFocusChange);
     _summaryFocusNode.removeListener(_onSummaryFocusChange);
+    // 🎯 移除设定引用悬停状态监听
+    _hoverManager.removeListener(_onSettingHoverChanged);
     _contentDebounceTimer?.cancel(); // 取消内容防抖定时器
     _selectionDebounceTimer?.cancel(); // 取消选择防抖定时器
     _focusDebounceTimer?.cancel(); // 取消焦点防抖定时器
@@ -982,6 +1037,7 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
 
                 // 🚀 修改：使用Stack布局来实现摘要滚动固定
                 Stack(
+                  clipBehavior: Clip.none, // 🚀 关键：不裁剪超出边界的内容，确保窄条可见
                   children: [
                     // 编辑器区域 - 现在占用全宽度
                     Row(
@@ -1098,31 +1154,49 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
                             ],
                           ),
                         ),
-                        // 固定宽度的占位空间 - 为摘要区域预留空间 (280px摘要 + 16px间距)
-                        const SizedBox(width: 296),
+                        // 🚀 修改：动态宽度的占位空间 - 根据折叠状态调整
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                          width: _isSummaryCollapsed 
+                              ? (_summaryCollapsedWidth + _summarySpacing)
+                              : (_summaryExpandedWidth + _summarySpacing),
+                        ),
                       ],
                     ),
                     
-                    // 🚀 新增：摘要区域 - 使用ValueListenableBuilder监听偏移，无需整棵树setState
-                    ValueListenableBuilder<double>(
-                      valueListenable: _summaryTopOffsetVN,
-                      builder: (context, offsetY, child) {
-                        return Positioned(
-                          top: offsetY,
-                          right: 0,
-                          width: 280,
-                          child: child!,
-                        );
-                      },
-                      child: Container(
-                        key: _summaryKey,
-                        margin: const EdgeInsets.only(left: 0),
-                        constraints: const BoxConstraints(
-                          minHeight: 120,
+                    // 🚀 修改：摘要区域 - 支持折叠/展开动画
+                    if (_isSummaryCollapsed)
+                      // 🚀 折叠状态：固定位置的悬浮书签
+                      Positioned(
+                        top: 0,
+                        right: 0,
+                        child: _buildCollapsedSummary(theme, isEditorOrSummaryFocused),
+                      )
+                    else
+                      // 🚀 展开状态：完整摘要区域
+                      ValueListenableBuilder<double>(
+                        valueListenable: _summaryTopOffsetVN,
+                        builder: (context, offsetY, child) {
+                          return AnimatedPositioned(
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut,
+                            top: offsetY,
+                            right: 0,
+                            bottom: 0,
+                            width: _summaryExpandedWidth,
+                            child: child!,
+                          );
+                        },
+                        child: Container(
+                          key: _summaryKey,
+                          margin: const EdgeInsets.only(left: 0),
+                          constraints: const BoxConstraints(
+                            minHeight: 120,
+                          ),
+                          child: _buildSummaryArea(theme, isEditorOrSummaryFocused),
                         ),
-                        child: _buildSummaryArea(theme, isEditorOrSummaryFocused),
                       ),
-                    ),
                   ],
                 ),
 
@@ -1735,7 +1809,7 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
   }
 
   Widget _buildSummaryArea(ThemeData theme, bool isFocused) {
-    // 🚀 优化：使用自适应高度的布局
+    // 🚀 只在展开状态下调用此方法，移除条件判断
     return Container(
       // 移除 margin，由 Row 的 SizedBox 控制
       padding: const EdgeInsets.all(12), // 调整摘要区内边距
@@ -1757,11 +1831,10 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
           ),
         ],
       ),
-      child: IntrinsicHeight( // 🚀 使用IntrinsicHeight让整个摘要区域自适应内容高度
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min, // 🚀 优化：最小化占用空间
-          children: [
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.max, // 🚀 修复：使用max避免溢出
+        children: [
           // 摘要标题和右上角按钮
           Row(
             crossAxisAlignment: CrossAxisAlignment.center, // 确保垂直居中对齐
@@ -1780,6 +1853,26 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
                   ),
                 ),
               ),
+              // 🚀 新增：折叠按钮
+              IconButton(
+                icon: Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: WebTheme.getSecondaryTextColor(context),
+                ),
+                tooltip: '折叠摘要',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () {
+                  AppLogger.i('SceneEditor', '🔵 点击折叠按钮，折叠摘要');
+                  setState(() {
+                    _isSummaryCollapsed = true;
+                  });
+                  _saveSummaryCollapsedState(true);
+                  AppLogger.i('SceneEditor', '🔵 折叠状态已设置: $_isSummaryCollapsed');
+                },
+              ),
+              const SizedBox(width: 4),
               // 摘要操作按钮（刷新、AI生成） - 移到右上角
               _buildSummaryActionButtons(theme, isFocused),
             ],
@@ -1787,23 +1880,19 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
 
           const SizedBox(height: 8),
 
-          // 🚀 优化：摘要内容 - 使用自适应高度，统一背景色，保证最小高度
-          Container(
-            padding: const EdgeInsets.all(12), // 🚀 保持统一的内边距
-            constraints: const BoxConstraints(
-              minHeight: 60, // 🚀 新增：确保最小高度，即使空内容也有一行文字的高度
-            ),
-            // 🚀 修复：设置正确的背景色
-            decoration: BoxDecoration(
-              color: WebTheme.getSurfaceColor(context),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: MouseRegion(
-              cursor: SystemMouseCursors.text, // 在摘要区域显示文本光标
-              child: Material(
-                type: MaterialType.transparency, // 使用透明Material类型避免黄色下划线
-                child: IntrinsicHeight(
-                                      child: TextField(
+          // 🚀 优化：摘要内容 - 使用Expanded让其填充剩余空间
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: WebTheme.getSurfaceColor(context),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.text,
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: TextField(
                       controller: widget.summaryController,
                       focusNode: _summaryFocusNode,
                       style: WebTheme.getAlignedTextStyle(
@@ -1863,16 +1952,63 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
             ),
           ),
 
-          const SizedBox(height: 12), // 🚀 新增：摘要内容和操作按钮之间的间距
+          const SizedBox(height: 12),
 
           // 🚀 新增：摘要操作按钮区域
           _buildSummaryBottomActions(theme, isFocused),
         ],
-        ),
       ),
     );
   }
 
+  // 🚀 新增：折叠状态下的摘要UI（悬浮书签样式）
+  Widget _buildCollapsedSummary(ThemeData theme, bool isFocused) {
+    return Align(
+      alignment: Alignment.topCenter, // 🚀 顶部对齐
+      child: Container(
+        width: 36, // 🚀 更窄的宽度，像书签一样
+        height: 48, // 🚀 固定高度，只显示箭头
+        decoration: BoxDecoration(
+          color: WebTheme.getSurfaceColor(context),
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(8),
+            bottomLeft: Radius.circular(8),
+          ),
+          border: Border.all(
+            color: WebTheme.getPrimaryColor(context).withOpacity(0.3),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: WebTheme.getShadowColor(context, opacity: 0.15),
+              blurRadius: 8,
+              offset: const Offset(-2, 0),
+            ),
+          ],
+        ),
+        child: Center(
+          child: IconButton(
+            icon: Icon(
+              Icons.chevron_left,
+              size: 20,
+              color: WebTheme.getPrimaryColor(context),
+            ),
+            tooltip: '展开摘要',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: () {
+              AppLogger.i('SceneEditor', '🔵 点击展开按钮');
+              setState(() {
+                _isSummaryCollapsed = false;
+              });
+              _saveSummaryCollapsedState(false);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+  
   // 🚀 新增：摘要底部操作按钮区域
   Widget _buildSummaryBottomActions(ThemeData theme, bool isFocused) {
     return Row(
@@ -2079,13 +2215,14 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
       return;
     }
     
-    // _settingReferenceProcessTimer?.cancel();
-    // _settingReferenceProcessTimer = Timer(const Duration(milliseconds: 800), () {
-    //   if (mounted && !_isProcessingSettingReferences) {
-    //     _lastProcessingTime = DateTime.now();
-    //     _processSettingReferences();
-    //   }
-    // });
+    // 🎯 恢复设定引用处理调用
+    _settingReferenceProcessTimer?.cancel();
+    _settingReferenceProcessTimer = Timer(const Duration(milliseconds: 800), () {
+      if (mounted && !_isProcessingSettingReferences) {
+        _lastProcessingTime = DateTime.now();
+        _processSettingReferences();
+      }
+    });
   }
   
   // 🎯 优化：智能处理设定引用（使用防抖和状态检查）
@@ -2195,9 +2332,9 @@ class _SceneEditorState extends State<SceneEditor> with AutomaticKeepAliveClient
    /// 同时支持设定引用样式和AI生成内容样式
    TextStyle Function(Attribute) _buildCombinedCustomStyleBuilder() {
      return (Attribute attribute) {
-       // 1. 处理设定引用样式
+       // 1. 处理设定引用样式（使用实际的悬停状态）
        final settingReferenceStyle = SettingReferenceInteractionMixin
-           .getCustomStyleBuilderWithHover(hoveredSettingId: null)(attribute);
+           .getCustomStyleBuilderWithHover(hoveredSettingId: _hoveredSettingId)(attribute);
        
        // 2. 处理AI生成内容样式
        final aiGeneratedStyle = AIGeneratedContentProcessor

@@ -146,9 +146,9 @@ public class DoubaoCapabilityDetector implements ProviderCapabilityDetector {
 
         // 第三方在 Doubao 平台的主流模型 - 使用正确的带版本号的模型ID
         models.add(ModelInfo.builder()
-            .id("deepseek-v3-1-250821")
+            .id("deepseek-v3-1-terminus")
             .name("deepseek-v3.1")
-            .description("DeepSeek V3.1模型（推荐250821版本），支持深度思考、文本生成、工具调用")
+            .description("DeepSeek V3.1模型（推荐版本），支持深度思考、文本生成、工具调用")
             .maxTokens(128000)
             .provider("doubao")
             .build()

@@ -66,12 +66,6 @@ public class SettingGenerationConfig {
     private Integer maxDepth = 5;
     
     /**
-     * 审核状态
-     */
-    @Builder.Default
-    private ReviewStatus reviewStatus = new ReviewStatus();
-    
-    /**
      * 策略版本
      */
     @Builder.Default

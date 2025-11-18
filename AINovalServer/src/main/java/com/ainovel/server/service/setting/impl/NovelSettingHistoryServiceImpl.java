@@ -93,9 +93,14 @@ public class NovelSettingHistoryServiceImpl implements NovelSettingHistoryServic
                 .flatMap(novelSettingService::getSettingItemById)
                 .collectList()
                 .flatMap(settingItems -> {
+                    // 🔧 关键修复：使用 sessionId 作为 historyId，确保后端重启后能找到历史记录
+                    // 这样前端持有的 sessionId 就能直接用于查询历史记录和修改节点
+                    String historyId = session.getSessionId();
+                    log.info("使用 sessionId 作为 historyId: {}", historyId);
+                    
                     // 构建历史记录对象
                     NovelSettingGenerationHistory history = NovelSettingGenerationHistory.builder()
-                            .historyId(UUID.randomUUID().toString())
+                            .historyId(historyId)  // 使用 sessionId 而不是生成新UUID
                             .userId(session.getUserId())
                             .novelId(session.getNovelId())
                             .title(generateHistoryTitle(session.getInitialPrompt(), session.getStrategy(), settingItemIds.size()))

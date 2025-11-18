@@ -210,7 +210,7 @@ abstract class EditorRepository {
   
   /// 原子化添加章节和场景 - 在一个事务中同时创建章节和场景，避免数据不一致
   Future<Map<String, dynamic>> addChapterWithScene(String novelId, String actId, 
-      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent});
+      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent, String? insertAfterChapterId});
   
   /// 细粒度添加场景 - 只提供必要信息
   Future<Scene> addSceneFine(String novelId, String chapterId, String title, {String? summary, String? content, int? position});

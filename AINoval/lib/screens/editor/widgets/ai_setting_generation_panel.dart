@@ -1,5 +1,4 @@
 // import 'dart:math'; // Added for min function
-import 'package:ainoval/screens/editor/widgets/floating_setting_dialogs.dart';
 import 'package:flutter/material.dart';
 import 'package:ainoval/utils/web_theme.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -10,7 +9,8 @@ import 'package:ainoval/models/novel_structure.dart'; // Import for Chapter mode
 import 'package:ainoval/services/api_service/repositories/editor_repository.dart'; // Import EditorRepository
 import 'package:ainoval/services/api_service/repositories/novel_ai_repository.dart'; // Needed for BLoC creation
 import 'package:ainoval/blocs/setting/setting_bloc.dart'; 
-
+import 'package:ainoval/widgets/common/model_display_selector.dart'; // 通用模型显示选择器
+import 'package:ainoval/models/unified_ai_model.dart'; // 统一AI模型
 import 'package:ainoval/utils/logger.dart';
 
 // Removed placeholder BLoC, State, and Event definitions
@@ -86,6 +86,7 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
       SettingType.values.map((type) => SettingTypeOption(type)).toList();
   final _maxSettingsController = TextEditingController(text: '3');
   final _instructionsController = TextEditingController();
+  UnifiedAIModel? _selectedModel; // 选中的模型
 
   final _formKey = GlobalKey<FormState>();
   
@@ -133,6 +134,164 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
     return options;
   }
 
+  // 显示AI设定生成原理说明对话框
+  void _showHelpDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              Icons.lightbulb_outline,
+              color: WebTheme.getPrimaryColor(context),
+              size: 24,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'AI设定生成原理',
+              style: TextStyle(
+                color: WebTheme.getTextColor(context),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildHelpSection(
+                context,
+                icon: Icons.analytics_outlined,
+                title: '1. 智能分析章节内容',
+                content: 'AI会深度分析您选择的章节范围内的所有内容，理解故事情节、场景描写和角色互动。',
+              ),
+              const SizedBox(height: 16),
+              _buildHelpSection(
+                context,
+                icon: Icons.link,
+                title: '2. 关联已有设定',
+                content: 'AI会自动查询您小说中已有的所有设定（角色、地点、物品等），并识别它们之间的关联关系。',
+              ),
+              const SizedBox(height: 16),
+              _buildHelpSection(
+                context,
+                icon: Icons.auto_awesome,
+                title: '3. 生成新设定',
+                content: '基于章节内容和已有设定，AI会按照您选择的类型生成新的设定项。如果新设定与已有设定存在关联（如某个物品属于某个角色），AI会自动建立层级关系。',
+              ),
+              const SizedBox(height: 16),
+              _buildHelpSection(
+                context,
+                icon: Icons.account_tree,
+                title: '4. 自动建立层级',
+                content: '生成的设定会自动填充父设定ID（parentId），形成完整的设定体系。例如：角色的武器、地点的子区域等。添加后会在左侧边栏以树状结构展示。',
+              ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: WebTheme.getPrimaryColor(context).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: WebTheme.getPrimaryColor(context).withOpacity(0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.tips_and_updates,
+                      color: WebTheme.getPrimaryColor(context),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '提示：生成的设定仅供参考，您可以自由编辑或删除。建议先从较小的章节范围开始尝试。',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: WebTheme.getSecondaryTextColor(context),
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              '我知道了',
+              style: TextStyle(
+                color: WebTheme.getPrimaryColor(context),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 构建帮助说明的单个部分
+  Widget _buildHelpSection(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String content,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: WebTheme.getPrimaryColor(context).withOpacity(0.1),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: WebTheme.getPrimaryColor(context),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: WebTheme.getTextColor(context),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                content,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: WebTheme.getSecondaryTextColor(context),
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   void dispose() {
     _maxSettingsController.dispose();
@@ -144,28 +303,118 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 0), // Changed from 24, assuming MultiAIPanelView handles top padding for header
-      child: Column(
-        children: [
-          _buildConfigurationArea(context, theme),
-          const Divider(height: 1, thickness: 1),
-          Expanded(child: _buildResultsArea(context, theme)),
-        ],
-      ),
+    // 使用LayoutBuilder检测可用空间，实现响应式布局
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableHeight = constraints.maxHeight;
+        
+        // 小屏幕模式：高度小于600px或高度不足时使用完全可滚动的单列布局
+        final bool isSmallScreen = availableHeight < 600;
+        
+        if (isSmallScreen) {
+          // 小屏幕：整个内容区域可滚动
+          return SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
+              children: [
+                _buildConfigurationArea(context, theme, isCompact: true),
+                const Divider(height: 1, thickness: 1),
+                Container(
+                  constraints: BoxConstraints(
+                    minHeight: 200,
+                    maxHeight: 400,
+                  ),
+                  child: _buildResultsArea(context, theme),
+                ),
+              ],
+            ),
+          );
+        }
+        
+        // 正常屏幕：使用灵活布局，配置区域和结果区域分别可滚动
+        return Column(
+          children: [
+            // 配置区域 - 使用Flexible允许自适应高度，最大占50%
+            Flexible(
+              flex: 1,
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: _buildConfigurationArea(context, theme, isCompact: false),
+              ),
+            ),
+            const Divider(height: 1, thickness: 1),
+            // 结果区域 - 使用Flexible允许自适应高度
+            Flexible(
+              flex: 1,
+              child: _buildResultsArea(context, theme),
+            ),
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildConfigurationArea(BuildContext context, ThemeData theme) {
+  Widget _buildConfigurationArea(BuildContext context, ThemeData theme, {required bool isCompact}) {
+    // 根据紧凑模式调整间距和字体大小
+    final double verticalSpacing = isCompact ? 8.0 : 16.0;
+    final double smallSpacing = isCompact ? 6.0 : 12.0;
+    final double padding = isCompact ? 8.0 : 12.0;
+    final double titleFontSize = isCompact ? 13.0 : 14.0;
+    
     return Padding(
-      padding: const EdgeInsets.all(12.0),
+      padding: EdgeInsets.all(padding),
       child: Form(
         key: _formKey,
-        child: SingleChildScrollView( 
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-                              BlocBuilder<AISettingGenerationBloc, AISettingGenerationState>(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 标题和帮助图标
+            Row(
+              children: [
+                Text(
+                  'AI设定生成配置',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: WebTheme.getTextColor(context),
+                    fontSize: isCompact ? 14.0 : null,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: 'AI设定生成原理说明',
+                  preferBelow: false,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.help,
+                    child: GestureDetector(
+                      onTap: () => _showHelpDialog(context),
+                      child: Container(
+                        width: isCompact ? 18 : 20,
+                        height: isCompact ? 18 : 20,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: WebTheme.getPrimaryColor(context),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '?',
+                            style: TextStyle(
+                              color: WebTheme.getPrimaryColor(context),
+                              fontSize: isCompact ? 11 : 13,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: verticalSpacing),
+            BlocBuilder<AISettingGenerationBloc, AISettingGenerationState>(
                 builder: (context, state) {
                   List<Chapter> chapters = [];
                   Novel? novel;
@@ -212,59 +461,109 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
 
                   final chapterOptions = _generateChapterOptions(chapters, novel);
 
-                  return Column(
+                  // 将章节选择和数量集成到一行
+                  return Row(
                     children: [
-                      _buildChapterDropdown(
-                        context: context,
-                        theme: theme,
-                        label: '起始章节',
-                        value: _selectedStartChapterId,
-                        options: chapterOptions,
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedStartChapterId = value;
-                            if (_selectedEndChapterId != null && _selectedStartChapterId != null) {
-                              final startOption = chapterOptions.firstWhere((opt) => opt.id == _selectedStartChapterId);
-                              final endOption = chapterOptions.firstWhere((opt) => opt.id == _selectedEndChapterId);
-                              if (endOption.globalOrder < startOption.globalOrder) {
-                                _selectedEndChapterId = null; 
+                      // 起始章节（只显示序号）
+                      Expanded(
+                        flex: 2,
+                        child: _buildCompactChapterDropdown(
+                          context: context,
+                          theme: theme,
+                          label: '起始',
+                          value: _selectedStartChapterId,
+                          options: chapterOptions,
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedStartChapterId = value;
+                              if (_selectedEndChapterId != null && _selectedStartChapterId != null) {
+                                final startOption = chapterOptions.firstWhere((opt) => opt.id == _selectedStartChapterId);
+                                final endOption = chapterOptions.firstWhere((opt) => opt.id == _selectedEndChapterId);
+                                if (endOption.globalOrder < startOption.globalOrder) {
+                                  _selectedEndChapterId = null; 
+                                }
                               }
-                            }
-                          });
-                        },
-                        validator: (value) => value == null ? '请选择起始章节' : null,
+                            });
+                          },
+                          validator: (value) => value == null ? '请选择' : null,
+                          isCompact: isCompact,
+                        ),
                       ),
-                      const SizedBox(height: 12),
-                      _buildChapterDropdown(
-                        context: context,
-                        theme: theme,
-                        label: '结束章节 (可选)',
-                        value: _selectedEndChapterId,
-                        options: chapterOptions.where((option) {
-                          if (_selectedStartChapterId == null) return true;
-                          final startOption = chapterOptions.firstWhere((opt) => opt.id == _selectedStartChapterId);
-                          return option.globalOrder >= startOption.globalOrder;
-                        }).toList(),
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedEndChapterId = value;
-                          });
-                        },
-                        hasDefaultOption: true,
+                      SizedBox(width: isCompact ? 6 : 8),
+                      // 结束章节（只显示序号）
+                      Expanded(
+                        flex: 2,
+                        child: _buildCompactChapterDropdown(
+                          context: context,
+                          theme: theme,
+                          label: '终止',
+                          value: _selectedEndChapterId,
+                          options: chapterOptions.where((option) {
+                            if (_selectedStartChapterId == null) return true;
+                            final startOption = chapterOptions.firstWhere((opt) => opt.id == _selectedStartChapterId);
+                            return option.globalOrder >= startOption.globalOrder;
+                          }).toList(),
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedEndChapterId = value;
+                            });
+                          },
+                          hasDefaultOption: true,
+                          isCompact: isCompact,
+                        ),
+                      ),
+                      SizedBox(width: isCompact ? 6 : 8),
+                      // 每类生成数量
+                      Expanded(
+                        flex: 1,
+                        child: TextFormField(
+                          controller: _maxSettingsController,
+                          decoration: InputDecoration(
+                            labelText: '数量',
+                            labelStyle: TextStyle(fontSize: titleFontSize),
+                            hintText: '1-5',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: isCompact ? 8 : 12,
+                              vertical: isCompact ? 12 : 16,
+                            ),
+                            isDense: true,
+                          ),
+                          style: TextStyle(fontSize: titleFontSize),
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          validator: (value) {
+                            if (value == null || value.isEmpty) return '必填';
+                            final num = int.tryParse(value);
+                            if (num == null || num < 1 || num > 5) return '1-5';
+                            return null;
+                          },
+                        ),
                       ),
                     ],
                   );
                 },
-              ),
-              const SizedBox(height: 16),
-              Text('希望生成的设定类型:', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w500)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8.0,
-                runSpacing: 4.0,
+            ),
+            SizedBox(height: verticalSpacing),
+            Text(
+                '希望生成的设定类型:', 
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w500,
+                  fontSize: titleFontSize,
+                ),
+            ),
+            SizedBox(height: smallSpacing),
+            Wrap(
+                spacing: isCompact ? 6.0 : 8.0,
+                runSpacing: isCompact ? 3.0 : 4.0,
                 children: _settingTypeOptions.map((option) {
                   return FilterChip(
-                    label: Text(option.type.displayName, style: const TextStyle(fontSize: 12)),
+                    label: Text(
+                      option.type.displayName, 
+                      style: TextStyle(fontSize: isCompact ? 11 : 12),
+                    ),
                     selected: option.isSelected,
                     onSelected: (selected) {
                       setState(() {
@@ -277,8 +576,11 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
                         color: option.isSelected ? theme.colorScheme.onPrimary : theme.textTheme.bodySmall?.color, 
                         fontWeight: option.isSelected ? FontWeight.bold : FontWeight.normal),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,      
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    visualDensity: isCompact ? const VisualDensity(horizontal: -2, vertical: -2) : VisualDensity.compact,
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isCompact ? 4 : 6,
+                      vertical: isCompact ? 1 : 2,
+                    ),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                         side: BorderSide(
@@ -288,47 +590,76 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
                     ),
                   );
                 }).toList(),
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _maxSettingsController,
-                decoration: const InputDecoration(
-                  labelText: '每类生成数量 (1-5)',
-                  border: OutlineInputBorder(),
+            ),
+            SizedBox(height: verticalSpacing),
+            // 模型选择器
+            Text(
+                '选择AI模型:', 
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w500,
+                  fontSize: titleFontSize,
                 ),
-                keyboardType: TextInputType.number,
-                validator: (value) {
-                  if (value == null || value.isEmpty) return '请输入数量';
-                  final num = int.tryParse(value);
-                  if (num == null || num < 1 || num > 5) return '请输入1到5之间的数字';
-                  return null;
+            ),
+            SizedBox(height: smallSpacing),
+            ModelDisplaySelector(
+                selectedModel: _selectedModel,
+                onModelSelected: (model) {
+                  setState(() {
+                    _selectedModel = model;
+                  });
                 },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
+                size: isCompact ? ModelDisplaySize.small : ModelDisplaySize.medium,
+                height: isCompact ? 50 : 60,
+                showIcon: true,
+                showTags: !isCompact, // 紧凑模式下隐藏标签
+                showSettingsButton: false,
+                placeholder: '选择AI模型',
+            ),
+            SizedBox(height: verticalSpacing),
+            // 说明或风格指令输入框 - 添加边框
+            TextFormField(
                 controller: _instructionsController,
-                decoration: const InputDecoration(
-                  labelText: '其他说明或风格引导 (可选)',
+                decoration: InputDecoration(
+                  labelText: '说明或风格指令 (可选)',
+                  labelStyle: TextStyle(fontSize: titleFontSize),
                   hintText: '例如：希望角色更神秘，或侧重描写地点的历史感',
-                  border: OutlineInputBorder(),
+                  hintStyle: TextStyle(fontSize: isCompact ? 12 : 13),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                   alignLabelWithHint: true,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: isCompact ? 8 : 12,
+                    vertical: isCompact ? 8 : 12,
+                  ),
                 ),
-                maxLines: 2,
+                style: TextStyle(fontSize: titleFontSize),
+                maxLines: isCompact ? 2 : 3,
                 maxLength: 200,
-              ),
-              const SizedBox(height: 20),
-              Center(
+            ),
+            SizedBox(height: isCompact ? 12 : 20),
+            Center(
                 child: BlocBuilder<AISettingGenerationBloc, AISettingGenerationState>(
                   builder: (context, state) {
                     bool isLoading = state is AISettingGenerationInProgress;
                     return ElevatedButton.icon(
                       icon: isLoading 
-                          ? const SizedBox(width:16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.auto_awesome_outlined, size: 18),
+                          ? SizedBox(
+                              width: isCompact ? 14 : 16,
+                              height: isCompact ? 14 : 16,
+                              child: const CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : Icon(Icons.auto_awesome_outlined, size: isCompact ? 16 : 18),
                       label: Text(isLoading ? '生成中...' : '开始生成设定'),
                       style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isCompact ? 16 : 20,
+                          vertical: isCompact ? 10 : 12,
+                        ),
+                        textStyle: TextStyle(
+                          fontSize: isCompact ? 13 : 14,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       onPressed: isLoading ? null : () {
                         if (_formKey.currentState!.validate()) {
@@ -348,7 +679,14 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
                             );
                             return;
                           }
+                          if (_selectedModel == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('请选择AI模型'), backgroundColor: Colors.orange)
+                            );
+                            return;
+                          }
 
+                          // 后端会自己查询novelId对应的已有设定，前端不需要传递
                           context.read<AISettingGenerationBloc>().add(GenerateSettingsRequested(
                             novelId: widget.novelId,
                             startChapterId: _selectedStartChapterId!,
@@ -356,22 +694,22 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
                             settingTypes: selectedTypes,
                             maxSettingsPerType: int.parse(_maxSettingsController.text),
                             additionalInstructions: _instructionsController.text,
+                            modelConfigId: _selectedModel!.id, // 模型配置ID
                           ));
                         }
                       },
                     );
                   }
                 ),
-              ),
-              const SizedBox(height: 12), // Add some bottom padding
+            ),
             ],
           ),
         ),
-      ),
     );
   }
 
-  Widget _buildChapterDropdown({
+  // 紧凑型章节下拉框（只显示序号）
+  Widget _buildCompactChapterDropdown({
     required BuildContext context,
     required ThemeData theme,
     required String label,
@@ -380,117 +718,86 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
     required ValueChanged<String?> onChanged,
     String? Function(String?)? validator,
     bool hasDefaultOption = false,
+    bool isCompact = false,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.dividerColor),
-      ),
-      child: DropdownButtonFormField<String>(
-        decoration: InputDecoration(
-          labelText: label,
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          labelStyle: TextStyle(
-            color: theme.colorScheme.onSurfaceVariant,
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-          ),
+    final double fontSize = isCompact ? 12.0 : 13.0;
+    final double iconSize = isCompact ? 16.0 : 18.0;
+    final double verticalPadding = isCompact ? 12.0 : 16.0;
+    return DropdownButtonFormField<String>(
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(fontSize: fontSize),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
         ),
-        value: value,
-        isExpanded: true,  // 确保下拉框内容完全显示
-        icon: Icon(Icons.keyboard_arrow_down, color: theme.colorScheme.onSurfaceVariant),
-        items: [
-          if (hasDefaultOption)
-            DropdownMenuItem<String>(
-              value: null,
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                   Icon(Icons.auto_awesome, size: 18, color: WebTheme.getPrimaryColor(context)),
-                    const SizedBox(width: 8),
-                    Text(
-                      '到最新章节 (默认)',
-                      style: TextStyle(
-                        color: WebTheme.getPrimaryColor(context),
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: isCompact ? 8 : 12,
+          vertical: verticalPadding,
+        ),
+        isDense: true,
+      ),
+      value: value,
+      isExpanded: true,
+      icon: Icon(
+        Icons.keyboard_arrow_down,
+        size: iconSize,
+        color: theme.colorScheme.onSurfaceVariant,
+      ),
+      style: TextStyle(fontSize: fontSize, color: theme.colorScheme.onSurface),
+      items: [
+        if (hasDefaultOption)
+          DropdownMenuItem<String>(
+            value: null,
+            child: Text(
+              '最新',
+              style: TextStyle(
+                color: WebTheme.getPrimaryColor(context),
+                fontSize: fontSize,
               ),
             ),
-          ...options.map((option) {
-            return DropdownMenuItem<String>(
-              value: option.id,
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      option.displayTitle,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: theme.colorScheme.onSurface,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                    ),
-                    if (option.actTitle.isNotEmpty) 
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          option.actDisplayTitle,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w400,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
-                      ),
-                  ],
-                ),
+          ),
+        ...options.map((option) {
+          return DropdownMenuItem<String>(
+            value: option.id,
+            child: Text(
+              '第${option.globalOrder}章',
+              style: TextStyle(
+                fontSize: fontSize,
+                color: theme.colorScheme.onSurface,
               ),
+            ),
+          );
+        }).toList(),
+      ],
+      onChanged: onChanged,
+      validator: validator,
+      selectedItemBuilder: (BuildContext context) {
+        return [
+          if (hasDefaultOption)
+            Text(
+              '最新',
+              style: TextStyle(
+                color: theme.colorScheme.onSurface,
+                fontSize: fontSize,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ...options.map((option) {
+            return Text(
+              '第${option.globalOrder}章',
+              style: TextStyle(
+                color: theme.colorScheme.onSurface,
+                fontSize: fontSize,
+              ),
+              overflow: TextOverflow.ellipsis,
             );
           }).toList(),
-        ],
-        onChanged: onChanged,
-        validator: validator,
-        selectedItemBuilder: (BuildContext context) {
-          return [
-            if (hasDefaultOption)
-              Text(
-                '到最新章节 (默认)',
-                style: TextStyle(
-                  color: theme.colorScheme.onSurface,
-                  fontSize: 14,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ...options.map((option) {
-              return Text(
-                option.displayTitle,
-                style: TextStyle(
-                  color: theme.colorScheme.onSurface,
-                  fontSize: 14,
-                ),
-                overflow: TextOverflow.ellipsis,
-              );
-            }).toList(),
-          ];
-        },
-        dropdownColor: theme.cardColor,
-        borderRadius: BorderRadius.circular(12),
-        elevation: 8,
-        menuMaxHeight: 300, // 限制下拉菜单最大高度
-      ),
+        ];
+      },
+      dropdownColor: theme.cardColor,
+      borderRadius: BorderRadius.circular(8),
+      elevation: 4,
+      menuMaxHeight: 250,
     );
   }
 
@@ -547,12 +854,14 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
                                                   .where((opt) => opt.isSelected)
                                                   .map((opt) => opt.type.value)
                                                   .toList();
-                          if (selectedTypes.isEmpty || _selectedStartChapterId == null) {
+                          if (selectedTypes.isEmpty || _selectedStartChapterId == null || _selectedModel == null) {
                              ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('请确保已选择起始章节和至少一个设定类型再重试。'), backgroundColor: Colors.orange)
+                              const SnackBar(content: Text('请确保已选择起始章节、AI模型和至少一个设定类型再重试。'), backgroundColor: Colors.orange)
                             );
                             return;
                           }
+                          
+                          // 后端会自己查询novelId对应的已有设定，前端不需要传递
                           context.read<AISettingGenerationBloc>().add(GenerateSettingsRequested(
                             novelId: widget.novelId,
                             startChapterId: _selectedStartChapterId!,
@@ -560,6 +869,7 @@ class _AISettingGenerationViewState extends State<AISettingGenerationView> {
                             settingTypes: selectedTypes,
                             maxSettingsPerType: int.parse(_maxSettingsController.text),
                             additionalInstructions: _instructionsController.text,
+                            modelConfigId: _selectedModel!.id, // 模型配置ID
                           ));
                         }
                     }
@@ -688,17 +998,18 @@ class _NovelSettingItemCardState extends State<NovelSettingItemCard> {
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                TextButton.icon(
-                  icon: const Icon(Icons.add_circle_outline, size: 16),
-                  label: const Text('采纳到设定组', style: TextStyle(fontSize: 12)),
-                  style: TextButton.styleFrom(
-                     foregroundColor: WebTheme.getPrimaryColor(context),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      visualDensity: VisualDensity.compact,
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('添加', style: TextStyle(fontSize: 12)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: WebTheme.getPrimaryColor(context),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
                   ),
                   onPressed: () {
-                    _showAdoptDialog(context, widget.settingItem, widget.novelId);
+                    _handleAdoptSetting(context, widget.settingItem, widget.novelId);
                   },
                 ),
               ],
@@ -742,46 +1053,53 @@ class _NovelSettingItemCardState extends State<NovelSettingItemCard> {
     }
   }
 
-  void _showAdoptDialog(BuildContext context, NovelSettingItem itemToAdopt, String novelId) {
+  // 直接添加设定，不再选择设定组
+  void _handleAdoptSetting(BuildContext context, NovelSettingItem itemToAdopt, String novelId) {
     final settingBloc = context.read<SettingBloc>();
     
-    AppLogger.i("AISettingGenerationPanel", "准备采纳设定: ${itemToAdopt.name}, 描述长度: ${itemToAdopt.description?.length ?? 0}, 标签数量: ${itemToAdopt.tags?.length ?? 0}, 属性数量: ${itemToAdopt.attributes?.length ?? 0}");
+    AppLogger.i("AISettingGenerationPanel", "准备添加设定: ${itemToAdopt.name}, parentId: ${itemToAdopt.parentId}, 描述长度: ${itemToAdopt.description?.length ?? 0}");
 
-    FloatingSettingDialogs.showSettingGroupSelection(
-      context: context,
-      novelId: novelId,
-      onGroupSelected: (groupId, groupName) { 
-        // 显示操作提示
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('正在将 "${itemToAdopt.name}" 添加到 "$groupName"...'))
-        );
-        
-        // 确保类型值使用正确的枚举value值
-        final typeValue = itemToAdopt.type;
-        
-        // 准备创建的设定条目
-        NovelSettingItem itemForCreation = itemToAdopt.copyWith(
-          id: null, 
-          isAiSuggestion: false,
-          status: 'ACTIVE',
-          type: typeValue, // 确保使用原始的value值
-          // 明确设置content和description，确保不会丢失
-          content: "",  // 不再使用content字段
-          description: itemToAdopt.description,  // 保留description作为主要描述字段
-          attributes: itemToAdopt.attributes,  // 确保属性被保留
-          tags: itemToAdopt.tags,  // 确保标签被保留
-          generatedBy: "AI设定生成器"  // 明确标记生成来源
-        );
-        
-        // 在安全的上下文环境中创建并添加到组
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          settingBloc.add(CreateSettingItemAndAddToGroup(
-            novelId: novelId,
-            item: itemForCreation, 
-            groupId: groupId, 
-          ));
-        });
-      },
-    );
+    try {
+      // 确保类型值使用正确的枚举value值
+      final typeValue = itemToAdopt.type;
+      
+      // 准备创建的设定条目
+      NovelSettingItem itemForCreation = itemToAdopt.copyWith(
+        id: null,  // 让后端生成新的ID
+        isAiSuggestion: false,
+        status: 'ACTIVE',
+        type: typeValue,
+        description: itemToAdopt.description,
+        attributes: itemToAdopt.attributes,
+        tags: itemToAdopt.tags,
+        parentId: itemToAdopt.parentId,  // 保留AI生成的父设定ID
+        generatedBy: "AI设定生成器",
+      );
+      
+      // 直接创建设定项（不需要选择设定组）
+      settingBloc.add(CreateSettingItem(
+        novelId: novelId,
+        item: itemForCreation,
+      ));
+      
+      // 显示成功提示
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已添加设定: "${itemToAdopt.name}"'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      
+      AppLogger.i("AISettingGenerationPanel", "设定添加成功: ${itemToAdopt.name}");
+    } catch (e, stackTrace) {
+      AppLogger.e("AISettingGenerationPanel", "添加设定失败", e, stackTrace);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('添加设定失败: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 } 

@@ -13,14 +13,19 @@ import 'user_management_screen.dart';
 import 'role_management_screen.dart';
 import 'subscription_management_screen.dart';
 import 'billing_audit_screen.dart';
+import 'model_pricing_management_screen.dart';
+import '../knowledge_base/knowledge_extraction_task_management_page.dart';
+import 'content_review_screen.dart';
 import 'package:get_it/get_it.dart';
 import 'package:ainoval/services/api_service/repositories/impl/admin/llm_observability_repository_impl.dart';
 import 'package:ainoval/widgets/analytics/analytics_card.dart';
 import 'package:ainoval/widgets/analytics/model_usage_chart.dart';
+import 'package:ainoval/widgets/analytics/user_activity_chart.dart';
 import 'package:ainoval/models/analytics_data.dart';
 import 'package:ainoval/models/admin/llm_observability_models.dart';
 import 'package:ainoval/services/api_service/repositories/impl/admin_repository_impl.dart';
 import 'package:ainoval/models/admin/admin_models.dart';
+import 'package:intl/intl.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -44,6 +49,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     const AdminSystemSettingsScreen(), // 8: 系统配置
     const EnhancedTemplatesManagementScreen(), // 9: 增强模板
     const BillingAuditScreen(), // 10: 计费审计
+    const ModelPricingManagementScreen(), // 11: 模型定价管理
+    const KnowledgeExtractionTaskManagementPage(), // 12: AI拆书任务管理
+    const ContentReviewScreen(), // 13: 内容审核
   ];
 
   @override
@@ -86,16 +94,19 @@ class AdminOverviewScreen extends StatefulWidget {
 
 class _AdminOverviewScreenState extends State<AdminOverviewScreen> {
   late LLMObservabilityRepositoryImpl _repository;
+  late AdminRepositoryImpl _adminRepository;
   bool _loading = true;
   String? _error;
 
   Map<String, dynamic> _overview = const {};
   List<ModelUsageData> _modelUsage = const [];
+  AdminDashboardStats? _dashboardStats;
 
   @override
   void initState() {
     super.initState();
     _repository = GetIt.instance<LLMObservabilityRepositoryImpl>();
+    _adminRepository = AdminRepositoryImpl();
     _loadData();
   }
 
@@ -108,14 +119,17 @@ class _AdminOverviewScreenState extends State<AdminOverviewScreen> {
       final results = await Future.wait([
         _repository.getOverviewStatistics(),
         _repository.getModelStatistics(),
+        _adminRepository.getDashboardStats(),
       ]);
 
       final overview = results[0] as Map<String, dynamic>;
       final modelStats = results[1] as List<ModelStatistics>;
+      final dashboardStats = results[2] as AdminDashboardStats;
 
       setState(() {
         _overview = overview;
         _modelUsage = _buildModelUsageFromStats(modelStats);
+        _dashboardStats = dashboardStats;
       });
     } catch (e) {
       setState(() {
@@ -192,95 +206,80 @@ class _AdminOverviewScreenState extends State<AdminOverviewScreen> {
                 ? Center(child: Text('加载失败: $_error'))
                 : (_loading
                     ? const Center(child: CircularProgressIndicator())
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildOverviewStatsRow(context),
-                          const SizedBox(height: 16),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // 模型占比图
-                              Expanded(
-                                child: AnalyticsCard(
-                                  title: '模型占比',
-                                  value: '',
-                                  child: ModelUsageChart(
-                                    data: _modelUsage,
-                                    viewMode: AnalyticsViewMode.daily,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              // 模块入口卡片区
-                              Expanded(
-                                child: GridView.count(
-                                  shrinkWrap: true,
-                                  physics: const NeverScrollableScrollPhysics(),
-                                  crossAxisCount: 2,
-                                  crossAxisSpacing: 16,
-                                  mainAxisSpacing: 16,
-                                  childAspectRatio: 1.6,
-                                  children: const [
-                                    OverviewCard(
-                                      title: 'LLM可观测性',
-                                      description: '监控AI模型调用日志、性能指标和错误统计',
-                                      icon: Icons.visibility,
-                                      count: '—',
-                                    ),
-                                    OverviewCard(
-                                      title: '用户管理',
-                                      description: '管理用户账户，查看用户统计信息',
-                                      icon: Icons.people,
-                                      count: '—',
-                                    ),
-                                    OverviewCard(
-                                      title: '公共模型',
-                                      description: '管理和配置系统可用的AI模型',
-                                      icon: Icons.cloud,
-                                      count: '—',
-                                    ),
-                                    OverviewCard(
-                                      title: '系统预设',
-                                      description: '管理系统级别的预设配置',
-                                      icon: Icons.smart_button,
-                                      count: '—',
-                                    ),
-                                  ],
-                                ),
-                              ),
+                    : SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // 顶部概览统计
+                            _buildOverviewStatsRow(context),
+                            const SizedBox(height: 16),
+                            
+                            // 用户相关统计
+                            if (_dashboardStats != null) ...[
+                              _buildUserStatsRow(context),
+                              const SizedBox(height: 16),
                             ],
-                          ),
-                          const SizedBox(height: 16),
-                          Expanded(
-                            child: GridView.count(
-                              crossAxisCount: 3,
-                              crossAxisSpacing: 16,
-                              mainAxisSpacing: 16,
-                              childAspectRatio: 1.2,
-                              children: const [
-                                OverviewCard(
-                                  title: '公共模板',
-                                  description: '管理公共提示词模板库',
-                                  icon: Icons.article,
-                                  count: '—',
+                            
+                            // 用户活动趋势图表
+                            if (_dashboardStats != null) ...[
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    flex: 2,
+                                    child: AnalyticsCard(
+                                      title: '用户活动趋势',
+                                      value: '',
+                                      child: UserActivityChart(
+                                        loginData: _dashboardStats!.dailyLoginData,
+                                        registrationData: _dashboardStats!.dailyRegistrationData,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: AnalyticsCard(
+                                      title: '模型占比',
+                                      value: '',
+                                      child: ModelUsageChart(
+                                        data: _modelUsage,
+                                        viewMode: AnalyticsViewMode.daily,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                            ] else ...[
+                              AnalyticsCard(
+                                title: '模型占比',
+                                value: '',
+                                child: ModelUsageChart(
+                                  data: _modelUsage,
+                                  viewMode: AnalyticsViewMode.daily,
                                 ),
-                                OverviewCard(
-                                  title: '增强模板',
-                                  description: '管理用户提交的增强模板',
-                                  icon: Icons.auto_awesome,
-                                  count: '—',
-                                ),
-                                OverviewCard(
-                                  title: '订阅管理',
-                                  description: '订阅套餐、配额与结算',
-                                  icon: Icons.subscriptions,
-                                  count: '—',
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            
+                            // 用户创作统计和活动列表
+                            if (_dashboardStats != null) ...[
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: _buildUserNovelStats(context),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: _buildRecentActivities(context),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                          ],
+                        ),
                       )),
           ),
         ),
@@ -333,6 +332,369 @@ class _AdminOverviewScreenState extends State<AdminOverviewScreen> {
         ),
       ],
     );
+  }
+
+  Widget _buildUserStatsRow(BuildContext context) {
+    if (_dashboardStats == null) return const SizedBox.shrink();
+    
+    return Row(
+      children: [
+        Expanded(
+          child: AnalyticsOverviewCard(
+            title: '总用户数',
+            value: _dashboardStats!.totalUsers.toString(),
+            icon: Icons.people,
+            subtitle: '系统注册用户总数',
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: AnalyticsOverviewCard(
+            title: '活跃用户',
+            value: _dashboardStats!.activeUsers.toString(),
+            icon: Icons.person_add,
+            subtitle: '最近30天登录的用户',
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: AnalyticsOverviewCard(
+            title: '今日登录',
+            value: _dashboardStats!.loginsToday.toString(),
+            icon: Icons.login,
+            subtitle: '今日登录用户数',
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: AnalyticsOverviewCard(
+            title: '今日注册',
+            value: _dashboardStats!.newUsersToday.toString(),
+            icon: Icons.person_add_alt_1,
+            subtitle: '今日新注册用户数',
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: AnalyticsOverviewCard(
+            title: '创作小说',
+            value: _dashboardStats!.totalNovels.toString(),
+            icon: Icons.book,
+            subtitle: '用户创作的小说总数',
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildUserNovelStats(BuildContext context) {
+    if (_dashboardStats == null || _dashboardStats!.userNovelStats.isEmpty) {
+      return Card(
+        color: WebTheme.getCardColor(context),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Text(
+              '暂无用户创作统计',
+              style: TextStyle(color: WebTheme.getSecondaryTextColor(context)),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Card(
+      color: WebTheme.getCardColor(context),
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: WebTheme.getBorderColor(context),
+          width: 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.leaderboard,
+                  color: Theme.of(context).primaryColor,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '用户创作排行榜（Top 10）',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: WebTheme.getTextColor(context),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            ..._dashboardStats!.userNovelStats.asMap().entries.map((entry) {
+              final index = entry.key;
+              final stats = entry.value;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: WebTheme.getBackgroundColor(context),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: WebTheme.getBorderColor(context).withOpacity(0.5),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: _getRankColor(index),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${index + 1}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                stats.displayName ?? stats.username,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: WebTheme.getTextColor(context),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'ID: ${stats.userId}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: WebTheme.getSecondaryTextColor(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '最后创作: ${DateFormat('yyyy-MM-dd HH:mm').format(stats.lastCreatedAt)}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: WebTheme.getSecondaryTextColor(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).primaryColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${stats.novelCount} 部',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecentActivities(BuildContext context) {
+    if (_dashboardStats == null || _dashboardStats!.recentActivities.isEmpty) {
+      return Card(
+        color: WebTheme.getCardColor(context),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Text(
+              '暂无最近活动',
+              style: TextStyle(color: WebTheme.getSecondaryTextColor(context)),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Card(
+      color: WebTheme.getCardColor(context),
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: WebTheme.getBorderColor(context),
+          width: 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.history,
+                  color: Theme.of(context).primaryColor,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '最近活动',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: WebTheme.getTextColor(context),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            ..._dashboardStats!.recentActivities.map((activity) {
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: WebTheme.getBackgroundColor(context),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: WebTheme.getBorderColor(context).withOpacity(0.5),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _getActivityIcon(activity.action),
+                          size: 16,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          activity.action,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: WebTheme.getTextColor(context),
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          _formatTimeAgo(activity.timestamp),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: WebTheme.getSecondaryTextColor(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Text(
+                          activity.userName,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: WebTheme.getTextColor(context),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'ID: ${activity.userId}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: WebTheme.getSecondaryTextColor(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      activity.description,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: WebTheme.getSecondaryTextColor(context),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _getRankColor(int index) {
+    switch (index) {
+      case 0:
+        return const Color(0xFFFFD700); // 金色
+      case 1:
+        return const Color(0xFFC0C0C0); // 银色
+      case 2:
+        return const Color(0xFFCD7F32); // 铜色
+      default:
+        return Colors.grey;
+    }
+  }
+
+  IconData _getActivityIcon(String action) {
+    switch (action) {
+      case '用户注册':
+        return Icons.person_add;
+      case '小说创建':
+        return Icons.book;
+      case 'AI对话':
+        return Icons.chat;
+      default:
+        return Icons.circle;
+    }
+  }
+
+  String _formatTimeAgo(DateTime timestamp) {
+    final now = DateTime.now();
+    final difference = now.difference(timestamp);
+
+    if (difference.inDays > 0) {
+      return '${difference.inDays}天前';
+    } else if (difference.inHours > 0) {
+      return '${difference.inHours}小时前';
+    } else if (difference.inMinutes > 0) {
+      return '${difference.inMinutes}分钟前';
+    } else {
+      return '刚刚';
+    }
   }
 }
 

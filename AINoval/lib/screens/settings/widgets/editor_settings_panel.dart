@@ -34,6 +34,222 @@ class _EditorSettingsPanelState extends State<EditorSettingsPanel> {
     _currentSettings = widget.settings;
   }
 
+  Widget _buildLeftSettingsColumn() {
+    return Column(
+      children: [
+        _buildCompactCard(
+          title: '字体设置',
+          icon: Icons.text_fields,
+          children: [
+            _buildCompactSlider(
+              '字体大小',
+              _currentSettings.fontSize,
+              12, 32, '像素',
+              (value) => _updateSettings(_currentSettings.copyWith(fontSize: value)),
+            ),
+            _buildCompactDropdown(
+              '字体',
+              _currentSettings.fontFamily,
+              EditorSettings.availableFontFamilies,
+              (value) => _updateSettings(_currentSettings.copyWith(fontFamily: value)),
+              itemBuilder: (font) {
+                switch (font) {
+                  case 'Noto Sans SC': return 'Noto Sans SC（思源黑体）- 推荐';
+                  case 'Roboto': return 'Roboto（英文字体）';
+                  case 'Roboto Condensed': return 'Roboto Condensed（紧凑版）';
+                  case 'Roboto SemiCondensed': return 'Roboto SemiCondensed（半紧凑版）';
+                  case 'serif': return '衬线字体（中文推荐）';
+                  case 'sans-serif': return '无衬线字体（中文推荐）';
+                  case 'monospace': return '等宽字体（代码风格）';
+                  case 'PingFang SC': return 'PingFang SC（苹方）';
+                  case 'Microsoft YaHei': return 'Microsoft YaHei（微软雅黑）';
+                  case 'SimHei': return 'SimHei（黑体）';
+                  case 'SimSun': return 'SimSun（宋体）';
+                  case 'Helvetica': return 'Helvetica（Mac系统）';
+                  case 'Times New Roman': return 'Times New Roman（衬线）';
+                  case 'Courier New': return 'Courier New（等宽）';
+                  case 'Georgia': return 'Georgia（衬线）';
+                  case 'Verdana': return 'Verdana（无衬线）';
+                  case 'Arial': return 'Arial（无衬线）';
+                  default: return font;
+                }
+              },
+            ),
+            _buildCompactDropdown(
+              '字体粗细',
+              _currentSettings.fontWeight,
+              EditorSettings.availableFontWeights,
+              (value) => _updateSettings(_currentSettings.copyWith(fontWeight: value)),
+              itemBuilder: (weight) {
+                switch (weight) {
+                  case FontWeight.w300: return '细体 (300)';
+                  case FontWeight.w400: return '正常 (400)';
+                  case FontWeight.w500: return '中等 (500)';
+                  case FontWeight.w600: return '半粗 (600)';
+                  case FontWeight.w700: return '粗体 (700)';
+                  default: return '正常 (400)';
+                }
+              },
+            ),
+            _buildCompactSlider(
+              '行间距',
+              _currentSettings.lineSpacing,
+              1.0, 3.0, '倍',
+              (value) => _updateSettings(_currentSettings.copyWith(lineSpacing: value)),
+              formatValue: (value) => '${value.toStringAsFixed(1)}x',
+            ),
+            _buildCompactSlider(
+              '字符间距',
+              _currentSettings.letterSpacing,
+              -1.0, 2.0, '像素',
+              (value) => _updateSettings(_currentSettings.copyWith(letterSpacing: value)),
+              formatValue: (value) => value == 0
+                  ? '标准'
+                  : (value > 0 ? '+${value.toStringAsFixed(1)}px' : '${value.toStringAsFixed(1)}px'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _buildCompactCard(
+          title: '编辑器行为',
+          icon: Icons.settings,
+          children: [
+            _buildCompactSwitch('自动保存', _currentSettings.autoSaveEnabled,
+              (value) => _updateSettings(_currentSettings.copyWith(autoSaveEnabled: value))),
+            if (_currentSettings.autoSaveEnabled)
+              _buildCompactSlider(
+                '保存间隔',
+                _currentSettings.autoSaveIntervalMinutes.toDouble(),
+                1, 15, '分钟',
+                (value) => _updateSettings(_currentSettings.copyWith(autoSaveIntervalMinutes: value.round())),
+                formatValue: (value) => '${value.toInt()}分钟',
+              ),
+            _buildCompactSwitch('拼写检查', _currentSettings.spellCheckEnabled,
+              (value) => _updateSettings(_currentSettings.copyWith(spellCheckEnabled: value))),
+            _buildCompactSwitch('显示字数', _currentSettings.showWordCount,
+              (value) => _updateSettings(_currentSettings.copyWith(showWordCount: value))),
+            _buildCompactSwitch('显示行号', _currentSettings.showLineNumbers,
+              (value) => _updateSettings(_currentSettings.copyWith(showLineNumbers: value))),
+            _buildCompactSwitch('高亮当前行', _currentSettings.highlightActiveLine,
+              (value) => _updateSettings(_currentSettings.copyWith(highlightActiveLine: value))),
+            _buildCompactSwitch('Vim模式', _currentSettings.enableVimMode,
+              (value) => _updateSettings(_currentSettings.copyWith(enableVimMode: value))),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _buildCompactCard(
+          title: '导出设置',
+          icon: Icons.download,
+          children: [
+            _buildCompactDropdown(
+              '默认导出格式',
+              _currentSettings.defaultExportFormat,
+              EditorSettings.availableExportFormats,
+              (value) => _updateSettings(_currentSettings.copyWith(defaultExportFormat: value)),
+              itemBuilder: (format) {
+                switch (format) {
+                  case 'markdown': return 'Markdown (.md)';
+                  case 'docx': return 'Word文档 (.docx)';
+                  case 'pdf': return 'PDF文档 (.pdf)';
+                  case 'txt': return '纯文本 (.txt)';
+                  case 'html': return 'HTML文档 (.html)';
+                  default: return format.toUpperCase();
+                }
+              },
+            ),
+            _buildCompactSwitch('包含元数据', _currentSettings.includeMetadata,
+              (value) => _updateSettings(_currentSettings.copyWith(includeMetadata: value))),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRightSettingsColumn() {
+    return Column(
+      children: [
+        _buildCompactCard(
+          title: '布局间距',
+          icon: Icons.format_align_center,
+          children: [
+            _buildCompactSlider(
+              '水平边距',
+              _currentSettings.paddingHorizontal,
+              8, 48, '像素',
+              (value) => _updateSettings(_currentSettings.copyWith(paddingHorizontal: value)),
+            ),
+            _buildCompactSlider(
+              '垂直边距',
+              _currentSettings.paddingVertical,
+              8, 32, '像素',
+              (value) => _updateSettings(_currentSettings.copyWith(paddingVertical: value)),
+            ),
+            _buildCompactSlider(
+              '段落间距',
+              _currentSettings.paragraphSpacing,
+              4, 24, '像素',
+              (value) => _updateSettings(_currentSettings.copyWith(paragraphSpacing: value)),
+            ),
+            _buildCompactSlider(
+              '缩进大小',
+              _currentSettings.indentSize,
+              16, 64, '像素',
+              (value) => _updateSettings(_currentSettings.copyWith(indentSize: value)),
+            ),
+            _buildCompactSlider(
+              '最大行宽',
+              _currentSettings.maxLineWidth,
+              400, 1500, '像素',
+              (value) => _updateSettings(_currentSettings.copyWith(maxLineWidth: value)),
+            ),
+            _buildCompactSlider(
+              '最小编辑器高度',
+              _currentSettings.minEditorHeight,
+              1200, 3000, '像素',
+              (value) => _updateSettings(_currentSettings.copyWith(minEditorHeight: value)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _buildCompactCard(
+          title: '视觉效果',
+          icon: Icons.visibility,
+          children: [
+            _buildCompactSwitch('暗色模式', _currentSettings.darkModeEnabled,
+              (value) => _updateSettings(_currentSettings.copyWith(darkModeEnabled: value))),
+            _buildCompactSwitch('平滑滚动', _currentSettings.smoothScrolling,
+              (value) => _updateSettings(_currentSettings.copyWith(smoothScrolling: value))),
+            _buildCompactSwitch('淡入动画', _currentSettings.fadeInAnimation,
+              (value) => _updateSettings(_currentSettings.copyWith(fadeInAnimation: value))),
+            _buildCompactSwitch('打字机模式', _currentSettings.useTypewriterMode,
+              (value) => _updateSettings(_currentSettings.copyWith(useTypewriterMode: value))),
+            _buildCompactSwitch('显示小地图', _currentSettings.showMiniMap,
+              (value) => _updateSettings(_currentSettings.copyWith(showMiniMap: value))),
+            _buildCompactSlider(
+              '光标闪烁速度',
+              _currentSettings.cursorBlinkRate,
+              0.5, 3.0, '秒',
+              (value) => _updateSettings(_currentSettings.copyWith(cursorBlinkRate: value)),
+              formatValue: (value) => '${value.toStringAsFixed(1)}s',
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _buildCompactCard(
+          title: '选择和光标',
+          icon: Icons.colorize,
+          children: [
+            _buildColorPicker(
+              '选择高亮颜色',
+              Color(_currentSettings.selectionHighlightColor),
+              (color) => _updateSettings(_currentSettings.copyWith(selectionHighlightColor: color.value)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   @override
   void didUpdateWidget(EditorSettingsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -244,233 +460,35 @@ class _EditorSettingsPanelState extends State<EditorSettingsPanel> {
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                // 紧凑的双列布局
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final bool isNarrow = constraints.maxWidth < 860;
+                if (isNarrow) {
+                  return Column(
+                    children: [
+                      _buildLeftSettingsColumn(),
+                      const SizedBox(height: 16),
+                      _buildRightSettingsColumn(),
+                      const SizedBox(height: 16),
+                      _buildPreviewCard(),
+                    ],
+                  );
+                }
+                return Column(
                   children: [
-                    // 左列
-                    Expanded(
-                      child: Column(
-                        children: [
-                          _buildCompactCard(
-                            title: '字体设置',
-                            icon: Icons.text_fields,
-                            children: [
-                              _buildCompactSlider(
-                                '字体大小',
-                                _currentSettings.fontSize,
-                                12, 32, '像素',
-                                (value) => _updateSettings(_currentSettings.copyWith(fontSize: value)),
-                              ),
-                              _buildCompactDropdown(
-                                '字体',
-                                _currentSettings.fontFamily,
-                                EditorSettings.availableFontFamilies,
-                                (value) => _updateSettings(_currentSettings.copyWith(fontFamily: value)),
-                  itemBuilder: (font) {
-                    switch (font) {
-                      case 'Roboto': return 'Roboto（英文推荐）';
-                      case 'serif': return '衬线字体（中文推荐）';
-                      case 'sans-serif': return '无衬线字体（中文推荐）';
-                      case 'monospace': return '等宽字体';
-                      case 'Noto Sans SC': return 'Noto Sans SC（思源黑体）';
-                      case 'PingFang SC': return 'PingFang SC（苹方）';
-                      case 'Microsoft YaHei': return 'Microsoft YaHei（微软雅黑）';
-                      case 'SimHei': return 'SimHei（黑体）';
-                      case 'SimSun': return 'SimSun（宋体）';
-                      case 'Times New Roman': return 'Times New Roman（英文衬线）';
-                      case 'Arial': return 'Arial（英文无衬线）';
-                      default: return font;
-                    }
-                  },
-                              ),
-                              _buildCompactDropdown(
-                                '字体粗细',
-                                _currentSettings.fontWeight,
-                                EditorSettings.availableFontWeights,
-                                (value) => _updateSettings(_currentSettings.copyWith(fontWeight: value)),
-                  itemBuilder: (weight) {
-                    switch (weight) {
-                                    case FontWeight.w300: return '细体 (300)';
-                                    case FontWeight.w400: return '正常 (400)';
-                                    case FontWeight.w500: return '中等 (500)';
-                                    case FontWeight.w600: return '半粗 (600)';
-                                    case FontWeight.w700: return '粗体 (700)';
-                                    default: return '正常 (400)';
-                                  }
-                                },
-                              ),
-                              _buildCompactSlider(
-                                '行间距',
-                                _currentSettings.lineSpacing,
-                                1.0, 3.0, '倍',
-                                (value) => _updateSettings(_currentSettings.copyWith(lineSpacing: value)),
-                                formatValue: (value) => '${value.toStringAsFixed(1)}x',
-                              ),
-                              _buildCompactSlider(
-                                '字符间距',
-                                _currentSettings.letterSpacing,
-                                -1.0, 2.0, '像素', // 🚀 缩小调整范围，更适合中文
-                                (value) => _updateSettings(_currentSettings.copyWith(letterSpacing: value)),
-                                formatValue: (value) => value == 0 
-                                    ? '标准' 
-                                    : (value > 0 ? '+${value.toStringAsFixed(1)}px' : '${value.toStringAsFixed(1)}px'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          _buildCompactCard(
-                            title: '编辑器行为',
-                            icon: Icons.settings,
-                            children: [
-                              _buildCompactSwitch('自动保存', _currentSettings.autoSaveEnabled,
-                                (value) => _updateSettings(_currentSettings.copyWith(autoSaveEnabled: value))),
-                              if (_currentSettings.autoSaveEnabled)
-                                _buildCompactSlider(
-                                  '保存间隔',
-                                  _currentSettings.autoSaveIntervalMinutes.toDouble(),
-                                  1, 15, '分钟',
-                                  (value) => _updateSettings(_currentSettings.copyWith(autoSaveIntervalMinutes: value.round())),
-                                  formatValue: (value) => '${value.toInt()}分钟',
-                                ),
-                              _buildCompactSwitch('拼写检查', _currentSettings.spellCheckEnabled,
-                                (value) => _updateSettings(_currentSettings.copyWith(spellCheckEnabled: value))),
-                              _buildCompactSwitch('显示字数', _currentSettings.showWordCount,
-                                (value) => _updateSettings(_currentSettings.copyWith(showWordCount: value))),
-                              _buildCompactSwitch('显示行号', _currentSettings.showLineNumbers,
-                                (value) => _updateSettings(_currentSettings.copyWith(showLineNumbers: value))),
-                              _buildCompactSwitch('高亮当前行', _currentSettings.highlightActiveLine,
-                                (value) => _updateSettings(_currentSettings.copyWith(highlightActiveLine: value))),
-                              _buildCompactSwitch('Vim模式', _currentSettings.enableVimMode,
-                                (value) => _updateSettings(_currentSettings.copyWith(enableVimMode: value))),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          // 🚀 移动导出设置到左列
-                          _buildCompactCard(
-                            title: '导出设置',
-                            icon: Icons.download,
-                            children: [
-                              _buildCompactDropdown(
-                                '默认导出格式',
-                                _currentSettings.defaultExportFormat,
-                                EditorSettings.availableExportFormats,
-                                (value) => _updateSettings(_currentSettings.copyWith(defaultExportFormat: value)),
-                                itemBuilder: (format) {
-                                  switch (format) {
-                                    case 'markdown': return 'Markdown (.md)';
-                                    case 'docx': return 'Word文档 (.docx)';
-                                    case 'pdf': return 'PDF文档 (.pdf)';
-                                    case 'txt': return '纯文本 (.txt)';
-                                    case 'html': return 'HTML文档 (.html)';
-                                    default: return format.toUpperCase();
-                                  }
-                                },
-                              ),
-                              _buildCompactSwitch('包含元数据', _currentSettings.includeMetadata,
-                                (value) => _updateSettings(_currentSettings.copyWith(includeMetadata: value))),
-                            ],
-                          ),
-                        ],
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: _buildLeftSettingsColumn()),
+                        const SizedBox(width: 16),
+                        Expanded(child: _buildRightSettingsColumn()),
+                      ],
                     ),
-                    const SizedBox(width: 16),
-                    // 右列
-                    Expanded(
-                      child: Column(
-                        children: [
-                          _buildCompactCard(
-                            title: '布局间距',
-                            icon: Icons.format_align_center,
-                            children: [
-                              _buildCompactSlider(
-                                '水平边距',
-                                _currentSettings.paddingHorizontal,
-                                8, 48, '像素',
-                                (value) => _updateSettings(_currentSettings.copyWith(paddingHorizontal: value)),
-                              ),
-                              _buildCompactSlider(
-                                '垂直边距',
-                                _currentSettings.paddingVertical,
-                                8, 32, '像素',
-                                (value) => _updateSettings(_currentSettings.copyWith(paddingVertical: value)),
-                              ),
-                              _buildCompactSlider(
-                                '段落间距',
-                                _currentSettings.paragraphSpacing,
-                                4, 24, '像素',
-                                (value) => _updateSettings(_currentSettings.copyWith(paragraphSpacing: value)),
-                              ),
-                              _buildCompactSlider(
-                                '缩进大小',
-                                _currentSettings.indentSize,
-                                16, 64, '像素',
-                                (value) => _updateSettings(_currentSettings.copyWith(indentSize: value)),
-                              ),
-                              _buildCompactSlider(
-                                '最大行宽',
-                                _currentSettings.maxLineWidth,
-                                400, 1500, '像素',
-                                (value) => _updateSettings(_currentSettings.copyWith(maxLineWidth: value)),
-                              ),
-                              _buildCompactSlider(
-                                '最小编辑器高度',
-                                _currentSettings.minEditorHeight,
-                                1200, 3000, '像素',
-                                (value) => _updateSettings(_currentSettings.copyWith(minEditorHeight: value)),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          _buildCompactCard(
-                            title: '视觉效果',
-                            icon: Icons.visibility,
-                            children: [
-                              _buildCompactSwitch('暗色模式', _currentSettings.darkModeEnabled,
-                                (value) => _updateSettings(_currentSettings.copyWith(darkModeEnabled: value))),
-                              _buildCompactSwitch('平滑滚动', _currentSettings.smoothScrolling,
-                                (value) => _updateSettings(_currentSettings.copyWith(smoothScrolling: value))),
-                              _buildCompactSwitch('淡入动画', _currentSettings.fadeInAnimation,
-                                (value) => _updateSettings(_currentSettings.copyWith(fadeInAnimation: value))),
-                              _buildCompactSwitch('打字机模式', _currentSettings.useTypewriterMode,
-                                (value) => _updateSettings(_currentSettings.copyWith(useTypewriterMode: value))),
-                              _buildCompactSwitch('显示小地图', _currentSettings.showMiniMap,
-                                (value) => _updateSettings(_currentSettings.copyWith(showMiniMap: value))),
-                              _buildCompactSlider(
-                                '光标闪烁速度',
-                                _currentSettings.cursorBlinkRate,
-                                0.5, 3.0, '秒',
-                                (value) => _updateSettings(_currentSettings.copyWith(cursorBlinkRate: value)),
-                                formatValue: (value) => '${value.toStringAsFixed(1)}s',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          // 🚀 保留选择和光标设置卡片在右列
-                          _buildCompactCard(
-                            title: '选择和光标',
-                            icon: Icons.colorize,
-                            children: [
-                              _buildColorPicker(
-                                '选择高亮颜色',
-                                Color(_currentSettings.selectionHighlightColor),
-                                (color) => _updateSettings(_currentSettings.copyWith(selectionHighlightColor: color.value)),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
+                    const SizedBox(height: 16),
+                    _buildPreviewCard(),
                   ],
-                ),
-                
-                const SizedBox(height: 16),
-                
-                // 预览区域
-                _buildPreviewCard(),
-              ],
+                );
+              },
             ),
           ),
         ),

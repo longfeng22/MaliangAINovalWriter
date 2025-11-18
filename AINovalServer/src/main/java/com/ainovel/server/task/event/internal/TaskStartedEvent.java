@@ -6,6 +6,7 @@ package com.ainovel.server.task.event.internal;
 public class TaskStartedEvent extends TaskApplicationEvent {
     
     private final String executionNodeId;
+    private final String parentTaskId;
     
     /**
      * 创建任务开始事件
@@ -15,7 +16,7 @@ public class TaskStartedEvent extends TaskApplicationEvent {
      * @param taskType 任务类型
      */
     public TaskStartedEvent(Object source, String taskId, String taskType) {
-        this(source, taskId, taskType, null, null);
+        this(source, taskId, taskType, null, null, null);
     }
     
     /**
@@ -28,8 +29,13 @@ public class TaskStartedEvent extends TaskApplicationEvent {
      * @param executionNodeId 执行节点ID
      */
     public TaskStartedEvent(Object source, String taskId, String taskType, String userId, String executionNodeId) {
+        this(source, taskId, taskType, userId, executionNodeId, null);
+    }
+    
+    public TaskStartedEvent(Object source, String taskId, String taskType, String userId, String executionNodeId, String parentTaskId) {
         super(source, taskId, taskType, userId);
         this.executionNodeId = executionNodeId;
+        this.parentTaskId = parentTaskId;
     }
     
     /**
@@ -39,5 +45,9 @@ public class TaskStartedEvent extends TaskApplicationEvent {
      */
     public String getExecutionNodeId() {
         return executionNodeId;
+    }
+    
+    public String getParentTaskId() {
+        return parentTaskId;
     }
 } 

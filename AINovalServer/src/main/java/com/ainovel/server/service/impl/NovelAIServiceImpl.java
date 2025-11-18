@@ -16,7 +16,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.time.LocalDateTime;
 import java.util.stream.Collectors;
 
 import com.ainovel.server.service.ai.strategy.LegacyAISettingGenerationStrategyFactory;
@@ -33,21 +32,18 @@ import com.ainovel.server.common.util.RichTextUtil;
 import com.ainovel.server.domain.model.AIFeatureType;
 import com.ainovel.server.domain.model.AIRequest;
 import com.ainovel.server.domain.model.AIResponse;
-import com.ainovel.server.domain.model.Novel;
 import com.ainovel.server.domain.model.NovelSettingItem;
-import com.ainovel.server.domain.model.Scene;
 import com.ainovel.server.domain.model.SettingType;
 import com.ainovel.server.domain.model.UserAIModelConfig;
 import com.ainovel.server.service.AIService;
 import com.ainovel.server.service.KnowledgeService;
 import com.ainovel.server.service.NovelAIService;
 import com.ainovel.server.service.NovelService;
-import com.ainovel.server.service.PublicModelConfigService;
 import com.ainovel.server.service.EnhancedUserPromptService;
 import com.ainovel.server.service.SceneService;
 import com.ainovel.server.service.UserAIModelConfigService;
 import com.ainovel.server.service.UserPromptService;
-import com.ainovel.server.service.UserService;
+// import com.ainovel.server.service.UserService;
 import com.ainovel.server.service.ai.AIModelProvider;
 import com.ainovel.server.web.dto.GenerateSceneFromSummaryRequest;
 import com.ainovel.server.web.dto.GenerateSceneFromSummaryResponse;
@@ -55,7 +51,6 @@ import com.ainovel.server.web.dto.OutlineGenerationChunk;
 import com.ainovel.server.web.dto.SummarizeSceneRequest;
 import com.ainovel.server.web.dto.SummarizeSceneResponse;
 import com.ainovel.server.web.dto.request.GenerateSettingsRequest;
-import com.ainovel.server.domain.model.NextOutline;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.langchain4j.data.segment.TextSegment;
@@ -84,13 +79,14 @@ public class NovelAIServiceImpl implements NovelAIService {
     private final KnowledgeService knowledgeService;
     private final NovelService novelService;
     private final EnhancedUserPromptService promptService;
-    private final UserService userService;
+    // private final UserService userService;
     private final SceneService sceneService;
     private final StringEncryptor encryptor; // Added
     private final ObjectMapper objectMapper; // Added
 
-    // 缓存用户的AI模型提供商
-    private final Map<String, Map<String, AIModelProvider>> userProviders = new ConcurrentHashMap<>();
+    // ❌ 已移除Provider缓存 - 修复用户数据串流问题
+    // 原因：共享的StreamingChatLanguageModel实例在并发场景下会导致响应混乱
+    // private final Map<String, Map<String, AIModelProvider>> userProviders = new ConcurrentHashMap<>();
 
     @Autowired
     private ContentRetriever contentRetriever;
@@ -106,13 +102,12 @@ public class NovelAIServiceImpl implements NovelAIService {
     private UserPromptService userPromptService;
 
     @Autowired
-    private PublicModelConfigService publicModelConfigService;
-
-    @Autowired
     private UserAIModelConfigService userAIModelConfigService;
 
     @Autowired
     private NovelSettingService novelSettingService; // 需要添加这个依赖注入
+
+    
 
     @Autowired
     public NovelAIServiceImpl(
@@ -120,7 +115,7 @@ public class NovelAIServiceImpl implements NovelAIService {
             KnowledgeService knowledgeService,
             NovelService novelService,
             EnhancedUserPromptService promptService,
-            UserService userService,
+            // UserService userService,
             SceneService sceneService,
             StringEncryptor encryptor,
             ObjectMapper objectMapper) { // Added
@@ -128,7 +123,7 @@ public class NovelAIServiceImpl implements NovelAIService {
         this.knowledgeService = knowledgeService;
         this.novelService = novelService;
         this.promptService = promptService;
-        this.userService = userService;
+        // this.userService = userService;
         this.sceneService = sceneService;
         this.encryptor = encryptor;
         this.objectMapper = objectMapper; // Added
@@ -163,8 +158,8 @@ public class NovelAIServiceImpl implements NovelAIService {
      */
     @Override
     public Mono<List<NovelSettingItem>> generateNovelSettings(String novelId, String userId, GenerateSettingsRequest requestParams) {
-        log.info("AI生成小说设定, novelId: {}, userId: {}, startChapter: {}, endChapter: {}, types: {}",
-                novelId, userId, requestParams.getStartChapterId(), requestParams.getEndChapterId(), requestParams.getSettingTypes());
+        log.info("AI生成小说设定, novelId: {}, userId: {}, startChapter: {}, endChapter: {}, types: {}, modelConfigId: {}",
+                novelId, userId, requestParams.getStartChapterId(), requestParams.getEndChapterId(), requestParams.getSettingTypes(), requestParams.getModelConfigId());
 
         // 验证设定类型并转换为字符串用于提示词
         List<String> validRequestedEnumValues = requestParams.getSettingTypes().stream()
@@ -186,29 +181,9 @@ public class NovelAIServiceImpl implements NovelAIService {
             return Mono.error(new IllegalArgumentException("未提供有效的设定类型，请检查类型值。"));
         }
 
-        // 1. 获取用户的模型配置（优先使用支持结构化输出的模型）
-        Mono<AIModelProvider> providerMono = userAIModelConfigService.getValidatedDefaultConfiguration(userId)
-            .filter(config -> {
-                // 优先检查是否有Gemini模型，因为它支持结构化输出
-                boolean isGemini = "GEMINI".equalsIgnoreCase(config.getProvider());
-                if (isGemini) {
-                    log.debug("找到用户默认Gemini配置");
-                }
-                return isGemini;
-            })
-            .switchIfEmpty(userAIModelConfigService.listConfigurations(userId)
-                .filter(c -> "GEMINI".equalsIgnoreCase(c.getProvider()) && c.getIsValidated())
-                .next()
-                .doOnNext(c -> log.debug("未找到默认Gemini配置，但找到了其他Gemini配置"))
-            )
-            .flatMap(config -> getOrCreateAIModelProvider(userId, config))
-            .switchIfEmpty(Mono.<AIModelProvider>defer(() -> {
-                // 如果没有找到Gemini模型，尝试使用任何验证过的模型
-                log.debug("未找到Gemini配置，尝试使用任何已验证配置");
-                return userAIModelConfigService.getValidatedDefaultConfiguration(userId)
-                    .flatMap(config -> getOrCreateAIModelProvider(userId, config));
-            }))
-            .switchIfEmpty(Mono.error(new RuntimeException("用户没有已配置且验证的AI模型提供商。")));
+        // 1. 使用前端传递的modelConfigId创建AI模型Provider
+        Mono<AIModelProvider> providerMono = getAIModelProviderByConfigId(userId, requestParams.getModelConfigId())
+            .switchIfEmpty(Mono.error(new RuntimeException("无法根据提供的modelConfigId创建AI模型提供商。")));
 
         // 2. 获取章节内容 - 确保即使没有内容也返回空字符串而不是Empty信号
         Mono<String> chapterContextMono = novelService.getChapterRangeContext(
@@ -216,14 +191,21 @@ public class NovelAIServiceImpl implements NovelAIService {
                 .switchIfEmpty(Mono.just("")) // 避免Empty信号导致后续zip操作失败
                 .subscribeOn(Schedulers.boundedElastic());
         
-        // 3. 获取策略工厂 (使用Spring的依赖注入)
+        // 3. 查询当前小说的已有设定（从数据库查询，而不是从请求参数获取）
+        Mono<List<NovelSettingItem>> existingSettingsMono = novelSettingService
+                .getNovelSettingItems(novelId, null, null, null, null, null, null)
+                .collectList()
+                .subscribeOn(Schedulers.boundedElastic());
+        
+        // 4. 获取策略工厂 (使用Spring的依赖注入)
         LegacyAISettingGenerationStrategyFactory strategyFactory = new LegacyAISettingGenerationStrategyFactory(promptService, objectMapper);
 
-        // 4. 结合模型提供商和章节内容，生成设定
-        return Mono.zip(providerMono, chapterContextMono)
+        // 5. 结合模型提供商、章节内容和已有设定，生成新设定
+        return Mono.zip(providerMono, chapterContextMono, existingSettingsMono)
             .flatMap(tuple -> {
                 AIModelProvider aiModelProvider = tuple.getT1();
                 String chapterContext = tuple.getT2();
+                List<NovelSettingItem> existingSettings = tuple.getT3();
 
                 if (chapterContext == null || chapterContext.isEmpty()) {
                     log.warn("在章节范围 {} 到 {} 中未找到内容，返回空列表", 
@@ -234,6 +216,16 @@ public class NovelAIServiceImpl implements NovelAIService {
                 // 使用策略工厂获取生成策略
                 SettingGenerationStrategy strategy = strategyFactory.createStrategy(aiModelProvider);
                 
+                // 构建已有设定上下文
+                String existingSettingsContext = buildExistingSettingsContext(existingSettings);
+                
+                // 构建增强的用户指令，包含已有设定信息
+                String enhancedInstructions = requestParams.getAdditionalInstructions();
+                if (!existingSettingsContext.isEmpty()) {
+                    enhancedInstructions = existingSettingsContext + "\n\n" + 
+                        (requestParams.getAdditionalInstructions() != null ? requestParams.getAdditionalInstructions() : "");
+                }
+                
                 // 使用策略生成设定
                 return strategy.generateSettings(
                     novelId, 
@@ -241,7 +233,7 @@ public class NovelAIServiceImpl implements NovelAIService {
                     chapterContext,
                     validRequestedEnumValues,
                     requestParams.getMaxSettingsPerType(),
-                    requestParams.getAdditionalInstructions(),
+                    enhancedInstructions,
                     aiModelProvider
                 );
             })
@@ -249,6 +241,36 @@ public class NovelAIServiceImpl implements NovelAIService {
                 log.error("生成设定过程中出现严重错误, novelId {}: {}", novelId, e.getMessage(), e);
                 return Mono.error(new RuntimeException("生成小说设定失败: " + e.getMessage(), e));
             });
+    }
+    
+    /**
+     * 构建已有设定的上下文字符串
+     * 从数据库查询到的设定列表转换为AI可理解的上下文
+     */
+    private String buildExistingSettingsContext(List<NovelSettingItem> existingSettings) {
+        if (existingSettings == null || existingSettings.isEmpty()) {
+            return "";
+        }
+        
+        StringBuilder context = new StringBuilder();
+        context.append("【当前已有设定】\n");
+        context.append("请基于以下已有设定进行生成，如果新生成的设定与已有设定有关联，请填充正确的父设定ID（parentId）：\n\n");
+        
+        for (NovelSettingItem setting : existingSettings) {
+            context.append("- ID: ").append(setting.getId() != null ? setting.getId() : "无").append("\n");
+            context.append("  名称: ").append(setting.getName() != null ? setting.getName() : "无").append("\n");
+            context.append("  类型: ").append(setting.getType() != null ? setting.getType() : "无").append("\n");
+            if (setting.getParentId() != null && !setting.getParentId().isEmpty()) {
+                context.append("  父设定ID: ").append(setting.getParentId()).append("\n");
+            }
+            if (setting.getDescription() != null && !setting.getDescription().isEmpty()) {
+                context.append("  描述: ").append(setting.getDescription()).append("\n");
+            }
+            context.append("\n");
+        }
+        
+        log.info("构建已有设定上下文，包含 {} 个设定项", existingSettings.size());
+        return context.toString();
     }
 
     @Override
@@ -771,10 +793,11 @@ public class NovelAIServiceImpl implements NovelAIService {
                              .replace("{{context}}", context)
                              .replace("{{authorGuidance}}", authorGuidance.isEmpty() ? "" : "作者引导：" + authorGuidance);
 
-                     AIRequest request = new AIRequest();
+                    AIRequest request = new AIRequest();
                      request.setUserId(userId);
                      request.setNovelId(novelId);
                      request.setEnableContext(true); // Context 由外部传入
+                    request.setFeatureType(AIFeatureType.NOVEL_COMPOSE);
 
                      // 添加章节范围元数据 (如果适用)
                      Map<String, Object> metadata = request.getMetadata();
@@ -1063,6 +1086,7 @@ public class NovelAIServiceImpl implements NovelAIService {
                     request.setNovelId(novelId);
                     request.setSceneId(sceneId);
                     request.setEnableContext(true);
+                    request.setFeatureType(AIFeatureType.AI_CHAT);
 
                     // 创建用户消息
                     AIRequest.Message userMessage = new AIRequest.Message();
@@ -1094,6 +1118,7 @@ public class NovelAIServiceImpl implements NovelAIService {
                     request.setNovelId(novelId);
                     request.setSceneId(sceneId);
                     request.setEnableContext(true);
+                    request.setFeatureType(AIFeatureType.AI_CHAT);
 
                     // 创建用户消息
                     AIRequest.Message userMessage = new AIRequest.Message();
@@ -1105,83 +1130,7 @@ public class NovelAIServiceImpl implements NovelAIService {
                 });
     }
 
-    /**
-     * 创建角色生成请求
-     *
-     * @param novelId 小说ID
-     * @param description 角色描述
-     * @return AI请求
-     */
-    private Mono<AIRequest> createCharacterGenerationRequest(String novelId, String description) {
-        return promptService.getCharacterGenerationPrompt()
-                .map(promptTemplate -> {
-                    String prompt = promptTemplate.replace("{{description}}", description);
 
-                    AIRequest request = new AIRequest();
-                    request.setNovelId(novelId);
-                    request.setEnableContext(true);
-
-                    // 创建用户消息
-                    AIRequest.Message userMessage = new AIRequest.Message();
-                    userMessage.setRole("user");
-                    userMessage.setContent(prompt);
-
-                    request.getMessages().add(userMessage);
-                    return request;
-                });
-    }
-
-    /**
-     * 创建情节生成请求
-     *
-     * @param novelId 小说ID
-     * @param description 情节描述
-     * @return AI请求
-     */
-    private Mono<AIRequest> createPlotGenerationRequest(String novelId, String description) {
-        return promptService.getPlotGenerationPrompt()
-                .map(promptTemplate -> {
-                    String prompt = promptTemplate.replace("{{description}}", description);
-
-                    AIRequest request = new AIRequest();
-                    request.setNovelId(novelId);
-                    request.setEnableContext(true);
-
-                    // 创建用户消息
-                    AIRequest.Message userMessage = new AIRequest.Message();
-                    userMessage.setRole("user");
-                    userMessage.setContent(prompt);
-
-                    request.getMessages().add(userMessage);
-                    return request;
-                });
-    }
-
-    /**
-     * 创建设定生成请求
-     *
-     * @param novelId 小说ID
-     * @param description 设定描述
-     * @return AI请求
-     */
-    private Mono<AIRequest> createSettingGenerationRequest(String novelId, String description) {
-        return promptService.getSettingGenerationPrompt()
-                .map(promptTemplate -> {
-                    String prompt = promptTemplate.replace("{{description}}", description);
-
-                    AIRequest request = new AIRequest();
-                    request.setNovelId(novelId);
-                    request.setEnableContext(true);
-
-                    // 创建用户消息
-                    AIRequest.Message userMessage = new AIRequest.Message();
-                    userMessage.setRole("user");
-                    userMessage.setContent(prompt);
-
-                    request.getMessages().add(userMessage);
-                    return request;
-                });
-    }
 
     /**
      * 创建下一剧情大纲生成请求
@@ -1204,6 +1153,7 @@ public class NovelAIServiceImpl implements NovelAIService {
                     AIRequest request = new AIRequest();
                     request.setNovelId(novelId);
                     request.setEnableContext(true);
+                    request.setFeatureType(AIFeatureType.NOVEL_COMPOSE);
 
                     // 设置较高的温度以获得多样性
                     request.setTemperature(0.8);
@@ -1267,6 +1217,13 @@ public class NovelAIServiceImpl implements NovelAIService {
 
     /**
      * 获取或创建AI模型提供商
+     * 
+     * ⚠️ 重要修改：已移除Provider缓存机制
+     * 原因：共享的StreamingChatLanguageModel实例在并发场景下不是线程安全的，
+     * 会导致不同用户的流式响应混乱（用户A看到用户B的生成内容）
+     * 
+     * 修复方案：每次请求都创建新的Provider实例，确保每个请求有独立的流式模型实例
+     * 性能影响：Provider创建成本较低（主要是对象实例化），相比数据泄露风险可接受
      *
      * @param userId 用户ID
      * @param config AI模型配置
@@ -1278,6 +1235,7 @@ public class NovelAIServiceImpl implements NovelAIService {
             log.error("尝试为用户 {} 创建提供商时遇到无效配置: {}", userId, config);
             return Mono.error(new IllegalArgumentException("无效的AI模型配置"));
         }
+        
         // 检查API Key是否存在
         String encryptedApiKey = config.getApiKey();
         if (encryptedApiKey == null || encryptedApiKey.isBlank()) {
@@ -1286,17 +1244,8 @@ public class NovelAIServiceImpl implements NovelAIService {
             // return Mono.error(new IllegalArgumentException("模型配置缺少 API Key")); // 取消注释以强制要求API Key
         }
 
-        // 检查缓存中是否已存在
-        Map<String, AIModelProvider> userProviderMap = userProviders.computeIfAbsent(userId, k -> new HashMap<>());
-        String key = config.getProvider() + ":" + config.getModelName();
-
-        AIModelProvider provider = userProviderMap.get(key);
-        if (provider != null) {
-            log.info("从缓存获取用户 {} 的AI模型提供商: {}", userId, key);
-            return Mono.just(provider);
-        }
-
-        log.info("缓存未命中，为用户 {} 创建新的AI模型提供商: Provider={}, Model={}, Endpoint={}",
+        // ✅ 移除缓存逻辑 - 每次都创建新的Provider实例以避免并发问题
+        log.info("为用户 {} 创建新的AI模型提供商: Provider={}, Model={}, Endpoint={}",
                 userId, config.getProvider(), config.getModelName(), config.getApiEndpoint());
 
         // 解密 API Key
@@ -1313,20 +1262,13 @@ public class NovelAIServiceImpl implements NovelAIService {
             log.warn("用户 {} 的模型 Provider={}, Model={} API Key 为空，继续尝试创建提供商（可能适用于本地或无需Key的模型）", userId, config.getProvider(), config.getModelName());
         }
 
-        // 使用AIService创建新的提供商
+        // 使用AIService创建新的提供商（不再缓存）
         try {
-            // 传递解密后的 API Key
-            final String finalDecryptedApiKey = decryptedApiKey; // Effectively final for lambda
-            AIModelProvider newProvider = aiService.createAIModelProvider(
-                    config.getProvider(),
-                    config.getModelName(),
-                    finalDecryptedApiKey, // 使用解密后的 Key
-                    config.getApiEndpoint()
-            );
+            AIModelProvider newProvider = aiService.createProviderByConfigId(userId, config.getId());
 
             if (newProvider != null) {
-                userProviderMap.put(key, newProvider);
-                log.info("成功创建并缓存了用户 {} 的AI模型提供商: {}", userId, key);
+                // ✅ 不再缓存Provider实例
+                log.info("成功创建用户 {} 的AI模型提供商: {}", userId, config.getProvider() + ":" + config.getModelName());
                 return Mono.just(newProvider);
             } else {
                 log.error("AIService未能为用户 {} 创建提供商: Provider={}, Model={}", userId, config.getProvider(), config.getModelName());
@@ -1347,29 +1289,33 @@ public class NovelAIServiceImpl implements NovelAIService {
     public void setUseLangChain4j(boolean useLangChain4j) {
         // 委托给AIService
         aiService.setUseLangChain4j(useLangChain4j);
-        // 清空缓存，强制重新创建提供商
-        userProviders.clear();
+        // ✅ 已移除缓存机制，无需清空缓存
+        // userProviders.clear();
     }
 
     /**
      * 清除用户的模型提供商缓存
+     * ✅ 已废弃：缓存机制已移除，此方法不再执行任何操作
      *
      * @param userId 用户ID
      * @return 操作结果
      */
     @Override
     public Mono<Void> clearUserProviderCache(String userId) {
-        return Mono.fromRunnable(() -> userProviders.remove(userId));
+        // ✅ 已移除缓存机制，直接返回空
+        return Mono.empty();
     }
 
     /**
      * 清除所有模型提供商缓存
+     * ✅ 已废弃：缓存机制已移除，此方法不再执行任何操作
      *
      * @return 操作结果
      */
     @Override
     public Mono<Void> clearAllProviderCache() {
-        return Mono.fromRunnable(userProviders::clear);
+        // ✅ 已移除缓存机制，直接返回空
+        return Mono.empty();
     }
 
     /**
@@ -1781,61 +1727,38 @@ public class NovelAIServiceImpl implements NovelAIService {
                         promptRef.set(fallbackPrompt);
                     }
 
-                    // 检查是否使用公共模型
+                    // 统一：若外部传入公共模型配置ID，则直接按配置ID创建Provider（不做上游预扣费）
                     if (request.getPublicModelConfigId() != null && !request.getPublicModelConfigId().isBlank()) {
                         String publicModelConfigId = request.getPublicModelConfigId();
-                        log.info("使用公共模型进行内容生成: {}", publicModelConfigId);
-                        
-                        return publicModelConfigService.findById(publicModelConfigId)
-                            .switchIfEmpty(Mono.error(new IllegalArgumentException("公共模型配置不存在: " + publicModelConfigId)))
-                            .flatMapMany(cfg -> {
-                                if (!Boolean.TRUE.equals(cfg.getEnabled()) || !cfg.isEnabledForFeature(AIFeatureType.SUMMARY_TO_SCENE)) {
-                                    return Flux.error(new IllegalArgumentException("公共模型未启用或不支持功能: SUMMARY_TO_SCENE"));
-                                }
-                                return publicModelConfigService.getActiveDecryptedApiKey(cfg.getProvider(), cfg.getModelId())
-                                    .switchIfEmpty(Mono.error(new IllegalStateException("公共模型缺少可用API Key: " + cfg.getId())))
-                                    .flatMapMany(apiKey -> {
-                                        AIRequest aiRequest = new AIRequest();
-                                        aiRequest.setUserId(userId);
-                                        aiRequest.setNovelId(novelId);
-                                        aiRequest.setModel(cfg.getModelId());
+                        AIRequest aiRequest = new AIRequest();
+                        aiRequest.setUserId(userId);
+                        aiRequest.setNovelId(novelId);
+                        aiRequest.setFeatureType(AIFeatureType.SUMMARY_TO_SCENE);
+                        // 模型名可留空，由底层Provider自行处理；若需要也可写提示用名
 
-                                        // 创建系统消息
-                                        AIRequest.Message systemMessage = new AIRequest.Message();
-                                        systemMessage.setRole("system");
-                                        systemMessage.setContent(systemPromptContent);
-                                        aiRequest.getMessages().add(systemMessage);
+                        AIRequest.Message systemMessage = new AIRequest.Message();
+                        systemMessage.setRole("system");
+                        systemMessage.setContent(systemPromptContent);
+                        aiRequest.getMessages().add(systemMessage);
 
-                                        // 创建用户消息
-                                        AIRequest.Message userMessage = new AIRequest.Message();
-                                        userMessage.setRole("user");
-                                        userMessage.setContent(promptRef.get());
-                                        aiRequest.getMessages().add(userMessage);
+                        AIRequest.Message userMessage = new AIRequest.Message();
+                        userMessage.setRole("user");
+                        userMessage.setContent(promptRef.get());
+                        aiRequest.getMessages().add(userMessage);
 
-                                        // 设置生成参数
-                                        aiRequest.setTemperature(0.8);
-                                        aiRequest.setMaxTokens(200000);
+                        aiRequest.setTemperature(0.8);
+                        aiRequest.setMaxTokens(200000);
 
-                                        // 设置计费信息
-                                        try {
-                                            String correlationId = java.util.UUID.randomUUID().toString();
-                                            String idempotencyKey = correlationId;
-                                            com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
-                                                aiRequest,
-                                                true,
-                                                true,
-                                                AIFeatureType.SUMMARY_TO_SCENE.name(),
-                                                cfg.getId(),
-                                                cfg.getProvider(),
-                                                cfg.getModelId(),
-                                                correlationId,
-                                                idempotencyKey
-                                            );
-                                        } catch (Throwable ignore) {}
-
-                                        return aiService.generateContentStream(aiRequest, apiKey, cfg.getApiEndpoint());
-                                    });
-                            });
+                        return Flux.defer(() -> {
+                                    var provider = aiService.createProviderByConfigId(userId, publicModelConfigId);
+                                    return provider.generateContentStream(aiRequest);
+                                })
+                                .doOnSubscribe(sub -> log.info("模型流已订阅(公共配置ID), userId: {}, novelId: {}, configId: {}", userId, novelId, publicModelConfigId))
+                                .filter(content -> !"heartbeat".equals(content))
+                                .onErrorResume(err -> {
+                                    log.error("公共配置生成流失败: {}", err.getMessage(), err);
+                                    return Flux.error(err);
+                                });
                     }
 
                     // 使用私人模型配置（原有逻辑）
@@ -1852,6 +1775,7 @@ public class NovelAIServiceImpl implements NovelAIService {
                                 aiRequest.setUserId(userId);
                                 aiRequest.setNovelId(novelId);
                                 aiRequest.setModel(aiConfig.getModelName());
+                                aiRequest.setFeatureType(AIFeatureType.SUMMARY_TO_SCENE);
 
                                 // 创建系统消息
                                 AIRequest.Message systemMessage = new AIRequest.Message();
@@ -1945,83 +1869,6 @@ public class NovelAIServiceImpl implements NovelAIService {
         return this.novelService;
     }
 
-    /**
-     * 解析文本格式的AI响应 (添加原始参数)
-     *
-     * @param content AI响应内容
-     * @param novelId 小说ID
-     * @param originalStartChapterId 原始起始章节ID
-     * @param originalEndChapterId 原始结束章节ID
-     * @param originalAuthorGuidance 原始作者引导
-     * @return 大纲列表
-     */
-    private List<NextOutline> parseTextResponse(String content, String novelId,
-                                                String originalStartChapterId, String originalEndChapterId, String originalAuthorGuidance) {
-        List<NextOutline> outlines = new ArrayList<>();
-        // 改进分割逻辑，更灵活地匹配多种可能的选项分隔符
-        // 修正正则表达式转义
-        String[] sections = content.split("(?im)^\\s*(选项|大纲|剧情选项)\\s*\\d+\\s*[:：]\\s*");
-
-        // 提取标题的正则表达式
-        // 修正正则表达式转义
-        Pattern titlePattern = Pattern.compile("^(选项|大纲|剧情选项)\\s*\\d+\\s*[:：]\\s*(.*?)$", Pattern.MULTILINE);
-        Matcher titleMatcher = titlePattern.matcher(content);
-        List<String> titles = new ArrayList<>();
-        while (titleMatcher.find()) {
-             titles.add(titleMatcher.group(2).trim());
-        }
-
-        int titleIndex = 0;
-        for (int i = 0; i < sections.length; i++) {
-            String section = sections[i].trim();
-            // 修正正则表达式转义
-            if (section.isEmpty() || section.matches("^(选项|大纲|剧情选项)\\s*\\d+\\s*[:：]")) {
-                 // 跳过空的或只有标题标记的部分（split可能产生这些）
-                 continue;
-            }
-
-            String title;
-            if (titleIndex < titles.size()) {
-                 title = titles.get(titleIndex++);
-            } else {
-                 // 如果正则没匹配到标题，使用默认标题
-                 title = "剧情选项 " + (outlines.size() + 1);
-                 log.warn("无法为第 {} 个文本大纲选项提取标题，使用默认标题: {}", outlines.size() + 1, title);
-            }
-            String outlineContent = section; // section现在应该是纯内容
-
-            NextOutline outline = NextOutline.builder()
-                    .id(UUID.randomUUID().toString())
-                    .novelId(novelId)
-                    .title(title)
-                    .content(outlineContent)
-                    .createdAt(LocalDateTime.now())
-                    .selected(false)
-                    .originalStartChapterId(originalStartChapterId)
-                    .originalEndChapterId(originalEndChapterId)
-                    .originalAuthorGuidance(originalAuthorGuidance)
-                    .build();
-            outlines.add(outline);
-        }
-
-        // 如果分割后列表为空，但原始内容不为空，则将全部内容作为一个选项
-        if (outlines.isEmpty() && content != null && !content.isBlank()) {
-             log.warn("无法按预期分割文本大纲响应，将整个内容视为单个选项");
-            NextOutline outline = NextOutline.builder()
-                    .id(UUID.randomUUID().toString())
-                    .novelId(novelId)
-                    .title("剧情选项")
-                    .content(content.trim())
-                    .createdAt(LocalDateTime.now())
-                    .selected(false)
-                    .originalStartChapterId(originalStartChapterId)
-                    .originalEndChapterId(originalEndChapterId)
-                    .originalAuthorGuidance(originalAuthorGuidance)
-                    .build();
-            outlines.add(outline);
-        }
-        return outlines;
-    }
 
     /**
      * 根据配置ID获取AI模型提供商
@@ -2031,23 +1878,11 @@ public class NovelAIServiceImpl implements NovelAIService {
      */
     @Override
     public Mono<AIModelProvider> getAIModelProviderByConfigId(String userId, String configId) {
-        log.info("获取用户 {} 的AI模型提供商，通过配置ID: {}", userId, configId);
-        return userAIModelConfigService.getConfigurationById(userId, configId)
-                .switchIfEmpty(Mono.defer(() -> {
-                    log.warn("找不到用户 {} 指定的AI模型配置ID: {}", userId, configId);
-                    return Mono.error(new com.ainovel.server.common.exception.ValidationException(
-                            "modelConfigId", "找不到指定的AI模型配置ID: " + configId));
-                }))
-                .flatMap(config -> {
-                    if (!Boolean.TRUE.equals(config.getIsValidated())) {
-                        log.warn("配置ID {} 未通过校验，拒绝使用 (用户ID: {})", configId, userId);
-                        return Mono.error(new com.ainovel.server.common.exception.ValidationException(
-                                "modelConfigId", "指定的AI模型配置未验证: " + configId));
-                    }
-                    log.info("找到用户 {} 指定的配置ID {} 对应的配置: Provider={}, Model={}",
-                            userId, configId, config.getProvider(), config.getModelName());
-                    return getOrCreateAIModelProvider(userId, config);
-                });
+        log.info("获取 {} 的AI模型提供商，通过配置ID: {}", userId, configId);
+        return Mono.fromCallable(() -> aiService.createProviderByConfigId(userId, configId))
+                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                .switchIfEmpty(Mono.error(new RuntimeException("无法根据配置ID创建Provider: " + configId)))
+                .onErrorResume(e -> Mono.error(new RuntimeException("创建Provider失败: " + e.getMessage(), e)));
     }
 
     // --- NEW METHOD IMPLEMENTATION --- 
@@ -2153,9 +1988,10 @@ public class NovelAIServiceImpl implements NovelAIService {
                     if (usr == null || usr.isBlank()) {
                         usr = promptService.getSingleOutlineGenerationPrompt().block();
                     }
-                    AIRequest req = new AIRequest();
+                AIRequest req = new AIRequest();
                     req.setUserId(userId);
                     req.setNovelId(novelId);
+                req.setFeatureType(AIFeatureType.NOVEL_COMPOSE);
                     AIRequest.Message sysMsg = new AIRequest.Message();
                     sysMsg.setRole("system");
                     sysMsg.setContent((sys != null && !sys.isBlank()) ? sys : "你是一位专业的小说创作顾问。");
@@ -2174,38 +2010,13 @@ public class NovelAIServiceImpl implements NovelAIService {
         }
 
         if (publicModelConfigId != null && !publicModelConfigId.isBlank()) {
-            return reqMono.flatMapMany(request -> publicModelConfigService.findById(publicModelConfigId)
-                .switchIfEmpty(Mono.error(new IllegalArgumentException("公共模型配置不存在: " + publicModelConfigId)))
-                .flatMapMany(cfg -> {
-                    if (!Boolean.TRUE.equals(cfg.getEnabled()) || !cfg.isEnabledForFeature(AIFeatureType.TEXT_SUMMARY)) {
-                        return Flux.error(new IllegalArgumentException("公共模型未启用或不支持功能: TEXT_SUMMARY"));
-                    }
-                    return publicModelConfigService.getActiveDecryptedApiKey(cfg.getProvider(), cfg.getModelId())
-                        .switchIfEmpty(Mono.error(new IllegalStateException("公共模型缺少可用API Key: " + cfg.getId())))
-                        .flatMapMany(apiKey -> {
-                            // 确保设置userId
-                            request.setUserId(userId);
-                            try {
-                                String correlationId = java.util.UUID.randomUUID().toString();
-                                String idempotencyKey = correlationId;
-                                com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
-                                    request,
-                                    true,
-                                    true,
-                                    AIFeatureType.TEXT_SUMMARY.name(),
-                                    cfg.getId(),
-                                    cfg.getProvider(),
-                                    cfg.getModelId(),
-                                    correlationId,
-                                    idempotencyKey
-                                );
-                            } catch (Throwable ignore) {}
-                            // 设置公共模型的模型ID
-                            request.setModel(cfg.getModelId());
-                            return aiService.generateContentStream(request, apiKey, cfg.getApiEndpoint());
-                        });
-                })
-            );
+            return reqMono.flatMapMany(request -> {
+                request.setUserId(userId);
+                var provider = aiService.createProviderByConfigId(userId, publicModelConfigId);
+                return provider.generateContentStream(request)
+                        .filter(content -> !"heartbeat".equalsIgnoreCase(content))
+                        .onErrorResume(err -> Flux.error(new RuntimeException("公共配置生成失败: " + err.getMessage(), err)));
+            });
         }
 
         Mono<UserAIModelConfig> configMono = Mono.justOrEmpty(aiConfigIdSummary)
@@ -2340,9 +2151,10 @@ public class NovelAIServiceImpl implements NovelAIService {
                         String prompt = usr
                             .replace("{{context}}", enrichedContext.toString())
                             .replace("{{authorGuidance}}", finalAuthorGuidance == null ? "" : finalAuthorGuidance);
-                        AIRequest req = new AIRequest();
+                AIRequest req = new AIRequest();
                         req.setUserId(userId);
                         req.setNovelId(novelId);
+                req.setFeatureType(AIFeatureType.NOVEL_COMPOSE);
                         AIRequest.Message sysMsg = new AIRequest.Message();
                         sysMsg.setRole("system");
                         sysMsg.setContent((sys != null && !sys.isBlank()) ? sys : "你是一位专业的小说创作顾问。");

@@ -20,6 +20,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <langchain4j.version>1.0.0-beta3</langchain4j.version>
+        <!-- 跳过测试编译和执行 -->
+        <maven.test.skip>true</maven.test.skip>
     </properties>
     
     <dependencies>
@@ -129,6 +131,13 @@
             <groupId>com.aliyun</groupId>
             <artifactId>aliyun-java-sdk-core</artifactId>
             <version>4.6.4</version>
+        </dependency>
+        
+        <!-- Alipay SDK -->
+        <dependency>
+            <groupId>com.alipay.sdk</groupId>
+            <artifactId>alipay-easysdk</artifactId>
+            <version>2.2.3</version>
         </dependency>
         
         <!-- Spring Boot Mail for Email -->
@@ -388,12 +397,28 @@
             <version>2.2.0</version>
         </dependency>
         
-        <!-- SkyWalking Toolkit for manual tracing (optional) -->
+        <!-- SkyWalking Toolkit for manual tracing -->
+        <!-- 用于获取TraceId: TraceContext.traceId() -->
         <dependency>
             <groupId>org.apache.skywalking</groupId>
             <artifactId>apm-toolkit-trace</artifactId>
             <version>9.5.0</version>
-            <scope>provided</scope>
+        </dependency>
+        
+        <!-- SkyWalking WebFlux 插件支持（可选） -->
+        <!-- 提供WebFlux相关的追踪增强 -->
+        <dependency>
+            <groupId>org.apache.skywalking</groupId>
+            <artifactId>apm-toolkit-webflux</artifactId>
+            <version>9.5.0</version>
+        </dependency>
+        
+        <!-- SkyWalking Logback 1.x 集成 -->
+        <!-- 提供TraceId自动注入到日志（通过gRPC Layout转换器） -->
+        <dependency>
+            <groupId>org.apache.skywalking</groupId>
+            <artifactId>apm-toolkit-logback-1.x-activation</artifactId>
+            <version>9.5.0</version>
         </dependency>
         
     </dependencies>

@@ -298,6 +298,8 @@ class _PromptListViewState extends State<PromptListView> {
         createdAt: publicPrompt.createdAt,
         lastUsedAt: publicPrompt.lastUsedAt,
         updatedAt: publicPrompt.updatedAt,
+        hidePrompts: publicPrompt.hidePrompts,
+        settingGenerationConfig: publicPrompt.settingGenerationConfig, // 🆕 传递设定生成配置
       );
       allPrompts.add(publicPromptAsUser);
     }
@@ -604,6 +606,14 @@ class _PromptListViewState extends State<PromptListView> {
         return Icons.timeline;
       case AIFeatureType.settingTreeGeneration:
         return Icons.account_tree;
+      case AIFeatureType.settingGenerationTool:
+        return Icons.build; // 工具图标
+      case AIFeatureType.storyPlotContinuation:
+        return Icons.auto_fix_high;
+      case AIFeatureType.knowledgeExtractionSetting:
+        return Icons.import_contacts; // 知识库图标
+      case AIFeatureType.knowledgeExtractionOutline:
+        return Icons.list_alt; // 大纲图标
     }
   }
   
@@ -632,34 +642,20 @@ class _PromptListViewState extends State<PromptListView> {
         return const Color(0xFF795548); // 棕色
       case AIFeatureType.settingTreeGeneration:
         return const Color(0xFF689F38); // 浅绿色
+      case AIFeatureType.settingGenerationTool:
+        return const Color(0xFF757575); // 灰色
+      case AIFeatureType.storyPlotContinuation:
+        return const Color(0xFF8E24AA); // 紫色系
+      case AIFeatureType.knowledgeExtractionSetting:
+        return const Color(0xFFFF6F00); // 橙色
+      case AIFeatureType.knowledgeExtractionOutline:
+        return const Color(0xFFF57C00); // 深橙
     }
   }
 
-  /// 获取功能类型名称
+  /// 获取功能类型名称（中文）
   String _getFeatureTypeName(AIFeatureType featureType) {
-    switch (featureType) {
-      case AIFeatureType.sceneToSummary:
-        return 'Scene Beat Completions';
-      case AIFeatureType.summaryToScene:
-        return 'Summary Expansions';
-      case AIFeatureType.textExpansion:
-        return 'Text Expansion';
-      case AIFeatureType.textRefactor:
-        return 'Text Refactor';
-      case AIFeatureType.textSummary:
-        return 'Text Summary';
-      case AIFeatureType.aiChat:
-        return 'AI Chat';
-      case AIFeatureType.novelGeneration:
-        return 'Novel Generation';
-      case AIFeatureType.novelCompose:
-        return 'Novel Compose';
-      case AIFeatureType.professionalFictionContinuation:
-        return 'Professional Fiction Continuation';
-      case AIFeatureType.sceneBeatGeneration:
-        return 'Scene Beat Generation';
-      case AIFeatureType.settingTreeGeneration:
-        return 'Setting Tree Generation';
-    }
+    // 使用 displayName 扩展方法返回中文名称
+    return featureType.displayName;
   }
 } 

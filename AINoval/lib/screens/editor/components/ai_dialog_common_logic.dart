@@ -27,7 +27,7 @@ mixin AIDialogCommonLogic<T extends StatefulWidget> on State<T> {
       final publicModel = (unifiedModel as PublicAIModel).publicConfig;
       debugPrint('🚀 创建公共模型配置 - 显示名: ${publicModel.displayName}, 模型ID: ${publicModel.modelId}, 公共模型ID: ${publicModel.id}');
       return UserAIModelConfigModel.fromJson({
-        'id': 'public_${publicModel.id}', // 🚀 使用前缀区分公共模型ID
+        'id': publicModel.id, // 直接使用公共模型ID，不拼接前缀
         'userId': AppConfig.userId ?? 'unknown',
         'name': publicModel.displayName, // 🚀 修复：添加 name 字段
         'alias': publicModel.displayName,

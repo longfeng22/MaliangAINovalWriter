@@ -38,6 +38,22 @@ public interface UniversalAIService {
     Mono<UniversalAIPreviewResponseDto> previewRequest(UniversalAIRequestDto request);
 
     /**
+     * 🔥 新增：构建初始的系统和用户消息（用于多轮对话场景）
+     * 
+     * @param request 通用AI请求
+     * @return 包含system和user两条消息的列表
+     */
+    Mono<java.util.List<com.ainovel.server.web.dto.request.UniversalAIRequestDto.MessageDto>> buildInitialMessages(UniversalAIRequestDto request);
+    
+    /**
+     * 🔥 新增：构建完整的 AIRequest（包含 system + user 消息）
+     * 
+     * @param request 通用AI请求
+     * @return 完整的 AIRequest 对象
+     */
+    Mono<com.ainovel.server.domain.model.AIRequest> buildAIRequest(UniversalAIRequestDto request);
+    
+    /**
      * 🚀 新增：生成并存储提示词预设（供内部服务调用）
      * 
      * @param request 通用AI请求

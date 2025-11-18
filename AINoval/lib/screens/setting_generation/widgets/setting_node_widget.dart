@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ainoval/utils/web_theme.dart';
 import '../../../models/setting_node.dart';
+import '../../../models/setting_type.dart';
 import '../../../blocs/setting_generation/setting_generation_state.dart'; // 导入渲染状态
+import '../../../blocs/setting_generation/setting_generation_bloc.dart';
+import '../../../blocs/setting_generation/setting_generation_event.dart';
+import 'add_child_node_form.dart';
 
 /// 设定节点组件
 class SettingNodeWidget extends StatefulWidget {
@@ -36,6 +41,7 @@ class SettingNodeWidget extends StatefulWidget {
 class _SettingNodeWidgetState extends State<SettingNodeWidget>
     with TickerProviderStateMixin {
   bool _isExpanded = true;
+  bool _showAddForm = false; // 控制是否显示添加表单
   late AnimationController _renderingController; // 渲染动画控制器
   late Animation<double> _renderingAnimation;
 
@@ -107,6 +113,17 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
       mainAxisSize: MainAxisSize.min,
       children: [
         _buildNodeHeader(),
+        // 添加子节点表单
+        if (_showAddForm)
+          AddChildNodeForm(
+            parentNode: widget.node,
+            onCancel: () {
+              setState(() {
+                _showAddForm = false;
+              });
+            },
+            onSave: _onSaveChildNode,
+          ),
         // 🔧 子节点容器：始终存在，只改变内容可见性
         if (widget.renderChildren && widget.node.children != null && widget.node.children!.isNotEmpty)
           _buildStableChildrenContainer(),
@@ -310,6 +327,12 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
                       ),
                       const SizedBox(width: 6),
                       _buildTypeChip(),
+                      const SizedBox(width: 8),
+                      // 添加子节点按钮
+                      _buildAddChildButton(),
+                      const SizedBox(width: 4),
+                      // 删除节点按钮
+                      _buildDeleteButton(),
                       if (isRendering)
                         Text(
                           '生成中...',
@@ -347,8 +370,9 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
   }
 
   Widget _buildStatusIcon() {
-    // 移除“待处理”状态下的时钟图标
-    if (widget.node.generationStatus == GenerationStatus.pending) {
+    // 移除状态图标，保持界面简洁
+    if (widget.node.generationStatus == GenerationStatus.pending || 
+        widget.node.generationStatus == GenerationStatus.completed) {
       return const SizedBox.shrink();
     }
 
@@ -360,10 +384,6 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
         icon = Icons.autorenew;
         color = Colors.blue;
         break;
-      case GenerationStatus.completed:
-        icon = Icons.check_circle;
-        color = Colors.green;
-        break;
       case GenerationStatus.failed:
         icon = Icons.error;
         color = Colors.red;
@@ -372,6 +392,7 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
         icon = Icons.edit;
         color = Colors.purple;
         break;
+      case GenerationStatus.completed:
       case GenerationStatus.pending:
         // 已在上方提前返回
         icon = Icons.check_circle; // 占位，不会被使用
@@ -423,5 +444,185 @@ class _SettingNodeWidgetState extends State<SettingNodeWidget>
     setState(() {
       _isExpanded = !_isExpanded;
     });
+  }
+
+  /// 构建添加子节点按钮
+  Widget _buildAddChildButton() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final renderInfo = widget.nodeRenderStates[widget.node.id];
+    final isRendering = renderInfo?.state == NodeRenderState.rendering;
+    
+    // 如果节点正在渲染中，不显示按钮
+    if (isRendering) {
+      return const SizedBox.shrink();
+    }
+    
+    return InkWell(
+      onTap: _onAddChildTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: isDark 
+              ? const Color(0xFF374151).withOpacity(0.6)
+              : const Color(0xFFF3F4F6).withOpacity(0.8),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isDark 
+                ? const Color(0xFF4B5563)
+                : const Color(0xFFD1D5DB),
+            width: 1,
+          ),
+        ),
+        child: Icon(
+          Icons.add,
+          size: 14,
+          color: isDark 
+              ? const Color(0xFF9CA3AF)
+              : const Color(0xFF6B7280),
+        ),
+      ),
+    );
+  }
+
+  /// 处理添加子节点按钮点击
+  void _onAddChildTap() {
+    setState(() {
+      _showAddForm = true;
+      _isExpanded = true; // 展开节点以显示表单
+    });
+  }
+
+  /// 保存子节点
+  void _onSaveChildNode(String title, String content, SettingType type) {
+    // 调用Bloc添加子节点
+    context.read<SettingGenerationBloc>().add(
+      AddChildNodeEvent(
+        parentNodeId: widget.node.id,
+        title: title,
+        content: content,
+        type: type.value,
+      ),
+    );
+    
+    // 关闭表单
+    setState(() {
+      _showAddForm = false;
+    });
+  }
+
+  /// 构建删除节点按钮
+  Widget _buildDeleteButton() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final renderInfo = widget.nodeRenderStates[widget.node.id];
+    final isRendering = renderInfo?.state == NodeRenderState.rendering;
+    
+    // 如果节点正在渲染中，不显示按钮
+    if (isRendering) {
+      return const SizedBox.shrink();
+    }
+    
+    return InkWell(
+      onTap: _onDeleteTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: isDark 
+              ? const Color(0xFF7F1D1D).withOpacity(0.6) // dark red
+              : const Color(0xFFFEE2E2).withOpacity(0.8), // light red
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isDark 
+                ? const Color(0xFF991B1B)
+                : const Color(0xFFFCA5A5),
+            width: 1,
+          ),
+        ),
+        child: Icon(
+          Icons.delete_outline,
+          size: 14,
+          color: isDark 
+              ? const Color(0xFFFCA5A5)
+              : const Color(0xFFDC2626),
+        ),
+      ),
+    );
+  }
+
+  /// 处理删除按钮点击
+  void _onDeleteTap() {
+    // 显示确认对话框
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: WebTheme.getSurfaceColor(context),
+          title: Text(
+            '确认删除',
+            style: TextStyle(
+              color: WebTheme.getTextColor(context),
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '确定要删除节点 "${widget.node.name}" 吗？',
+                style: TextStyle(
+                  color: WebTheme.getTextColor(context),
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '注意：删除父节点会同时删除所有子节点，此操作无法撤销。',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+              child: Text(
+                '取消',
+                style: TextStyle(
+                  color: WebTheme.getSecondaryTextColor(context),
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                // 关闭对话框
+                Navigator.of(dialogContext).pop();
+                
+                // 调用Bloc删除节点
+                context.read<SettingGenerationBloc>().add(
+                  DeleteNodeEvent(
+                    nodeId: widget.node.id,
+                  ),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

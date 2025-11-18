@@ -58,13 +58,41 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
   DateTime? _startTime;
   DateTime? _endTime;
   bool? _hasError;
-  String? _featureType;
+  
+  // ✅ 业务类型过滤（用标签形式）
+  final Map<String, String> _businessTypeLabels = {
+    'TEXT_EXPANSION': '文本扩写',
+    'TEXT_REFACTOR': '文本润色',
+    'TEXT_SUMMARY': '文本总结',
+    'AI_CHAT': 'AI对话',
+    'SCENE_TO_SUMMARY': '场景转摘要',
+    'SUMMARY_TO_SCENE': '摘要转场景',
+    'NOVEL_GENERATION': '小说生成',
+    'PROFESSIONAL_FICTION_CONTINUATION': '专业续写',
+    'SCENE_BEAT_GENERATION': '场景节拍生成',
+    'SETTING_TREE_GENERATION': '设定树生成',
+    'SETTING_GENERATION_TOOL': '设定生成工具',
+    'NOVEL_COMPOSE': '小说编排',
+    'STORY_PLOT_CONTINUATION': '剧情续写',
+    'KNOWLEDGE_EXTRACTION_SETTING': '知识库拆书-设定',
+    'KNOWLEDGE_EXTRACTION_OUTLINE': '知识库拆书-大纲',
+    '__NULL__': '未分类', // ✅ 特殊标识用于表示null/empty类型
+  };
+  
+  // 选中的业务类型（默认所有类型都选中，除了知识库相关）
+  late Set<String> _selectedBusinessTypes;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
     _repository = GetIt.instance<LLMObservabilityRepositoryImpl>();
+    
+    // 默认所有类型都选中，除了知识库相关和未分类
+    _selectedBusinessTypes = _businessTypeLabels.keys.where((type) {
+      return !type.startsWith('KNOWLEDGE_EXTRACTION') && type != '__NULL__';
+    }).toSet();
+    
     _listScrollController.addListener(() {
       if (_listScrollController.position.pixels >=
               _listScrollController.position.maxScrollExtent - 200 &&
@@ -137,6 +165,8 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
       _isLoadingMore = true;
     });
     try {
+      // ✅ 不通过后端API过滤businessType，因为后端只支持单个类型
+      // 我们在前端基于_selectedBusinessTypes集合进行多选过滤
       final resp = await _repository.getTracesByCursor(
         cursor: _nextCursor,
         limit: _pageSize,
@@ -145,7 +175,7 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
         model: _modelController.text.isEmpty ? null : _modelController.text,
         sessionId: _sessionIdController.text.isEmpty ? null : _sessionIdController.text,
         hasError: _hasError,
-        businessType: _featureType,
+        businessType: null,  // ✅ 改为null，不在后端过滤
         correlationId: _correlationIdController.text.isEmpty ? null : _correlationIdController.text,
         traceId: _traceIdController.text.isEmpty ? null : _traceIdController.text,
         type: _callType,
@@ -163,9 +193,20 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
 
       // 本地内容搜索过滤（可选）
       List<LLMTrace> finalList = appended;
+      
+      // ✅ 应用业务类型过滤（前端过滤）
+      finalList = finalList.where((trace) {
+        // 如果trace没有businessType或为空，映射为__NULL__特殊标识
+        if (trace.businessType == null || trace.businessType!.isEmpty) {
+          return _selectedBusinessTypes.contains('__NULL__');
+        }
+        // 只保留选中的业务类型
+        return _selectedBusinessTypes.contains(trace.businessType);
+      }).toList();
+      
       if (_contentSearchController.text.isNotEmpty) {
         final searchTerm = _contentSearchController.text.toLowerCase();
-        finalList = appended.where((trace) {
+        finalList = finalList.where((trace) {
           final messages = trace.request.messages;
           if (messages != null) {
             for (final m in messages) {
@@ -313,7 +354,10 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
       _callType = null;
       _tagController.clear();
       _hasError = null;
-      _featureType = null;
+      // 恢复默认的业务类型过滤（不含知识库和未分类）
+      _selectedBusinessTypes = _businessTypeLabels.keys.where((type) {
+        return !type.startsWith('KNOWLEDGE_EXTRACTION') && type != '__NULL__';
+      }).toSet();
       _startTime = null;
       _endTime = null;
       _searchCriteria = const LLMTraceSearchCriteria();
@@ -841,6 +885,102 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
     );
   }
 
+  /// 构建业务类型过滤标签
+  Widget _buildBusinessTypeFilters() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '业务类型过滤（默认隐藏知识库拆书和未分类）：',
+          style: TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _businessTypeLabels.entries.map((entry) {
+            final isSelected = _selectedBusinessTypes.contains(entry.key);
+            final isKnowledgeType = entry.key.startsWith('KNOWLEDGE_EXTRACTION');
+            final isNullType = entry.key == '__NULL__';
+            
+            return FilterChip(
+              label: Text(entry.value),
+              selected: isSelected,
+              onSelected: (selected) {
+                setState(() {
+                  if (selected) {
+                    _selectedBusinessTypes.add(entry.key);
+                  } else {
+                    _selectedBusinessTypes.remove(entry.key);
+                  }
+                  // 重新加载数据以应用过滤
+                  _resetCursorAndLoad();
+                });
+              },
+              selectedColor: isNullType
+                  ? Colors.grey.withOpacity(0.3)
+                  : (isKnowledgeType 
+                      ? Colors.orange.withOpacity(0.3)
+                      : Colors.blue.withOpacity(0.3)),
+              backgroundColor: isNullType
+                  ? Colors.grey.withOpacity(0.05)
+                  : (isKnowledgeType 
+                      ? Colors.grey.withOpacity(0.1)
+                      : null),
+              labelStyle: TextStyle(
+                fontSize: 12,
+                color: isSelected 
+                    ? (isNullType 
+                        ? Colors.grey[800]
+                        : (isKnowledgeType ? Colors.orange[800] : Colors.blue[800]))
+                    : Colors.grey[600],
+              ),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _selectedBusinessTypes = _businessTypeLabels.keys.toSet();
+                  _resetCursorAndLoad();
+                });
+              },
+              icon: const Icon(Icons.select_all, size: 16),
+              label: const Text('全选', style: TextStyle(fontSize: 12)),
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _selectedBusinessTypes.clear();
+                  _resetCursorAndLoad();
+                });
+              },
+              icon: const Icon(Icons.deselect, size: 16),
+              label: const Text('清空', style: TextStyle(fontSize: 12)),
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _selectedBusinessTypes = _businessTypeLabels.keys.where((type) {
+                    return !type.startsWith('KNOWLEDGE_EXTRACTION') && type != '__NULL__';
+                  }).toSet();
+                  _resetCursorAndLoad();
+                });
+              },
+              icon: const Icon(Icons.restore, size: 16),
+              label: const Text('默认（不含知识库和未分类）', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _buildQuickActions() {
     return Card(
       child: Padding(
@@ -937,34 +1077,6 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: DropdownButtonFormField<String?>(
-                    value: _featureType,
-                    decoration: const InputDecoration(
-                      labelText: 'AI功能类型',
-                    ),
-                    items: const [
-                      DropdownMenuItem<String?>(value: null, child: Text('全部')),
-                      DropdownMenuItem(value: 'TEXT_EXPANSION', child: Text('文本扩写')),
-                      DropdownMenuItem(value: 'TEXT_REFACTOR', child: Text('文本润色')),
-                      DropdownMenuItem(value: 'TEXT_SUMMARY', child: Text('文本总结')),
-                      DropdownMenuItem(value: 'AI_CHAT', child: Text('AI对话')),
-                      DropdownMenuItem(value: 'SCENE_TO_SUMMARY', child: Text('场景转摘要')),
-                      DropdownMenuItem(value: 'SUMMARY_TO_SCENE', child: Text('摘要转场景')),
-                      DropdownMenuItem(value: 'NOVEL_GENERATION', child: Text('小说生成')),
-                      DropdownMenuItem(value: 'PROFESSIONAL_FICTION_CONTINUATION', child: Text('专业续写')),
-                      DropdownMenuItem(value: 'SCENE_BEAT_GENERATION', child: Text('场景节拍生成')),
-                      DropdownMenuItem(value: 'SETTING_TREE_GENERATION', child: Text('设定树生成')),
-                    ],
-                    onChanged: (value) {
-                      setState(() {
-                        _featureType = value;
-                      });
-                    },
-                  ),
-                ),
-                const SizedBox(width: 16),
                 Expanded(
                   child: DropdownButtonFormField<bool?>(
                     value: _hasError,
@@ -1036,6 +1148,9 @@ class _LLMObservabilityScreenState extends State<LLMObservabilityScreen>
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+            // ✅ 业务类型过滤标签
+            _buildBusinessTypeFilters(),
             const SizedBox(height: 16),
             Row(
               children: [

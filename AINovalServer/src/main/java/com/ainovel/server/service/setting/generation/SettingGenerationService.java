@@ -3,6 +3,7 @@ package com.ainovel.server.service.setting.generation;
 import com.ainovel.server.domain.model.setting.generation.*;
 import com.ainovel.server.domain.model.NovelSettingItem;
 import com.ainovel.server.domain.model.NovelSettingGenerationHistory;
+import com.ainovel.server.domain.model.SettingType;
 import com.ainovel.server.service.AIService;
 import com.ainovel.server.domain.model.AIFeatureType;
 import com.ainovel.server.service.NovelAIService;
@@ -49,6 +50,7 @@ public class SettingGenerationService implements ISettingGenerationService {
     
     private final InMemorySessionManager sessionManager;
     private final SettingValidationService validationService;
+    private final StructuredSettingOutputValidator structuredOutputValidator;
     private final SettingGenerationStrategyFactory strategyFactory;
     private final ToolRegistry toolRegistry;
     private final AIService aiService;
@@ -62,13 +64,15 @@ public class SettingGenerationService implements ISettingGenerationService {
     private final com.ainovel.server.service.ai.orchestration.ToolStreamingOrchestrator toolStreamingOrchestrator;
     private final com.ainovel.server.service.PublicModelConfigService publicModelConfigService;
     private final com.ainovel.server.service.CreditService creditService;
+    private final com.ainovel.server.service.ai.observability.TraceContextManager traceContextManager;
     private final com.ainovel.server.service.UserAIModelConfigService userAIModelConfigService;
-    @SuppressWarnings("unused")
-    private final com.ainovel.server.service.PublicAIApplicationService publicAIApplicationService;
+    // 移除公共AI应用服务依赖（统一由Provider装饰器负责）
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     @SuppressWarnings("unused")
     private final com.ainovel.server.service.CostEstimationService costEstimationService;
     private final com.ainovel.server.service.ai.tools.fallback.ToolFallbackRegistry toolFallbackRegistry;
+    // 📚 知识库Repository
+    private final com.ainovel.server.repository.NovelKnowledgeBaseRepository knowledgeBaseRepository;
     // 计费常量
     @SuppressWarnings("unused") private static final String USED_PUBLIC_MODEL_KEY = com.ainovel.server.service.billing.BillingKeys.USED_PUBLIC_MODEL;
     @SuppressWarnings("unused") private static final String REQUIRES_POST_STREAM_DEDUCTION_KEY = com.ainovel.server.service.billing.BillingKeys.REQUIRES_POST_STREAM_DEDUCTION;
@@ -92,42 +96,11 @@ public class SettingGenerationService implements ISettingGenerationService {
     private final Map<String, java.util.concurrent.ConcurrentHashMap<String, Long>> inFlightTasks = new ConcurrentHashMap<>();
     // 在途任务超时时间：3 分钟
     private static final long INFLIGHT_TIMEOUT_MS = java.util.concurrent.TimeUnit.MINUTES.toMillis(3);
+    
+    // 防重复工具调用机制 - 跟踪正在进行的工具调用
+    private final java.util.concurrent.ConcurrentHashMap<String, Boolean> activeToolCalls = new java.util.concurrent.ConcurrentHashMap<>();
 
-    // 公共模型路径的占位提供商：仅用于通过管道，不会在私有模型分支被调用
-    private static final com.ainovel.server.service.ai.AIModelProvider PUBLIC_NOOP_PROVIDER = new com.ainovel.server.service.ai.AIModelProvider() {
-        @Override
-        public String getProviderName() { return "public-noop"; }
-        @Override
-        public String getModelName() { return "public-noop"; }
-        @Override
-        public reactor.core.publisher.Mono<com.ainovel.server.domain.model.AIResponse> generateContent(com.ainovel.server.domain.model.AIRequest request) {
-            return reactor.core.publisher.Mono.error(new UnsupportedOperationException("PUBLIC_NOOP_PROVIDER: generateContent 未实现"));
-        }
-        @Override
-        public reactor.core.publisher.Flux<String> generateContentStream(com.ainovel.server.domain.model.AIRequest request) {
-            return reactor.core.publisher.Flux.empty();
-        }
-        @Override
-        public reactor.core.publisher.Mono<Double> estimateCost(com.ainovel.server.domain.model.AIRequest request) {
-            return reactor.core.publisher.Mono.just(0.0);
-        }
-        @Override
-        public reactor.core.publisher.Mono<Boolean> validateApiKey() { return reactor.core.publisher.Mono.just(true); }
-        @Override
-        public void setProxy(String host, int port) { /* 空操作：公共占位提供商不使用代理 */ }
-        @Override
-        public void disableProxy() { /* 空操作：公共占位提供商不使用代理 */ }
-        @Override
-        public boolean isProxyEnabled() { return false; }
-        @Override
-        public reactor.core.publisher.Flux<com.ainovel.server.domain.model.ModelInfo> listModels() { return reactor.core.publisher.Flux.empty(); }
-        @Override
-        public reactor.core.publisher.Flux<com.ainovel.server.domain.model.ModelInfo> listModelsWithApiKey(String apiKey, String apiEndpoint) { return reactor.core.publisher.Flux.empty(); }
-        @Override
-        public String getApiKey() { return null; }
-        @Override
-        public String getApiEndpoint() { return null; }
-    };
+    // 移除业务层公共模型占位Provider，公共路径逻辑统一由底层装饰器处理
     
     @Override
     public Mono<SettingGenerationSession> startGeneration(
@@ -159,8 +132,8 @@ public class SettingGenerationService implements ISettingGenerationService {
                                 session.getMetadata().put("modelConfigId", modelConfigId);
                                 session.getMetadata().put("strategyAdapter", strategyAdapter);
                                 
-                                // 创建事件流
-                                Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().limit(16);
+                                // 创建事件流（缓存所有事件，支持大量节点）
+                                Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().all();
                                 eventSinks.put(session.getSessionId(), sink);
                                 
                                 // 发送开始事件
@@ -224,8 +197,8 @@ public class SettingGenerationService implements ISettingGenerationService {
                     .orElse(Mono.error(new IllegalArgumentException("Cannot create strategy from template: " + promptTemplateId)))
                     .flatMap(strategyAdapter -> sessionManager.createSession(userId, novelId, initialPrompt, strategyAdapter.getStrategyId(), promptTemplateId)
                         .flatMap(session -> {
-                            // 事件流
-                            Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().limit(16);
+                            // 事件流（缓存所有事件，支持大量节点）
+                            Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().all();
                             eventSinks.put(session.getSessionId(), sink);
                             emitEvent(session.getSessionId(), new SettingGenerationEvent.SessionStartedEvent(initialPrompt, strategyAdapter.getStrategyId()));
 
@@ -250,40 +223,7 @@ public class SettingGenerationService implements ISettingGenerationService {
                             com.ainovel.server.domain.model.EnhancedUserPromptTemplate templateObj = (com.ainovel.server.domain.model.EnhancedUserPromptTemplate) arr[1];
                             ConfigurableStrategyAdapter strategyAdapterObj = (ConfigurableStrategyAdapter) arr[2];
 
-                            // 启动流前先校验公共配置：如果请求走公共模型但传入的ID不是公共配置，则回退到用户模型
-                            Boolean wantPublic = Boolean.TRUE.equals(session.getMetadata().get("usePublicTextModel"));
-                            if (Boolean.TRUE.equals(wantPublic)) {
-                                publicModelConfigService.findById(modelConfigId)
-                                    .hasElement()
-                                    .defaultIfEmpty(Boolean.FALSE)
-                                    .flatMap(exists -> {
-                                        if (Boolean.TRUE.equals(exists)) {
-                                            try {
-                                                session.getMetadata().put("textPublicConfigId", modelConfigId);
-                                                sessionManager.saveSession(session).subscribe();
-                                            } catch (Exception ignore) {}
-                                        } else {
-                                            log.warn("Public text model config not found: {}. Falling back to user model for session {}", modelConfigId, session.getSessionId());
-                                            try {
-                                                session.getMetadata().remove("usePublicTextModel");
-                                                session.getMetadata().remove("textPublicConfigId");
-                                                sessionManager.saveSession(session).subscribe();
-                                            } catch (Exception ignore) {}
-                                            emitErrorEvent(session.getSessionId(), "PUBLIC_MODEL_NOT_FOUND", "指定的公共模型配置不存在: " + modelConfigId, null, true);
-                                        }
-                                        return startStreamingTextToSettings(session, templateObj, strategyAdapterObj, modelConfigId, endSentinel)
-                                            .onErrorResume(err -> {
-                                                if (isInterrupted(err)) {
-                                                    log.warn("Text streaming interrupted for session {}, suppressing error and continuing", session.getSessionId());
-                                                    return Mono.just(0);
-                                                }
-                                                emitErrorEvent(session.getSessionId(), "HYBRID_FLOW_FAILED", err.getMessage(), null, true);
-                                                return Mono.just(0);
-                                            });
-                                    })
-                                    .subscribe();
-                            } else {
-                                // 文本为发布者 → 工具为订阅者；到字即解析
+                            // 统一：不再在业务层区分公共/私有模型，直接启动文本流
                                 startStreamingTextToSettings(session, templateObj, strategyAdapterObj, modelConfigId, endSentinel)
                                     .onErrorResume(err -> {
                                         if (isInterrupted(err)) {
@@ -294,7 +234,6 @@ public class SettingGenerationService implements ISettingGenerationService {
                                         return Mono.just(0);
                                     })
                                     .subscribe();
-                            }
                             
                             // 立即返回会话，允许控制器尽快建立SSE订阅
                             return Mono.just(session);
@@ -341,56 +280,14 @@ public class SettingGenerationService implements ISettingGenerationService {
                         "\n内容：能感知与操控魔力的人群，通常需要通过学派训练以掌握法术……";
                 String baseUsr = prompts.getT2();
 
-                // 2) 选择文本阶段模型（根据是否选择公共模型决定）
-                final boolean usePublicFlag = Boolean.TRUE.equals(session.getMetadata().get("usePublicTextModel"));
-                final String publicCfgId = (String) session.getMetadata().get("textPublicConfigId");
-                final boolean shouldUsePublic = usePublicFlag && publicCfgId != null && !publicCfgId.isBlank();
-                final String publicProvider = null; // 简化：通过 configId 查询，不再依赖前端传 provider/modelId
-                final String publicModelId = null;
-                log.info("[文本阶段] 公共模型选择: usePublicFlag={}, 公共配置ID={}, provider={}, modelId={}, 实际是否使用公共模型={}",
-                        usePublicFlag, publicCfgId, publicProvider, publicModelId, shouldUsePublic);
-
-                // 为私有模型准备Provider：
-                // - 若选择公共模型，则回退时使用"用户默认模型"（避免误用公共配置ID去查用户配置表导致找不到）
-                // - 若未选择公共模型，则按传入的用户模型配置ID获取
-                Mono<com.ainovel.server.service.ai.AIModelProvider> userProviderMono =
-                    reactor.core.publisher.Mono.defer(() -> {
-                        if (shouldUsePublic) {
-                            return novelAIService.getAIModelProvider(session.getUserId(), null);
-                        }
-                        return novelAIService.getAIModelProviderByConfigId(session.getUserId(), userModelConfigId);
-                    });
-
-                // 公共模型路径：不再查用户模型；先写入公共模型ID，找不到则回退用户模型
-                Mono<com.ainovel.server.service.ai.AIModelProvider> providerMonoEffective;
-                if (shouldUsePublic) {
-                    providerMonoEffective = publicModelConfigService.findById(publicCfgId)
-                        .doOnSubscribe(s -> log.debug("[TextPhase][Public] Resolving public config by id={}", publicCfgId))
-                        .timeout(java.time.Duration.ofSeconds(5))
-                        .doOnNext(pub -> {
-                            try {
-                                session.getMetadata().put("textPublicModelId", pub.getModelId());
-                                sessionManager.saveSession(session).subscribe();
-                                log.debug("[TextPhase][Public] Resolved public config: provider={}, modelId={}", pub.getProvider(), pub.getModelId());
-                            } catch (Exception ignore) {}
-                        })
-                        // 使用占位Provider占位，后续分支不会调用其流式方法
-                        .map(pub -> PUBLIC_NOOP_PROVIDER)
-                        .onErrorResume(err -> {
-                            log.warn("[TextPhase][Public] Resolve public config failed or timed out: {}. Falling back to private.", err != null ? err.getMessage() : "");
-                            return userProviderMono;
-                        })
-                        // 若公共配置缺失，降级到用户私有模型
-                        .switchIfEmpty(userProviderMono);
-                } else {
-                    // 私有模型路径：正常获取用户模型提供商
-                    providerMonoEffective = userProviderMono;
-                }
+                // 2) 选择文本阶段模型：统一走用户配置（公共模型逻辑下沉至 Provider 装饰器）
+                Mono<com.ainovel.server.service.ai.AIModelProvider> providerMonoEffective =
+                    novelAIService.getAIModelProviderByConfigId(session.getUserId(), userModelConfigId);
 
                 return providerMonoEffective
                     .flatMap(provider -> {
-                        log.debug("[TextPhase] Provider resolved. shouldUsePublic={}, providerIsNull={}", shouldUsePublic, (provider == null));
-                        // 2.2) 选择工具阶段模型（优先用户“工具调用默认”→公共→回退用户默认）
+                        log.debug("[TextPhase] Provider resolved. providerIsNull={}", (provider == null));
+                        // 2.2) 选择工具阶段模型（优先用户"工具调用默认"→公共→回退用户默认）
                         Mono<String[]> toolConfigMono = userAIModelConfigService.getValidatedToolDefaultConfiguration(session.getUserId())
                             .flatMap(cfg -> userAIModelConfigService.getDecryptedApiKey(session.getUserId(), cfg.getId())
                                 .map(apiKey -> new String[] { cfg.getProvider(), cfg.getModelName(), apiKey, cfg.getApiEndpoint() }))
@@ -457,7 +354,7 @@ public class SettingGenerationService implements ISettingGenerationService {
                             public Mono<Integer> apply(Integer roundIndex) {
                                 int r = (roundIndex == null) ? 0 : roundIndex.intValue();
                                 boolean isFinalRound = r >= (iterations - 1);
-                                log.debug("[文本阶段] 进入回合: {}/{} (是否使用公共模型={})", r + 1, iterations, shouldUsePublic);
+                                log.debug("[文本阶段] 进入回合: {}/{}", r + 1, iterations);
 
                                 // 文本阶段结束标记快速短路（等价于后续轮的break）
                                 if (Boolean.TRUE.equals(session.getMetadata().get("textStreamEnded"))) {
@@ -476,165 +373,30 @@ public class SettingGenerationService implements ISettingGenerationService {
                                         .build());
                                 }
                                 msgs.add(com.ainovel.server.domain.model.AIRequest.Message.builder().role("user").content(baseUsr).build());
-                                final boolean usePublicFlag2 = shouldUsePublic;
-                                final String publicModelIdOpt = (String) session.getMetadata().get("textPublicModelId");
-                                final String modelForText = (usePublicFlag2 && publicModelIdOpt != null && !publicModelIdOpt.isBlank())
-                                        ? publicModelIdOpt
-                                        : (provider != null ? provider.getModelName() : null);
+                                // 公共模型逻辑已下沉至装饰器
+                                final String modelForText = provider != null ? provider.getModelName() : null;
+
+                                java.util.HashMap<String, Object> meta = new java.util.HashMap<>();
+                                meta.put("userId", session.getUserId() != null ? session.getUserId() : "system");
+                                meta.put("sessionId", session.getSessionId());
+                                meta.put("requestType", com.ainovel.server.domain.model.AIFeatureType.SETTING_TREE_GENERATION.name());
+                                Object mc = session.getMetadata() != null ? session.getMetadata().get("modelConfigId") : null;
+                                if (mc != null) meta.put("modelConfigId", mc);
 
                                 com.ainovel.server.domain.model.AIRequest req = com.ainovel.server.domain.model.AIRequest.builder()
                                     .model(modelForText)
                                     .messages(msgs)
                                     .userId(session.getUserId())
                                     .sessionId(session.getSessionId())
-                                    // 使用可变Map，便于后续写入公共/扣费标记
-                                    .metadata(new java.util.HashMap<>(java.util.Map.of(
-                                        "userId", session.getUserId() != null ? session.getUserId() : "system",
-                                        "sessionId", session.getSessionId(),
-                                        "requestType", "SETTING_TEXT_STREAM"
-                                    )))
+                                    .traceId(getOrCreateTraceId())
+                                    .featureType(com.ainovel.server.domain.model.AIFeatureType.SETTING_TREE_GENERATION)
+                                    .metadata(meta)
                                     .build();
                                 log.debug("[文本阶段] 构建AI请求: 回合={}/{} 文本模型={} 消息数={} ", r + 1, iterations, modelForText, msgs.size());
-                                // 分支：公共模型逐轮余额预检 → 通过则流式；不足则仅结束文本阶段
-                                if (shouldUsePublic) {
-                                    String cfgId = (String) session.getMetadata().get("textPublicConfigId");
-                                    if (cfgId == null || cfgId.isBlank()) {
-                                        return Mono.error(new IllegalArgumentException("缺少公共模型配置ID用于余额预检"));
-                                    }
-                                    Mono<com.ainovel.server.domain.model.PublicModelConfig> pubCfgMono = publicModelConfigService.findById(cfgId)
-                                            .switchIfEmpty(Mono.error(new IllegalArgumentException("指定的公共模型配置不存在: " + cfgId)));
-
-                                    int estIn = Math.max(200, (baseSys.length() + baseUsr.length() + (prev != null ? prev.length() : 0)) / 3);
-                                    int estOut = (int) (estIn * 2.0);
-
-                                    log.debug("[TextPhase][Public] Credit precheck prepared: cfgId={}, estIn={}, estOut={}", cfgId, estIn, estOut);
-                                    return pubCfgMono
-                                        .flatMap(pub -> {
-                                            log.debug("[TextPhase][Public] Resolved public config: provider={}, modelId={}", pub.getProvider(), pub.getModelId());
-                                            return creditService.hasEnoughCredits(
-                                                    session.getUserId(), pub.getProvider(), pub.getModelId(),
-                                                    com.ainovel.server.domain.model.AIFeatureType.NOVEL_GENERATION,
-                                                    estIn, estOut)
-                                                .map(enough -> new Object[] { pub, enough });
-                                        })
-                                        .flatMap(arr -> {
-                                            com.ainovel.server.domain.model.PublicModelConfig pub = (com.ainovel.server.domain.model.PublicModelConfig) arr[0];
-                                            boolean enough = Boolean.TRUE.equals(arr[1]);
-                                            log.debug("[TextPhase][Public] Credit check result: enough={}", enough);
-                                            if (!enough) {
-                                                try {
-                                                    session.getMetadata().put("textStreamEnded", Boolean.TRUE);
-                                                    sessionManager.saveSession(session).subscribe();
-                                                } catch (Exception ignore) {}
-                                                log.warn("[TextPhase][Public] Insufficient credits, text phase will end early. provider={}, modelId={}, estIn={}, estOut={}", pub.getProvider(), pub.getModelId(), estIn, estOut);
-                                                emitEvent(session.getSessionId(), new SettingGenerationEvent.GenerationProgressEvent(
-                                                    "余额不足，文本阶段提前结束（预估本轮消耗超出余额）", null, null, null
-                                                ));
-                                                return Mono.just(1);
-                                            }
-
-                                            // 通过余额预检 → 以公共模型直连流式
-                                            reactor.core.publisher.Mono<String[]> keyMono = publicModelConfigService
-                                                .getActiveDecryptedApiKey(pub.getProvider(), pub.getModelId())
-                                                .doOnSubscribe(s -> log.debug("[TextPhase][Public] Fetching API key for provider={}, modelId={}", pub.getProvider(), pub.getModelId()))
-                                                .map(apiKey -> new String[] { apiKey, pub.getApiEndpoint() })
-                                                .doOnNext(tk -> log.debug("[TextPhase][Public] API key fetched (len={}), endpoint={}", tk[0] != null ? tk[0].length() : 0, tk[1]));
-
-                                            // 标记后扣费由校验器统一注入（含 providerSpecific 与 metadata 双写）
-
-                                            try {
-                                                com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
-                                                    req,
-                                                    true, // usedPublicModel
-                                                    true, // requiresPostStreamDeduction
-                                                    com.ainovel.server.domain.model.AIFeatureType.NOVEL_GENERATION.toString(),
-                                                    publicCfgId,
-                                                    pub.getProvider(),
-                                                    pub.getModelId(),
-                                                    session.getSessionId(),
-                                                    null
-                                                );
-                                            } catch (Exception ignore) {}
-
-                                            return Mono.defer(() -> {
-                                                final reactor.core.publisher.Mono<String[]> orchestratorCfgMono = toolConfigMono
-                                                    .doOnNext(cfg2 -> log.debug("[Tool][Orchestrator] Using provider={}, model={}, endpoint={} for incremental parsing", cfg2[0], cfg2[1], cfg2[3]))
-                                                    .cache();
-
-                                                final StringBuilder accumulator = new StringBuilder();
-                                                final java.util.concurrent.atomic.AtomicInteger consumed = new java.util.concurrent.atomic.AtomicInteger(0);
-                                                final int minBatch = 800; // 提高批量阈值以减少过早触发
-                                                final int overlap = 120;
-                                                final java.util.concurrent.atomic.AtomicLong lastFlushMs = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
-
-                                                emitEvent(session.getSessionId(), new SettingGenerationEvent.GenerationProgressEvent(
-                                                    "开始流式文本生成并增量解析… (第" + (r + 1) + "/" + iterations + ")", null, null, null
-                                                ));
-
-                                                return keyMono.flatMapMany(tk -> {
-                                                    String apiKey = tk[0];
-                                                    String endpoint = tk[1];
-                                                    log.info("[文本阶段][公共] 启动流式文本生成: endpoint={} modelId={}", endpoint, pub.getModelId());
-                                                    return aiService.generateContentStream(req, apiKey, endpoint);
-                                                })
-                                                .retryWhen(reactor.util.retry.Retry.backoff(2, java.time.Duration.ofSeconds(1)).jitter(0.3).filter(SettingGenerationService.this::isInterrupted))
-                                                .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk))
-                                                .bufferTimeout(32, java.time.Duration.ofSeconds(4))
-                                                .flatMap(parts -> {
-                                                    String part = String.join("", parts);
-                                                    if (part.isBlank()) return Mono.empty();
-                                                    accumulator.append(part);
-                                                    int total = accumulator.length();
-                                                    int start = consumed.get();
-                                                    int deltaLen = total - start;
-                                                    // 若片段不足最小阈值，则按时间(≥10s)强制刷新一次，避免久等无进展
-                                                    if (deltaLen < minBatch) {
-                                                        long now = System.currentTimeMillis();
-                                                        if (now - lastFlushMs.get() < 10000L) {
-                                                            return Mono.empty();
-                                                        }
-                                                    }
-                                                    String delta = accumulator.substring(start, total);
-                                                    Object finalizedFlag = session.getMetadata().get("streamFinalized");
-                                                    if (Boolean.TRUE.equals(finalizedFlag)) {
-                                                        return Mono.<Void>empty();
-                                                    }
-                                                    // 异步触发工具解析，不阻塞文本流与回合结束
-                                                    orchestratorCfgMono
-                                                        .flatMap(cfg2 -> orchestrateIncrementalTextToSettings(session, strategyAdapter, cfg2[0], cfg2[1], cfg2[2], cfg2[3], delta, isFinalRound)
-                                                            .timeout(java.time.Duration.ofMinutes(3))
-                                                            .onErrorResume(err -> { emitErrorEvent(session.getSessionId(), "TOOL_STAGE_INC_ERROR", err.getMessage(), null, true); return Mono.<Void>empty(); })
-                                                        )
-                                                        .subscribe();
-
-                                                    // 单调更新消费指针与时间戳
-                                                    int newConsumed = Math.max(0, accumulator.length() - overlap);
-                                                    consumed.updateAndGet(prevVal -> Math.max(prevVal, newConsumed));
-                                                    lastFlushMs.set(System.currentTimeMillis());
-                                                    return Mono.empty();
-                                                }, 1)
-                                                .onErrorResume(err -> { if (isInterrupted(err)) { log.warn("文本流被中断 (回合 {}), 继续下一轮。session={}", r + 1, session.getSessionId()); try { if (isFinalRound) { session.getMetadata().put("textStreamEnded", Boolean.TRUE); sessionManager.saveSession(session).subscribe(); } } catch (Exception ignore) {} return Mono.<Void>empty(); } emitErrorEvent(session.getSessionId(), "TEXT_STREAM_ERROR", err.getMessage(), null, true); try { if (isFinalRound) { session.getMetadata().put("textStreamEnded", Boolean.TRUE); sessionManager.saveSession(session).subscribe(); } } catch (Exception ignore) {} return Mono.empty(); })
-                                                .doOnComplete(() -> {
-                                                    try {
-                                                        String roundOut = accumulator.toString();
-                                                        if (roundOut != null && !roundOut.isBlank()) {
-                                                            String prevOut = accumulatedText.get();
-                                                            String merged = (prevOut == null || prevOut.isBlank()) ? roundOut : (prevOut + "\n" + roundOut);
-                                                            accumulatedText.set(merged);
-                                                            try { session.getMetadata().put("accumulatedText", merged); } catch (Exception ignore) {}
-                                                        }
-                                                        if (isFinalRound) {
-                                                            session.getMetadata().put("textStreamEnded", Boolean.TRUE);
-                                                            session.getMetadata().put("textEndedAt", System.currentTimeMillis());
-                                                            sessionManager.saveSession(session).subscribe();
-                                                            // 不在文本结束点触发 finalize，等待编排 COMPLETE/doFinally
-                                                        }
-                                                    } catch (Exception e) { emitErrorEvent(session.getSessionId(), "STREAM_FINALIZE_ERROR", e.getMessage(), null, false); }
-                                                })
-                                                .then(Mono.just(1));
-                                            });
-                                        });
-                                }
+                                // 直接走用户/当前provider流
+                                com.ainovel.server.service.ai.AIModelProvider nonNullProvider = java.util.Objects.requireNonNull(provider, "模型提供商为空，无法启动文本流");
+                                log.info("[文本阶段] 启动流式文本生成: provider={} model={} ", nonNullProvider.getProviderName(), nonNullProvider.getModelName());
+                                reactor.core.publisher.Flux<String> textStream = nonNullProvider.generateContentStream(req);
 
                                 // 私有模型：直接进入流式（与编排器配置并行预取，避免阻塞文本流启动）
                                 final reactor.core.publisher.Mono<String[]> orchestratorCfgMono = toolConfigMono
@@ -652,50 +414,11 @@ public class SettingGenerationService implements ISettingGenerationService {
                                     "开始流式文本生成并增量解析… (第" + (r + 1) + "/" + iterations + ")", null, null, null
                                 ));
 
-                                // 统一构建文本流
-                                reactor.core.publisher.Flux<String> textStream;
-                                if (shouldUsePublic) {
-                                    // 公共模型：根据配置ID优先查找，其次按 provider+modelId 查找，拿到 apiKey 与 endpoint
-                                    java.util.function.Function<com.ainovel.server.domain.model.PublicModelConfig, reactor.core.publisher.Mono<String[]>> toKeyTuple = pmc ->
-                                        publicModelConfigService.getActiveDecryptedApiKey(pmc.getProvider(), pmc.getModelId())
-                                            .map(apiKey -> new String[] { pmc.getProvider(), pmc.getModelId(), apiKey, pmc.getApiEndpoint() });
-
-                                    reactor.core.publisher.Mono<String[]> cfgMono;
-                                    cfgMono = publicModelConfigService.findById(publicCfgId).switchIfEmpty(
-                                                Mono.error(new IllegalArgumentException("指定的公共模型配置不存在: " + publicCfgId))
-                                              ).flatMap(toKeyTuple);
-
-                                    // 标记后扣费由校验器统一注入（含 providerSpecific 与 metadata 双写）
-
-                                    textStream = cfgMono.flatMapMany(tuple -> {
-                                        String providerName = tuple[0];
-                                        String modelId = tuple[1];
-                                        String apiKey = tuple[2];
-                                        String endpoint = tuple[3];
-
-                                        try {
-                                            com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
-                                                req,
-                                                true, // usedPublicModel
-                                                true, // requiresPostStreamDeduction
-                                                com.ainovel.server.domain.model.AIFeatureType.NOVEL_GENERATION.toString(),
-                                                publicCfgId,
-                                                providerName,
-                                                modelId,
-                                                session.getSessionId(),
-                                                null
-                                            );
-                                        } catch (Exception ignore) {}
-
-                                        log.info("[文本阶段][公共] 通过编排器启动流式文本生成: endpoint={} modelId={} (公共配置ID={})", endpoint, modelId, publicCfgId);
-                                        return aiService.generateContentStream(req, apiKey, endpoint);
-                                    });
-                                } else {
-                                    // 用户私有模型
-                                    com.ainovel.server.service.ai.AIModelProvider nonNullProvider = java.util.Objects.requireNonNull(provider, "模型提供商为空，无法启动文本流");
-                                    log.info("[文本阶段][私有] 启动流式文本生成: provider={} model={} ", nonNullProvider.getProviderName(), nonNullProvider.getModelName());
-                                    textStream = nonNullProvider.generateContentStream(req);
-                                }
+                                // 统一构建文本流（公共/私有逻辑已下沉至装饰器）
+                                // 已在上方定义 nonNullProvider 与 textStream，这里直接复用
+                                // com.ainovel.server.service.ai.AIModelProvider nonNullProvider = java.util.Objects.requireNonNull(provider, "模型提供商为空，无法启动文本流");
+                                log.info("[文本阶段] 启动流式文本生成: provider={} model={} ", nonNullProvider.getProviderName(), nonNullProvider.getModelName());
+                                // reactor.core.publisher.Flux<String> textStream = nonNullProvider.generateContentStream(req);
 
                                 return textStream
                                     // 仅对中断类错误进行有限次退避重试，避免与底层Provider的重试叠加
@@ -725,14 +448,31 @@ public class SettingGenerationService implements ISettingGenerationService {
                                             return Mono.<Void>empty();
                                         }
                                         // 异步触发工具解析，不阻塞文本流与回合结束
+                                        // 优化：添加并发限制和去重，避免同时发起过多工具调用
+                                        String orchestrationKey = session.getSessionId() + ":" + total;
+                                        
+                                        // 防重复调用检查
+                                        if (activeToolCalls.putIfAbsent(orchestrationKey, true) != null) {
+                                            log.debug("跳过重复的工具调用: 批次标识={}", orchestrationKey);
+                                            return Mono.<Void>empty();
+                                        }
+                                        
                                         orchestratorCfgMono
-                                            .flatMap(cfg2 -> orchestrateIncrementalTextToSettings(session, strategyAdapter, cfg2[0], cfg2[1], cfg2[2], cfg2[3], delta, isFinalRound)
-                                                .timeout(java.time.Duration.ofMinutes(3))
-                                                .onErrorResume(err -> {
-                                                    emitErrorEvent(session.getSessionId(), "TOOL_STAGE_INC_ERROR", err.getMessage(), null, true);
-                                                    return Mono.<Void>empty();
-                                                })
-                                            )
+                                            .flatMap(cfg2 -> {
+                                                log.debug("触发增量工具解析: sessionId={} 文本长度={} 批次标识={}", 
+                                                    session.getSessionId(), delta.length(), orchestrationKey);
+                                                return orchestrateIncrementalTextToSettings(session, strategyAdapter, cfg2[0], cfg2[1], cfg2[2], cfg2[3], delta, isFinalRound);
+                                            })
+                                            .timeout(java.time.Duration.ofMinutes(3))
+                                            .onErrorResume(err -> {
+                                                emitErrorEvent(session.getSessionId(), "TOOL_STAGE_INC_ERROR", err.getMessage(), null, true);
+                                                return Mono.<Void>empty();
+                                            })
+                                            .doFinally(signalType -> {
+                                                // 完成后清理防重复调用标记
+                                                activeToolCalls.remove(orchestrationKey);
+                                                log.debug("清理工具调用标记: 批次标识={}", orchestrationKey);
+                                            })
                                             .subscribe();
 
                                         // 单调更新消费指针与时间戳
@@ -1580,7 +1320,7 @@ public class SettingGenerationService implements ISettingGenerationService {
         if (sink == null) {
             // 为修改操作或其他情况创建新的事件流
             log.info("Creating new event stream for session: {}", sessionId);
-            sink = Sinks.many().replay().limit(16);
+            sink = Sinks.many().replay().all();
             eventSinks.put(sessionId, sink);
         }
         
@@ -1622,7 +1362,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
     if (sink == null) {
         // 为修改操作创建新的事件流
         log.info("Creating new modification event stream for session: {}", sessionId);
-        sink = Sinks.many().replay().limit(16);
+        sink = Sinks.many().replay().all();
         eventSinks.put(sessionId, sink);
     }
     
@@ -1650,6 +1390,13 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
         synchronized (lock) {
             log.info("Starting node modification for session: {}", sessionId);
             
+            // 确保事件流提前创建，以便在任何阶段都能发送错误事件
+            if (!eventSinks.containsKey(sessionId)) {
+                log.info("Creating new event stream for modification on session: {}", sessionId);
+                Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().all();
+                eventSinks.put(sessionId, sink);
+            }
+            
             // 步骤 1: 优先从内存中获取会话
             return sessionManager.getSession(sessionId)
                 // 步骤 2: 如果内存中没有，则从历史记录创建
@@ -1657,20 +1404,53 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                     log.info("Session not found in memory for modifyNode. Creating from history: {}", sessionId);
                     return createSessionFromHistory(sessionId);
                 }))
+                // 步骤 2.5: 如果历史记录也不存在，发送错误事件并抛出异常
+                .onErrorResume(error -> {
+                    log.error("Failed to get or create session for modification: {}", sessionId, error);
+                    // 发送错误事件到事件流
+                    SettingGenerationEvent.GenerationErrorEvent errorEvent = 
+                        new SettingGenerationEvent.GenerationErrorEvent();
+                    errorEvent.setSessionId(sessionId);
+                    errorEvent.setNodeId(nodeId);
+                    errorEvent.setErrorCode("SESSION_NOT_FOUND");
+                    errorEvent.setErrorMessage("会话已过期或不存在，无法进行AI修改。请刷新页面重新生成设定。");
+                    errorEvent.setRecoverable(false);
+                    errorEvent.setTimestamp(LocalDateTime.now());
+                    emitEvent(sessionId, errorEvent);
+                    
+                    // 完成事件流
+                    Sinks.Many<SettingGenerationEvent> sink = eventSinks.get(sessionId);
+                    if (sink != null) {
+                        sink.tryEmitComplete();
+                    }
+                    
+                    return Mono.error(new IllegalArgumentException("会话已过期或不存在: " + sessionId + " - 原因: " + error.getMessage()));
+                })
                 .switchIfEmpty(Mono.error(new IllegalArgumentException("Session not found and could not be created from history: " + sessionId)))
                 .flatMap(session -> {
                     // 步骤 3: 查找要修改的节点
                     SettingNode nodeToModify = session.getGeneratedNodes().get(nodeId);
                     if (nodeToModify == null) {
                         log.error("Node not found in session '{}'. Available nodes: {}", sessionId, session.getGeneratedNodes().keySet());
+                        
+                        // 发送错误事件
+                        SettingGenerationEvent.GenerationErrorEvent errorEvent = 
+                            new SettingGenerationEvent.GenerationErrorEvent();
+                        errorEvent.setSessionId(sessionId);
+                        errorEvent.setNodeId(nodeId);
+                        errorEvent.setErrorCode("NODE_NOT_FOUND");
+                        errorEvent.setErrorMessage("节点不存在: " + nodeId);
+                        errorEvent.setRecoverable(false);
+                        errorEvent.setTimestamp(LocalDateTime.now());
+                        emitEvent(sessionId, errorEvent);
+                        
+                        // 完成事件流
+                        Sinks.Many<SettingGenerationEvent> sink = eventSinks.get(sessionId);
+                        if (sink != null) {
+                            sink.tryEmitComplete();
+                        }
+                        
                         return Mono.error(new IllegalArgumentException("Node not found: " + nodeId));
-                    }
-                    
-                    // 确保事件流存在
-                    if (!eventSinks.containsKey(sessionId)) {
-                        log.info("Creating new event stream for modification on session: {}", sessionId);
-                        Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().limit(16);
-                        eventSinks.put(sessionId, sink);
                     }
 
                     // 步骤 4: 记录scope到元数据，供下游提示词与校验使用
@@ -1680,24 +1460,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                         session.getMetadata().put("modificationScope", "self");
                     }
 
-                    // 步骤 5: 记录 scope
-                    if (scope != null && !scope.isBlank()) {
-                        session.getMetadata().put("modificationScope", scope);
-                    } else {
-                        session.getMetadata().put("modificationScope", "self");
-                    }
-
-                    // 步骤 6: 准备并异步执行修改（根据私有/公共模型分支）
-                    boolean usePublic = Boolean.TRUE.equals(isPublicModel);
-                    if (usePublic) {
-                        if (publicModelConfigId == null || publicModelConfigId.isBlank()) {
-                            emitErrorEvent(session.getSessionId(), "MODEL_CONFIG_ERROR", "缺少公共模型配置ID", nodeToModify.getId(), true);
-                            return Mono.error(new IllegalArgumentException("Missing publicModelConfigId for public model modification"));
-                        }
-                        session.getMetadata().put("modificationPublicModelConfigId", publicModelConfigId);
-                        return modifyNodeAsyncPublic(session, nodeToModify, modificationPrompt, publicModelConfigId);
-                    }
-
+                    // 步骤 5: 统一走常规修改逻辑（公共模型逻辑下沉至装饰器）
                     return modifyNodeAsync(session, nodeToModify, modificationPrompt, modelConfigId);
                 });
         }
@@ -1787,6 +1550,53 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
             .then();
     }
     
+    @Override
+    public Mono<List<String>> deleteNode(String sessionId, String nodeId) {
+        log.info("Deleting node {} from session {}", nodeId, sessionId);
+        
+        return sessionManager.getSession(sessionId)
+            .flatMap(session -> {
+                // 查找要删除的节点
+                SettingNode nodeToDelete = session.getGeneratedNodes().get(nodeId);
+                
+                if (nodeToDelete == null) {
+                    return Mono.error(new IllegalArgumentException("Node not found in session: " + nodeId));
+                }
+                
+                // 收集所有要删除的节点ID（包括子节点）
+                List<String> deletedNodeIds = new ArrayList<>();
+                collectNodeAndDescendants(nodeToDelete, session.getGeneratedNodes(), deletedNodeIds);
+                
+                // 从会话中删除节点及其子节点
+                return sessionManager.removeNodeFromSession(sessionId, nodeId)
+                    .flatMap(updatedSession -> {
+                        // 发送删除事件
+                        SettingGenerationEvent.NodeDeletedEvent deleteEvent = 
+                            new SettingGenerationEvent.NodeDeletedEvent(deletedNodeIds, "User requested node deletion");
+                        emitEvent(sessionId, deleteEvent);
+                        
+                        log.info("Successfully deleted node {} and {} descendants from session {}", 
+                            nodeId, deletedNodeIds.size() - 1, sessionId);
+                        
+                        return Mono.just(deletedNodeIds);
+                    });
+            })
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Session not found: " + sessionId)));
+    }
+    
+    /**
+     * 递归收集节点及其所有子节点的ID
+     */
+    private void collectNodeAndDescendants(SettingNode node, Map<String, SettingNode> allNodes, List<String> result) {
+        result.add(node.getId());
+        
+        // 查找并递归处理子节点
+        for (SettingNode potentialChild : allNodes.values()) {
+            if (node.getId().equals(potentialChild.getParentId())) {
+                collectNodeAndDescendants(potentialChild, allNodes, result);
+            }
+        }
+    }
 
     @Override
     public Mono<SaveResult> saveGeneratedSettings(String sessionId, String novelId) {
@@ -1950,8 +1760,8 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                 session.setFromExistingHistory(true);
                 session.setSourceHistoryId(historyId);
                 
-                // 创建事件流
-                Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().limit(16);
+                // 创建事件流（缓存所有事件，支持大量节点）
+                Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().all();
                 eventSinks.put(session.getSessionId(), sink);
                 
                 // 发送会话创建事件
@@ -2192,6 +2002,10 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                 // 执行工具调用循环（传入上下文ID，供工具执行时识别）
                 // 关键：将 toolContextId 透传到 AIServiceImpl 的 config 中
                 aiConfig.put("toolContextId", contextId);
+                aiConfig.put("requestType", com.ainovel.server.domain.model.AIFeatureType.SETTING_GENERATION_TOOL.name());
+                if (modelConfigId != null) {
+                    aiConfig.put("modelConfigId", modelConfigId);
+                }
                 return aiService.executeToolCallLoop(
                             messages,
                             toolSpecs,
@@ -2278,6 +2092,45 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
     }
 
     /**
+     * 🚀 获取当前请求的traceId，确保预扣费和费用调整使用同一个traceId
+     */
+    private String getOrCreateTraceId() {
+        try {
+            com.ainovel.server.domain.model.observability.LLMTrace currentTrace = traceContextManager.getTrace();
+            if (currentTrace != null && currentTrace.getTraceId() != null) {
+                String traceId = currentTrace.getTraceId();
+                log.debug("使用系统traceId: {}", traceId);
+                return traceId;
+            } else {
+                // 回退：如果无法获取系统traceId，生成新的
+                String traceId = java.util.UUID.randomUUID().toString();
+                log.warn("无法获取系统traceId，生成新的traceId: {}", traceId);
+                return traceId;
+            }
+        } catch (Exception e) {
+            // 回退：如果获取过程出错，生成新的
+            String traceId = java.util.UUID.randomUUID().toString();
+            log.warn("获取系统traceId时出错，生成新的traceId: {}, 错误: {}", traceId, e.getMessage());
+            return traceId;
+        }
+    }
+
+    /**
+     * 🚀 执行带预扣费的AI请求
+     * 直接使用preDeductCredits方法（已包含余额校验）
+     */
+    private reactor.core.publisher.Flux<String> executeAIRequestWithPrededuction(
+            com.ainovel.server.domain.model.AIRequest aiRequest,
+            com.ainovel.server.domain.model.PublicModelConfig publicModelConfig,
+            String apiKey,
+            String endpoint) {
+        // 已废弃：公共模型预扣费逻辑已下沉至 Billing 装饰器与 Trace 事件监听器
+        return reactor.core.publisher.Flux.error(new UnsupportedOperationException("executeAIRequestWithPrededuction is deprecated"));
+    }
+
+
+
+    /**
      * 异步修改节点（新版本 - 不删除原节点）
      */
     private Mono<Void> modifyNodeAsync(SettingGenerationSession session, SettingNode node,
@@ -2296,11 +2149,11 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                     
                     // 发送错误事件给前端
                     emitErrorEvent(
-                        session.getSessionId(), 
-                        "MODEL_CONFIG_ERROR", 
-                        "AI模型配置获取失败: " + error.getMessage(), 
-                        node.getId(), 
-                        true
+                        session.getSessionId(),
+                        "MODEL_CONFIG_ERROR",
+                        "AI模型配置获取失败: " + error.getMessage(),
+                        node.getId(),
+                        false // 基于错误码强制不可恢复，确保控制器不过滤并终止SSE流
                     );
                     
                     // 返回错误以终止流程
@@ -2335,9 +2188,6 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
 
                             // 构建更丰富的上下文
                             String parentPath = buildParentPath(node.getParentId(), session);
-                            String sessionOverview = session.getGeneratedNodes().values().stream()
-                                .map(n -> " - " + n.getName() + " (ID: " + n.getId() + ")")
-                                .collect(Collectors.joining("\n"));
 
                             // 构建修改提示词的上下文
                             Map<String, Object> promptContext = new HashMap<>();
@@ -2348,18 +2198,23 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                             promptContext.put("modificationPrompt", modificationPrompt);
                             promptContext.put("originalNode", node.getName() + ": " + node.getDescription());
                             promptContext.put("targetChanges", modificationPrompt);
-                            promptContext.put("context", sessionOverview);
                             promptContext.put("parentNode", parentPath);
                             // 🔧 关键修复：明确提供父节点ID给AI
                             promptContext.put("originalParentId", node.getParentId());
                             
-                            // 🔧 新增：构建当前会话中所有节点的映射信息（包括当前节点）
-                            StringBuilder availableParents = new StringBuilder();
+                            // 🔧 优化：构建包含描述的节点列表，帮助AI理解上下文
+                            StringBuilder availableNodes = new StringBuilder();
                             session.getGeneratedNodes().values().forEach(n -> {
-                                availableParents.append(String.format("- %s (ID: %s, 路径: %s)\n", 
-                                    n.getName(), n.getId(), buildParentPath(n.getId(), session)));
+                                String nodePath = buildParentPath(n.getId(), session);
+                                String description = n.getDescription();
+                                // 限制描述长度，避免提示词过长
+                                if (description != null && description.length() > 100) {
+                                    description = description.substring(0, 97) + "...";
+                                }
+                                availableNodes.append(String.format("- %s (ID: %s, 路径: %s)\n  描述: %s\n", 
+                                    n.getName(), n.getId(), nodePath, description != null ? description : "无"));
                             });
-                            promptContext.put("availableParents", availableParents.toString());
+                            promptContext.put("availableNodes", availableNodes.toString());
                             
                             // 🔧 新增：当前节点的信息（支持修改当前节点或创建子节点）
                             promptContext.put("currentNodeId", node.getId());
@@ -2406,10 +2261,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                                 - 任何超出scope的操作都视为无效，必须忽略
                                 
                                 ## 可用的节点列表（供参考）
-                                {{availableParents}}
-                                
-                                ## 当前会话结构
-                                {{context}}
+                                {{availableNodes}}
                                 
                                 ## 执行步骤
                                 1. **仔细分析**用户的修改要求：
@@ -2488,179 +2340,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                 });
     }
 
-    /**
-     * 异步修改节点 - 公共模型分支
-     * 复用工具编排AI调用与完成/错误事件发送逻辑，重点在于公共模型鉴权与计费标记注入。
-     */
-    private Mono<Void> modifyNodeAsyncPublic(SettingGenerationSession session, SettingNode node,
-                                            String modificationPrompt, String publicModelConfigId) {
-        String contextId = "modification-" + session.getSessionId() + "-" + node.getId();
-        log.info("🔄 [Public] 开始修改节点（保留原节点）: {} in session: {}, publicModelConfigId={}", node.getName(), session.getSessionId(), publicModelConfigId);
-
-        return publicModelConfigService.findById(publicModelConfigId)
-            .switchIfEmpty(Mono.error(new IllegalArgumentException("指定的公共模型配置不存在: " + publicModelConfigId)))
-            .flatMap(pub -> {
-                if (!Boolean.TRUE.equals(pub.getEnabled())) {
-                    return Mono.error(new IllegalArgumentException("该公共模型当前不可用"));
-                }
-                if (!pub.isEnabledForFeature(com.ainovel.server.domain.model.AIFeatureType.NOVEL_GENERATION)) {
-                    return Mono.error(new IllegalArgumentException("该公共模型不支持当前功能: NOVEL_GENERATION"));
-                }
-
-                Map<String, String> aiConfig = new HashMap<>();
-                // 透传身份信息，供AIRequest写入并被LLMTrace记录
-                if (session.getUserId() != null && !session.getUserId().isBlank()) aiConfig.put("userId", session.getUserId());
-                if (session.getSessionId() != null && !session.getSessionId().isBlank()) aiConfig.put("sessionId", session.getSessionId());
-                // 标记公共模型，用于计费归一化
-                aiConfig.put("isPublicModel", "true");
-                aiConfig.put("publicModelConfigId", publicModelConfigId);
-                aiConfig.put("provider", pub.getProvider());
-                aiConfig.put("modelId", pub.getModelId());
-
-                // 创建工具上下文
-                ToolExecutionService.ToolCallContext context = createToolContext(contextId);
-                registerModificationTools(context, session);
-
-                // 获取策略适配器（可选）
-                ConfigurableStrategyAdapter strategyAdapter = (ConfigurableStrategyAdapter) session.getMetadata().get("strategyAdapter");
-
-                List<ToolSpecification> toolSpecs = toolRegistry.getSpecificationsForContext(contextId);
-
-                // 构建提示上下文（与私有分支一致）
-                String parentPath = buildParentPath(node.getParentId(), session);
-                String sessionOverview = session.getGeneratedNodes().values().stream()
-                    .map(n -> " - " + n.getName() + " (ID: " + n.getId() + ")")
-                    .collect(Collectors.joining("\n"));
-
-                Map<String, Object> promptContext = new HashMap<>();
-                promptContext.put("nodeId", node.getId());
-                promptContext.put("nodeName", node.getName());
-                promptContext.put("nodeType", node.getType().toString());
-                promptContext.put("nodeDescription", node.getDescription());
-                promptContext.put("modificationPrompt", modificationPrompt);
-                promptContext.put("originalNode", node.getName() + ": " + node.getDescription());
-                promptContext.put("targetChanges", modificationPrompt);
-                promptContext.put("context", sessionOverview);
-                promptContext.put("parentNode", parentPath);
-                promptContext.put("originalParentId", node.getParentId());
-
-                StringBuilder availableParents = new StringBuilder();
-                session.getGeneratedNodes().values().forEach(n -> {
-                    availableParents.append(String.format("- %s (ID: %s, 路径: %s)\n",
-                        n.getName(), n.getId(), buildParentPath(n.getId(), session)));
-                });
-                promptContext.put("availableParents", availableParents.toString());
-                promptContext.put("currentNodeId", node.getId());
-                session.getMetadata().put("currentNodeIdForModification", node.getId());
-                String scopeValue = (String) session.getMetadata().getOrDefault("modificationScope", "self");
-                promptContext.put("scope", scopeValue);
-
-                List<ChatMessage> messages = new ArrayList<>();
-                String systemPromptWithScope = promptProvider.getDefaultSystemPrompt()
-                        + "\n\n" + getModificationToolUsageInstructions()
-                        + "\n\n" + buildScopeConstraintSystemBlock(scopeValue, node.getId(), node.getParentId());
-                messages.add(new SystemMessage(systemPromptWithScope));
-
-                String userPromptTemplate = """
-                                ## 修改任务
-                                **当前节点**: {{nodeName}}
-                                **节点ID**: {{currentNodeId}}
-                                **当前描述**: {{nodeDescription}}
-                                **修改要求**: {{modificationPrompt}}
-                                **节点路径**: {{parentNode}} -> {{nodeName}}
-                                
-                                ## 🚨 重要：修改规则
-                                根据用户的修改要求，你可以进行以下两种操作：
-                                
-                                ### 1. 修改当前节点本身
-                                - **如果**用户要求修改当前节点的内容、描述等
-                                - **必须**使用相同的节点ID: `{{currentNodeId}}`
-                                - **必须**保持相同的 parentId: `{{originalParentId}}`
-                                - 工具调用示例：`create_setting_node(id="{{currentNodeId}}", parentId="{{originalParentId}}", ...)`
-                                
-                                ### 2. 为当前节点创建子节点
-                                - **如果**用户要求"以此设定为父节点"、"完善设定"、"创建子设定"等
-                                - **必须**将新子节点的 parentId 设置为: `{{currentNodeId}}`
-                                - 工具调用示例：`create_setting_node(parentId="{{currentNodeId}}", ...)`
-                                
-                                ## 🔒 修改范围(scope) 约束（必须严格遵守）
-                                - scope=`self`：仅允许修改当前节点本身；禁止创建或修改任何其他节点
-                                - scope=`children_only`：仅允许为当前节点创建或修改子节点；禁止修改当前节点本身
-                                - scope=`self_and_children`：可同时修改当前节点并创建/修改其子节点
-                                - 任何超出scope的操作都视为无效，必须忽略
-                                
-                                ## 可用的节点列表（供参考）
-                                {{availableParents}}
-                                
-                                ## 当前会话结构
-                                {{context}}
-                                
-                                ## 执行步骤
-                                1. **仔细分析**用户的修改要求：
-                                   - 是要修改当前节点？→ 使用相同ID `{{currentNodeId}}`
-                                   - 是要为当前节点创建子节点？→ 设置 parentId=`{{currentNodeId}}`
-                                
-                                2. **使用工具创建**：
-                                   - 使用 `create_setting_node` 或 `create_setting_nodes` 工具
-                                   - **严格按照上述规则设置 ID 和 parentId**
-                                
-                                3. **完成后** 将自动结束本次修改，无需额外调用完成标记
-                                
-                                ## ⚠️ 关键提醒
-                                - **修改当前节点**: id=`{{currentNodeId}}`, parentId=`{{originalParentId}}`
-                                - **创建子节点**: parentId=`{{currentNodeId}}`（id自动生成新的UUID）
-                                - **绝不能**随意更改节点的层级关系！
-                                """;
-                messages.add(new UserMessage(
-                    promptProvider.renderPrompt(userPromptTemplate, promptContext).block()
-                ));
-
-                // 计费标记与提供商信息
-                aiConfig.put("isPublicModel", "true");
-                aiConfig.put("publicModelConfigId", publicModelConfigId);
-                aiConfig.put("provider", pub.getProvider());
-                aiConfig.put("modelId", pub.getModelId());
-
-                // 将工具上下文ID透传
-                aiConfig.put("toolContextId", contextId);
-
-                // 获取公共模型的解密API Key
-                Mono<String> apiKeyMono = publicModelConfigService
-                    .getActiveDecryptedApiKey(pub.getProvider(), pub.getModelId())
-                    .switchIfEmpty(Mono.error(new IllegalArgumentException("公共模型API密钥不可用")));
-
-                return apiKeyMono.flatMap(apiKey -> aiService.executeToolCallLoop(
-                            messages,
-                            toolSpecs,
-                            pub.getModelId(),
-                            apiKey,
-                            pub.getApiEndpoint(),
-                            aiConfig,
-                            1
-                        )
-                ).onErrorResume(toolError -> {
-                    log.error("[Public] Failed to execute tool loop for session: {}, node: {}, error: {}",
-                        session.getSessionId(), node.getId(), toolError.getMessage());
-                    emitErrorEvent(session.getSessionId(), "MODIFICATION_FAILED", "节点修改失败: " + toolError.getMessage(), node.getId(), true);
-                    return Mono.error(toolError);
-                }).then(Mono.fromRunnable(() -> {
-                    log.info("[Public] Auto-completing modification for session {}", session.getSessionId());
-                    SettingGenerationEvent.GenerationCompletedEvent event = 
-                        new SettingGenerationEvent.GenerationCompletedEvent(
-                            session.getGeneratedNodes().size(),
-                            java.time.Duration.between(session.getCreatedAt(), LocalDateTime.now()).toMillis(),
-                            "MODIFICATION_SUCCESS"
-                        );
-                    emitEvent(session.getSessionId(), event);
-                    Sinks.Many<SettingGenerationEvent> sink = eventSinks.get(session.getSessionId());
-                    if (sink != null) sink.tryEmitComplete();
-                })).doFinally(signalType -> {
-                    log.debug("[Public] Cleaning up modification tool context for session: {}, node: {}, signal: {}", 
-                        session.getSessionId(), node.getId(), signalType);
-                    try { context.close(); } catch (Exception e) { log.warn("Failed to close modification tool context (public) for session: {}, node: {}", session.getSessionId(), node.getId(), e); }
-                }).subscribeOn(Schedulers.boundedElastic()).then();
-            });
-    }
+    // 已移除公共模型分支：modifyNodeAsyncPublic
     
     /**
      * 创建工具调用上下文
@@ -3013,6 +2693,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
             log.info("markGenerationComplete skipped (already completing/completed): {}", sessionId);
             return;
         }
+        // ⚠️ 必须订阅，否则Mono链不会执行，导致complete事件永远不会发送
         sessionManager.updateSessionStatus(sessionId, SettingGenerationSession.SessionStatus.COMPLETED)
             .flatMap(session -> {
                 try {
@@ -3020,6 +2701,7 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                     session.getMetadata().put("streamFinalized", Boolean.TRUE);
                     sessionManager.saveSession(session).subscribe();
                 } catch (Exception ignore) {}
+                
                 SettingGenerationEvent.GenerationCompletedEvent event =
                     new SettingGenerationEvent.GenerationCompletedEvent(
                         session.getGeneratedNodes().size(),
@@ -3055,6 +2737,9 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                             session.getMetadata().put("autoSavedHistoryId", result.getHistoryId());
                             sessionManager.saveSession(session).subscribe();
                             log.info("Auto-created history {} for session {} on generation complete", result.getHistoryId(), sessionId);
+                            
+                            // 🎁 生成成功完成后，给策略作者奖励积分
+                            handleStrategyUsageReward(session.getPromptTemplateId(), session.getUserId()).subscribe();
                         } catch (Exception e) {
                             log.warn("Failed to record autoSavedHistoryId for session {}: {}", sessionId, e.getMessage());
                         }
@@ -3397,7 +3082,8 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
                                     "publicModelId", finalChosen.getModelId()
                                 )))
                                 .build();
-                            return aiService.generateContent(req, apiKey, finalChosen.getApiEndpoint())
+                            return aiService.createProviderByConfigId(session.getUserId(), finalChosen.getId())
+                                .generateContent(req)
                                 .map(resp -> resp != null ? resp.getContent() : null);
                         });
                 })
@@ -3494,5 +3180,1511 @@ public Flux<SettingGenerationEvent> getModificationEventStream(String sessionId)
         }
         // 回退：若无法解析结果，则返回输入节点数作为估算
         return nodes.size();
+    }
+    
+    // ==================== 📚 知识库集成功能 ====================
+    
+    /**
+     * 启动支持知识库集成的设定生成
+     * 
+     * @param userId 用户ID
+     * @param novelId 小说ID
+     * @param initialPrompt 用户提示词
+     * @param promptTemplateId 提示词模板ID
+     * @param modelConfigId 模型配置ID
+     * @param usePublicTextModel 是否使用公共文本模型
+     * @param knowledgeBaseMode 知识库模式 (NONE/REUSE/IMITATION/HYBRID)
+     * @param knowledgeBaseIds 知识库ID列表
+     * @param knowledgeBaseCategories 知识库分类映射
+     * @return 会话Mono
+     */
+    public Mono<SettingGenerationSession> startGenerationWithKnowledgeBase(
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            Boolean usePublicTextModel,
+            String knowledgeBaseMode,
+            List<String> knowledgeBaseIds,
+            Map<String, List<String>> knowledgeBaseCategories) {
+        
+        // 如果没有指定知识库模式或为NONE，使用默认流程
+        if (knowledgeBaseMode == null || "NONE".equalsIgnoreCase(knowledgeBaseMode) || 
+            knowledgeBaseIds == null || knowledgeBaseIds.isEmpty()) {
+            log.info("[KB-Integration] No knowledge base mode specified, using default flow");
+            return startGenerationHybrid(userId, novelId, initialPrompt, promptTemplateId, 
+                                       modelConfigId, null, usePublicTextModel);
+        }
+        
+        log.info("[KB-Integration] Starting generation with mode: {}, KBs: {}", 
+                knowledgeBaseMode, knowledgeBaseIds);
+        
+        // 根据模式分发处理
+        switch (knowledgeBaseMode.toUpperCase()) {
+            case "REUSE":
+                return handleReuseMode(userId, novelId, initialPrompt, promptTemplateId, 
+                                     modelConfigId, knowledgeBaseIds, knowledgeBaseCategories);
+            case "IMITATION":
+                return handleImitationMode(userId, novelId, initialPrompt, promptTemplateId, 
+                                          modelConfigId, usePublicTextModel, knowledgeBaseIds, 
+                                          knowledgeBaseCategories);
+            case "HYBRID":
+                return handleHybridMode(userId, novelId, initialPrompt, promptTemplateId, 
+                                      modelConfigId, usePublicTextModel, knowledgeBaseIds, 
+                                      knowledgeBaseCategories);
+            default:
+                log.warn("[KB-Integration] Unknown mode: {}, falling back to default", knowledgeBaseMode);
+                return startGenerationHybrid(userId, novelId, initialPrompt, promptTemplateId, 
+                                           modelConfigId, null, usePublicTextModel);
+        }
+    }
+    
+    /**
+     * 模式1：复用知识库设定
+     * 直接从知识库复制设定，不调用LLM
+     */
+    private Mono<SettingGenerationSession> handleReuseMode(
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            List<String> knowledgeBaseIds,
+            Map<String, List<String>> knowledgeBaseCategories) {
+        
+        log.info("[KB-Reuse] Starting reuse mode for KBs: {}", knowledgeBaseIds);
+        
+        // 获取第一个知识库（复用模式通常只选一个）
+        String kbId = knowledgeBaseIds.get(0);
+        
+        return knowledgeBaseRepository.findById(kbId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Knowledge base not found: " + kbId)))
+            .flatMap(kb -> {
+                // 根据用户选择的分类过滤设定
+                List<NovelSettingItem> filteredSettings = filterSettingsByCategories(kb, knowledgeBaseCategories);
+                
+                if (filteredSettings.isEmpty()) {
+                    return Mono.error(new IllegalArgumentException("No settings found in selected categories"));
+                }
+                
+                log.info("[KB-Reuse] Filtered {} settings from KB: {}", filteredSettings.size(), kb.getTitle());
+                
+                // 获取提示词模板（需要策略适配器）
+                return promptTemplateRepository.findById(promptTemplateId)
+                    .switchIfEmpty(Mono.error(new IllegalArgumentException("Prompt template not found: " + promptTemplateId)))
+                    .flatMap(template -> {
+                        return strategyFactory.createConfigurableStrategy(template)
+                            .map(Mono::just)
+                            .orElse(Mono.error(new IllegalArgumentException("Cannot create strategy from template")))
+                            .flatMap(strategyAdapter -> {
+                                // 创建会话
+                                return sessionManager.createSession(userId, novelId, initialPrompt, 
+                                                                   strategyAdapter.getStrategyId(), promptTemplateId)
+                                    .flatMap(session -> {
+                                        // 创建事件流（缓存所有事件，支持大量节点）
+                                        Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().all();
+                                        eventSinks.put(session.getSessionId(), sink);
+                                        
+                                        // 发送开始事件
+                                        emitEvent(session.getSessionId(), new SettingGenerationEvent.SessionStartedEvent(
+                                            initialPrompt, strategyAdapter.getStrategyId()
+                                        ));
+                                        
+                                        // 存储知识库信息到元数据
+                                        session.getMetadata().put("knowledgeBaseMode", "REUSE");
+                                        session.getMetadata().put("sourceKnowledgeBaseId", kbId);
+                                        session.getMetadata().put("sourceKnowledgeBaseTitle", kb.getTitle());
+                                        session.getMetadata().put("modelConfigId", modelConfigId);
+                                        
+                                        // 将知识库设定转换为节点并添加到会话
+                                        List<SettingNode> nodes = convertSettingsToNodes(filteredSettings);
+                                        
+                                        return Flux.fromIterable(nodes)
+                                            .flatMap(node -> sessionManager.addNodeToSession(session.getSessionId(), node)
+                                                .doOnSuccess(s -> emitNodeCreatedEvent(session.getSessionId(), node, session)))
+                                            .then(sessionManager.updateSessionStatus(session.getSessionId(), 
+                                                                                   SettingGenerationSession.SessionStatus.COMPLETED))
+                                            .then(Mono.fromRunnable(() -> {
+                                                // 发送完成事件
+                                                SettingGenerationEvent.GenerationCompletedEvent completedEvent = 
+                                                    new SettingGenerationEvent.GenerationCompletedEvent();
+                                                completedEvent.setSessionId(session.getSessionId());
+                                                completedEvent.setStatus("已成功复用知识库设定：" + kb.getTitle() + 
+                                                                        "，共 " + nodes.size() + " 个设定项");
+                                                completedEvent.setTimestamp(LocalDateTime.now());
+                                                completedEvent.setTotalNodesGenerated(nodes.size());
+                                                emitEvent(session.getSessionId(), completedEvent);
+                                            }))
+                                            .thenReturn(session);
+                                    });
+                            });
+                    });
+            });
+    }
+    
+    /**
+     * 模式2：设定仿写
+     * 使用知识库设定作为参考，拼接到提示词中让AI仿写
+     */
+    private Mono<SettingGenerationSession> handleImitationMode(
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            Boolean usePublicTextModel,
+            List<String> knowledgeBaseIds,
+            Map<String, List<String>> knowledgeBaseCategories) {
+        
+        log.info("[KB-Imitation] Starting imitation mode for KBs: {}", knowledgeBaseIds);
+        
+        // 获取所有选中的知识库设定作为参考
+        return fetchKnowledgeBaseSettings(knowledgeBaseIds, knowledgeBaseCategories)
+            .flatMap(referenceSettings -> {
+                if (referenceSettings.isEmpty()) {
+                    log.warn("[KB-Imitation] No reference settings found, proceeding with original prompt");
+                    return startGenerationHybrid(userId, novelId, initialPrompt, promptTemplateId, 
+                                               modelConfigId, null, usePublicTextModel);
+                }
+                
+                // 构建增强的提示词（在用户输入前添加参考设定）
+                String enhancedPrompt = buildEnhancedPromptWithReferences(initialPrompt, referenceSettings);
+                
+                log.info("[KB-Imitation] Enhanced prompt with {} reference settings", referenceSettings.size());
+                
+                // 使用增强后的提示词调用正常生成流程
+                return startGenerationHybrid(userId, novelId, enhancedPrompt, promptTemplateId, 
+                                           modelConfigId, null, usePublicTextModel)
+                    .doOnSuccess(session -> {
+                        // 在会话元数据中标记知识库信息
+                        session.getMetadata().put("knowledgeBaseMode", "IMITATION");
+                        session.getMetadata().put("referenceKnowledgeBaseIds", knowledgeBaseIds);
+                        sessionManager.saveSession(session).subscribe();
+                    });
+            });
+    }
+    
+    /**
+     * 模式3：混合模式
+     * 复用部分设定，同时让AI生成新设定
+     */
+    /**
+     * 混合模式知识库集成（明确区分复用和参考）
+     */
+    @Override
+    public Mono<SettingGenerationSession> startGenerationWithKnowledgeBaseHybrid(
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            Boolean usePublicTextModel,
+            List<String> reuseKnowledgeBaseIds,
+            List<String> referenceKnowledgeBaseIds,
+            Map<String, List<String>> knowledgeBaseCategories) {
+        
+        log.info("[KB-Hybrid] 混合模式: 复用={}, 参考={}", reuseKnowledgeBaseIds, referenceKnowledgeBaseIds);
+        
+        return handleHybridModeWithSeparateLists(
+                userId, novelId, initialPrompt, promptTemplateId, modelConfigId,
+                usePublicTextModel, reuseKnowledgeBaseIds, referenceKnowledgeBaseIds,
+                knowledgeBaseCategories);
+    }
+    
+    private Mono<SettingGenerationSession> handleHybridMode(
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            Boolean usePublicTextModel,
+            List<String> knowledgeBaseIds,
+            Map<String, List<String>> knowledgeBaseCategories) {
+        
+        log.info("[KB-Hybrid] Starting hybrid mode for KBs: {}", knowledgeBaseIds);
+        
+        // 第一个知识库用于复用，其余用于参考
+        List<String> reuseKbIds = List.of(knowledgeBaseIds.get(0));
+        List<String> referenceKbIds = knowledgeBaseIds.size() > 1 
+            ? knowledgeBaseIds.subList(1, knowledgeBaseIds.size()) 
+            : new ArrayList<>();
+        
+        return handleHybridModeWithSeparateLists(
+                userId, novelId, initialPrompt, promptTemplateId, modelConfigId,
+                usePublicTextModel, reuseKbIds, referenceKbIds, knowledgeBaseCategories);
+    }
+    
+    /**
+     * 混合模式核心逻辑（接收明确分离的复用和参考列表）
+     */
+    private Mono<SettingGenerationSession> handleHybridModeWithSeparateLists(
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            Boolean usePublicTextModel,
+            List<String> reuseKbIds,
+            List<String> referenceKbIds,
+            Map<String, List<String>> knowledgeBaseCategories) {
+        
+        log.info("[KB-Hybrid-Core] 复用: {}, 参考: {}", reuseKbIds, referenceKbIds);
+        
+        // 获取要复用的设定（支持多个知识库）
+        Mono<List<NovelSettingItem>> reuseSettingsMono = reuseKbIds.isEmpty()
+            ? Mono.just(new ArrayList<>())
+            : fetchKnowledgeBaseSettings(reuseKbIds, knowledgeBaseCategories);
+        
+        // 获取参考设定（如果有）
+        Mono<List<NovelSettingItem>> referenceSettingsMono = (referenceKbIds == null || referenceKbIds.isEmpty())
+            ? Mono.just(new ArrayList<>())
+            : fetchKnowledgeBaseSettings(referenceKbIds, knowledgeBaseCategories);
+        
+        return Mono.zip(reuseSettingsMono, referenceSettingsMono)
+            .flatMap(tuple -> {
+                List<NovelSettingItem> reuseSettings = tuple.getT1();
+                List<NovelSettingItem> referenceSettings = tuple.getT2();
+                
+                log.info("[KB-Hybrid] 复用: {} 个设定, 参考: {} 个设定", 
+                        reuseSettings.size(), referenceSettings.size());
+                
+                // 构建增强的提示词（如果有参考设定）
+                String enhancedPrompt = referenceSettings.isEmpty()
+                    ? initialPrompt
+                    : buildEnhancedPromptWithReferences(initialPrompt, referenceSettings);
+                
+                // 先调用LLM生成新设定
+                return startGenerationHybrid(userId, novelId, enhancedPrompt, promptTemplateId, 
+                                           modelConfigId, null, usePublicTextModel)
+                    .flatMap(session -> {
+                        // 标记会话为混合模式
+                        session.getMetadata().put("knowledgeBaseMode", "HYBRID");
+                        session.getMetadata().put("reuseKnowledgeBaseIds", reuseKbIds);
+                        if (referenceKbIds != null && !referenceKbIds.isEmpty()) {
+                            session.getMetadata().put("referenceKnowledgeBaseIds", referenceKbIds);
+                        }
+                        
+                        // 如果有复用设定，等待LLM生成完成后添加
+                        if (!reuseSettings.isEmpty()) {
+                            return waitForGenerationComplete(session.getSessionId())
+                                .then(addReuseSettingsAsParentNodes(session, reuseSettings))
+                                .thenReturn(session);
+                        }
+                        
+                        return Mono.just(session);
+                    });
+            });
+    }
+    
+    /**
+     * 等待生成完成
+     */
+    private Mono<Void> waitForGenerationComplete(String sessionId) {
+        return Mono.delay(java.time.Duration.ofSeconds(1))
+            .flatMap(tick -> sessionManager.getSession(sessionId))
+            .flatMap(session -> {
+                if (session.getStatus() == SettingGenerationSession.SessionStatus.COMPLETED ||
+                    session.getStatus() == SettingGenerationSession.SessionStatus.ERROR) {
+                    return Mono.empty();
+                }
+                // 递归等待
+                return waitForGenerationComplete(sessionId);
+            })
+            .timeout(java.time.Duration.ofMinutes(5))
+            .onErrorResume(e -> {
+                log.warn("[KB-Hybrid] Wait timeout or error: {}", e.getMessage());
+                return Mono.empty();
+            });
+    }
+    
+    /**
+     * 将复用的设定添加为父节点
+     */
+    private Mono<Void> addReuseSettingsAsParentNodes(
+            SettingGenerationSession session,
+            List<NovelSettingItem> reuseSettings) {
+        
+        return Mono.fromRunnable(() -> {
+            log.info("[KB-Hybrid] Adding {} reused settings as parent nodes", reuseSettings.size());
+            
+            // 将复用的设定转换为节点
+            List<SettingNode> reuseNodes = convertSettingsToNodes(reuseSettings);
+            
+            // 将复用节点添加到会话的开头
+            for (SettingNode node : reuseNodes) {
+                // 使用addNode方法添加节点，会自动处理到generatedNodes和rootNodeIds
+                session.addNode(node);
+            }
+            
+            // 保存会话并发送事件
+            sessionManager.saveSession(session)
+                .doOnSuccess(s -> {
+                    for (SettingNode node : reuseNodes) {
+                        emitNodeCreatedEvent(session.getSessionId(), node, session);
+                    }
+                    
+                    // 发送特殊事件通知前端已添加复用设定
+                    SettingGenerationEvent.GenerationCompletedEvent event = 
+                        new SettingGenerationEvent.GenerationCompletedEvent();
+                    event.setSessionId(session.getSessionId());
+                    event.setStatus("已添加 " + reuseNodes.size() + " 个复用设定作为基础设定");
+                    event.setTimestamp(LocalDateTime.now());
+                    event.setTotalNodesGenerated(reuseNodes.size());
+                    emitEvent(session.getSessionId(), event);
+                })
+                .subscribe();
+        });
+    }
+    
+    /**
+     * 从多个知识库获取设定
+     */
+    private Mono<List<NovelSettingItem>> fetchKnowledgeBaseSettings(
+            List<String> knowledgeBaseIds,
+            Map<String, List<String>> categoriesMap) {
+        
+        return Flux.fromIterable(knowledgeBaseIds)
+            .flatMap(kbId -> knowledgeBaseRepository.findById(kbId)
+                .map(kb -> filterSettingsByCategories(kb, categoriesMap))
+                .onErrorResume(e -> {
+                    log.warn("[KB-Integration] Failed to fetch KB {}: {}", kbId, e.getMessage());
+                    return Mono.just(new ArrayList<NovelSettingItem>());
+                }))
+            .collectList()
+            .map(listOfLists -> listOfLists.stream()
+                .flatMap(List::stream)
+                .collect(Collectors.toList()));
+    }
+    
+    /**
+     * 根据分类过滤知识库设定
+     */
+    private List<NovelSettingItem> filterSettingsByCategories(
+            com.ainovel.server.domain.model.NovelKnowledgeBase kb,
+            Map<String, List<String>> categoriesMap) {
+        
+        List<String> selectedCategories = categoriesMap != null 
+            ? categoriesMap.get(kb.getId()) 
+            : null;
+        
+        // 如果没有指定分类，返回所有设定
+        if (selectedCategories == null || selectedCategories.isEmpty()) {
+            List<NovelSettingItem> allSettings = new ArrayList<>();
+            if (kb.getNarrativeStyleSettings() != null) allSettings.addAll(kb.getNarrativeStyleSettings());
+            if (kb.getCharacterPlotSettings() != null) allSettings.addAll(kb.getCharacterPlotSettings());
+            if (kb.getNovelFeatureSettings() != null) allSettings.addAll(kb.getNovelFeatureSettings());
+            if (kb.getHotMemesSettings() != null) allSettings.addAll(kb.getHotMemesSettings());
+            if (kb.getCustomSettings() != null) allSettings.addAll(kb.getCustomSettings());
+            if (kb.getReaderEmotionSettings() != null) allSettings.addAll(kb.getReaderEmotionSettings());
+            return allSettings;
+        }
+        
+        List<NovelSettingItem> filtered = new ArrayList<>();
+        
+        for (String category : selectedCategories) {
+            switch (category.toUpperCase()) {
+                case "NARRATIVE_STYLE":
+                case "WRITING_STYLE":
+                case "WORD_USAGE":
+                    if (kb.getNarrativeStyleSettings() != null) {
+                        filtered.addAll(kb.getNarrativeStyleSettings());
+                    }
+                    break;
+                case "CORE_CONFLICT":
+                case "SUSPENSE_DESIGN":
+                case "STORY_PACING":
+                case "CHARACTER_BUILDING":
+                    if (kb.getCharacterPlotSettings() != null) {
+                        filtered.addAll(kb.getCharacterPlotSettings());
+                    }
+                    break;
+                case "WORLDVIEW":
+                case "GOLDEN_FINGER":
+                    if (kb.getNovelFeatureSettings() != null) {
+                        filtered.addAll(kb.getNovelFeatureSettings());
+                    }
+                    break;
+                case "HOT_MEMES":
+                case "FUNNY_POINTS":
+                    if (kb.getHotMemesSettings() != null) {
+                        filtered.addAll(kb.getHotMemesSettings());
+                    }
+                    break;
+                case "RESONANCE":
+                case "PLEASURE_POINT":
+                case "EXCITEMENT_POINT":
+                    if (kb.getReaderEmotionSettings() != null) {
+                        filtered.addAll(kb.getReaderEmotionSettings());
+                    }
+                    break;
+                case "CUSTOM":
+                    if (kb.getCustomSettings() != null) {
+                        filtered.addAll(kb.getCustomSettings());
+                    }
+                    break;
+            }
+        }
+        
+        return filtered;
+    }
+    
+    /**
+     * 构建带参考的增强提示词
+     */
+    private String buildEnhancedPromptWithReferences(
+            String userPrompt,
+            List<NovelSettingItem> referenceSettings) {
+        
+        if (referenceSettings == null || referenceSettings.isEmpty()) {
+            return userPrompt;
+        }
+        
+        StringBuilder enhanced = new StringBuilder();
+        enhanced.append("===== 参考设定（请参考以下设定的风格和结构进行创作） =====\n\n");
+        
+        // 按类型分组显示参考设定
+        Map<String, List<NovelSettingItem>> groupedByType = referenceSettings.stream()
+            .collect(Collectors.groupingBy(setting -> 
+                setting.getType() != null ? setting.getType() : "OTHER"));
+        
+        for (Map.Entry<String, List<NovelSettingItem>> entry : groupedByType.entrySet()) {
+            enhanced.append("【").append(entry.getKey()).append("】\n");
+            for (NovelSettingItem setting : entry.getValue()) {
+                enhanced.append("  • ").append(setting.getName()).append("\n");
+                if (setting.getDescription() != null && !setting.getDescription().isBlank()) {
+                    String content = setting.getDescription();
+                    // 限制每个设定的长度，避免提示词过长
+                    if (content.length() > 200) {
+                        content = content.substring(0, 200) + "...";
+                    }
+                    enhanced.append("    ").append(content.replace("\n", "\n    ")).append("\n");
+                }
+                enhanced.append("\n");
+            }
+        }
+        
+        enhanced.append("===== 用户生成需求 =====\n\n");
+        enhanced.append(userPrompt);
+        enhanced.append("\n\n");
+        enhanced.append("注意：请参考以上设定的风格、深度和结构，生成符合用户需求的新设定。");
+        enhanced.append("不要直接复制参考设定，而是要创造性地结合参考风格和用户需求。");
+        
+        return enhanced.toString();
+    }
+    
+    /**
+     * 将设定列表转换为节点结构
+     */
+    private List<SettingNode> convertSettingsToNodes(List<NovelSettingItem> settings) {
+        if (settings == null || settings.isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        return settings.stream()
+            .map(setting -> {
+                SettingNode node = SettingNode.builder()
+                    .id(java.util.UUID.randomUUID().toString())
+                    .name(setting.getName())
+                    .type(SettingType.fromValue(setting.getType()))
+                    .description(setting.getDescription())
+                    .attributes(setting.getAttributes() != null 
+                        ? new HashMap<>(setting.getAttributes()) 
+                        : new HashMap<>())
+                    .children(new ArrayList<>())
+                    .generationStatus(SettingNode.GenerationStatus.COMPLETED)
+                    .build();
+                // 标记为来自知识库
+                node.getAttributes().put("fromKnowledgeBase", "true");
+                return node;
+            })
+            .collect(Collectors.toList());
+    }
+    
+    // ==================== 结构化输出循环模式 ====================
+    
+    /**
+     * 启动设定生成（结构化输出循环模式）
+     * 不使用工具调用，直接输出JSON，循环最多N次直到满足质量要求
+     * 
+     * @param userId 用户ID
+     * @param novelId 小说ID
+     * @param initialPrompt 用户提示词
+     * @param promptTemplateId 提示词模板ID
+     * @param modelConfigId 模型配置ID
+     * @param maxIterations 最大迭代次数
+     * @return 会话Mono
+     */
+    @Override
+    public Mono<SettingGenerationSession> startGenerationStructured(
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            Integer maxIterations) {
+        
+        return startGenerationStructuredWithKnowledgeBase(
+            userId, novelId, initialPrompt, promptTemplateId, modelConfigId, maxIterations,
+            null, null, null, null, null
+        );
+    }
+    
+    /**
+     * 启动设定生成（结构化输出循环模式 + 知识库集成）
+     */
+    @Override
+    public Mono<SettingGenerationSession> startGenerationStructuredWithKnowledgeBase(
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            Integer maxIterations,
+            String knowledgeBaseMode,
+            List<String> knowledgeBaseIds,
+            List<String> reuseKnowledgeBaseIds,
+            List<String> referenceKnowledgeBaseIds,
+            Map<String, List<String>> knowledgeBaseCategories) {
+        return startGenerationStructuredWithKnowledgeBase(null, userId, novelId, initialPrompt,
+                promptTemplateId, modelConfigId, maxIterations, knowledgeBaseMode, knowledgeBaseIds,
+                reuseKnowledgeBaseIds, referenceKnowledgeBaseIds, knowledgeBaseCategories);
+    }
+    
+    /**
+     * 🔧 新增：支持前端传入sessionId的重载方法
+     */
+    public Mono<SettingGenerationSession> startGenerationStructuredWithKnowledgeBase(
+            String sessionId,
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            Integer maxIterations,
+            String knowledgeBaseMode,
+            List<String> knowledgeBaseIds,
+            List<String> reuseKnowledgeBaseIds,
+            List<String> referenceKnowledgeBaseIds,
+            Map<String, List<String>> knowledgeBaseCategories) {
+        
+        int iterations = (maxIterations != null && maxIterations > 0) ? maxIterations : 3;
+        log.info("[StructuredOutput] 启动结构化输出循环生成: sessionId={}, userId={}, iterations={}, KB模式={}", 
+            sessionId, userId, iterations, knowledgeBaseMode);
+        log.info("[StructuredOutput] 知识库参数: knowledgeBaseIds={}, reuseKbIds={}, referenceKbIds={}, categories={}", 
+            knowledgeBaseIds != null ? knowledgeBaseIds.size() + "个" : "null",
+            reuseKnowledgeBaseIds != null ? reuseKnowledgeBaseIds.size() + "个" : "null",
+            referenceKnowledgeBaseIds != null ? referenceKnowledgeBaseIds.size() + "个" : "null",
+            knowledgeBaseCategories != null ? "已提供" : "null");
+        
+        // 如果没有知识库参数，直接使用原始提示词
+        if (knowledgeBaseMode == null || "NONE".equalsIgnoreCase(knowledgeBaseMode)) {
+            log.info("[StructuredOutput] 知识库模式为NONE，使用默认流程");
+            return startGenerationStructuredInternal(sessionId, userId, novelId, initialPrompt, 
+                promptTemplateId, modelConfigId, iterations);
+        }
+        
+        // REUSE模式：直接将知识库设定转换为设定树，不调用LLM
+        if ("REUSE".equalsIgnoreCase(knowledgeBaseMode)) {
+            log.info("[StructuredOutput-Reuse] 直接复用知识库设定，不调用LLM");
+            
+            return fetchKnowledgeBaseSettings(knowledgeBaseIds, knowledgeBaseCategories)
+                .flatMap(reuseSettings -> {
+                    if (reuseSettings.isEmpty()) {
+                        return Mono.error(new IllegalArgumentException("No settings found in selected categories"));
+                    }
+                    
+                    log.info("[StructuredOutput-Reuse] 复用 {} 个设定", reuseSettings.size());
+                    
+                    // 获取提示词模板（需要策略信息）
+                    return promptTemplateRepository.findById(promptTemplateId)
+                        .switchIfEmpty(Mono.error(new IllegalArgumentException("Prompt template not found: " + promptTemplateId)))
+                        .flatMap(template -> {
+                            String strategyName = (template.getSettingGenerationConfig() != null && 
+                                                  template.getSettingGenerationConfig().getStrategyName() != null) 
+                                                  ? template.getSettingGenerationConfig().getStrategyName() 
+                                                  : template.getName();
+                            
+                            // 创建会话
+                            return sessionManager.createSession(userId, novelId, initialPrompt, 
+                                                              strategyName, promptTemplateId)
+                                .flatMap(session -> {
+                                    // 标记会话元数据
+                                    session.setStatus(SettingGenerationSession.SessionStatus.GENERATING);
+                                    if (session.getMetadata() == null) {
+                                        session.setMetadata(new java.util.concurrent.ConcurrentHashMap<>());
+                                    }
+                                    session.getMetadata().put("knowledgeBaseMode", "REUSE");
+                                    session.getMetadata().put("knowledgeBaseIds", knowledgeBaseIds);
+                                    session.getMetadata().put("mode", "STRUCTURED_OUTPUT");
+                                    
+                                    // 将知识库设定转换为节点并添加到会话
+                                    List<SettingNode> reuseNodes = convertSettingsToNodes(reuseSettings);
+                                    
+                                    for (SettingNode node : reuseNodes) {
+                                        session.addNode(node);
+                                    }
+                                    
+                                    // 标记会话完成
+                                    session.setStatus(SettingGenerationSession.SessionStatus.COMPLETED);
+                                    
+                                    log.info("[StructuredOutput-Reuse] 成功复用 {} 个设定节点", reuseNodes.size());
+                                    
+                                    // 创建事件流sink并发送事件（缓存所有事件，支持大量节点）
+                                    Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().all();
+                                    eventSinks.put(session.getSessionId(), sink);
+                                    
+                                    // 发送节点创建事件
+                                    for (SettingNode node : reuseNodes) {
+                                        emitNodeCreatedEvent(session.getSessionId(), node, session);
+                                    }
+                                    
+                                    // 保存会话
+                                    return sessionManager.saveSession(session)
+                                        .doOnSuccess(s -> {
+                                            // 发送完成事件并创建历史记录
+                                            markGenerationComplete(session.getSessionId(), 
+                                                "已复用 " + reuseNodes.size() + " 个知识库设定");
+                                        })
+                                        .thenReturn(session);
+                                });
+                        });
+                });
+        }
+        
+        // IMITATION模式：获取参考设定并增强提示词
+        if ("IMITATION".equalsIgnoreCase(knowledgeBaseMode)) {
+            log.info("[StructuredOutput-Imitation] 获取知识库参考设定");
+            
+            return fetchKnowledgeBaseSettings(knowledgeBaseIds, knowledgeBaseCategories)
+                .flatMap(referenceSettings -> {
+                    if (referenceSettings.isEmpty()) {
+                        log.warn("[StructuredOutput-Imitation] No reference settings found, proceeding with original prompt");
+                        return startGenerationStructuredInternal(sessionId, userId, novelId, initialPrompt, 
+                            promptTemplateId, modelConfigId, iterations);
+                    }
+                    
+                    // 构建增强的提示词
+                    String enhancedPrompt = buildEnhancedPromptWithReferences(initialPrompt, referenceSettings);
+                    
+                    log.info("[StructuredOutput-Imitation] Enhanced prompt with {} reference settings", referenceSettings.size());
+                    
+                    // 使用增强后的提示词调用结构化输出流程
+                    return startGenerationStructuredInternal(sessionId, userId, novelId, enhancedPrompt, 
+                        promptTemplateId, modelConfigId, iterations)
+                        .doOnSuccess(session -> {
+                            session.getMetadata().put("knowledgeBaseMode", "IMITATION");
+                            session.getMetadata().put("knowledgeBaseIds", knowledgeBaseIds);
+                            sessionManager.saveSession(session).subscribe();
+                        });
+                });
+        }
+        
+        // HYBRID模式：先添加复用设定（并发送事件），再生成新设定
+        if ("HYBRID".equalsIgnoreCase(knowledgeBaseMode)) {
+            log.info("[StructuredOutput-Hybrid] 混合模式：先推送复用节点，再启动AI生成");
+            
+            // ✅ 使用显式传递的分组参数
+            if (reuseKnowledgeBaseIds == null || reuseKnowledgeBaseIds.isEmpty()) {
+                return Mono.error(new IllegalArgumentException("HYBRID模式必须提供reuseKnowledgeBaseIds"));
+            }
+            
+            log.info("[StructuredOutput-Hybrid] 复用知识库: {}, 参考知识库: {}", 
+                reuseKnowledgeBaseIds, referenceKnowledgeBaseIds);
+            
+            // 获取要复用的设定
+            Mono<List<NovelSettingItem>> reuseSettingsMono = fetchKnowledgeBaseSettings(
+                reuseKnowledgeBaseIds, knowledgeBaseCategories);
+            
+            // 获取参考设定（如果有）
+            Mono<List<NovelSettingItem>> referenceSettingsMono = 
+                (referenceKnowledgeBaseIds == null || referenceKnowledgeBaseIds.isEmpty())
+                ? Mono.just(new ArrayList<>())
+                : fetchKnowledgeBaseSettings(referenceKnowledgeBaseIds, knowledgeBaseCategories);
+            
+            return Mono.zip(reuseSettingsMono, referenceSettingsMono, 
+                          promptTemplateRepository.findById(promptTemplateId))
+                .flatMap(tuple -> {
+                    List<NovelSettingItem> reuseSettings = tuple.getT1();
+                    List<NovelSettingItem> referenceSettings = tuple.getT2();
+                    com.ainovel.server.domain.model.EnhancedUserPromptTemplate template = tuple.getT3();
+                    
+                    log.info("[StructuredOutput-Hybrid] 复用: {} 个设定, 参考: {} 个设定", 
+                            reuseSettings.size(), referenceSettings.size());
+                    
+                    // 构建增强的提示词（如果有参考设定）
+                    String enhancedPrompt = referenceSettings.isEmpty()
+                        ? initialPrompt
+                        : buildEnhancedPromptWithReferences(initialPrompt, referenceSettings);
+                    
+                    // 获取策略名称
+                    String strategyName = (template.getSettingGenerationConfig() != null && 
+                                          template.getSettingGenerationConfig().getStrategyName() != null) 
+                                          ? template.getSettingGenerationConfig().getStrategyName() 
+                                          : template.getName();
+                    
+                    // 1️⃣ 先创建session
+                    return sessionManager.createSession(userId, novelId, enhancedPrompt, 
+                                                      strategyName, promptTemplateId)
+                        .flatMap(session -> {
+                            // 设置会话元数据
+                            session.setStatus(SettingGenerationSession.SessionStatus.GENERATING);
+                            if (session.getMetadata() == null) {
+                                session.setMetadata(new java.util.concurrent.ConcurrentHashMap<>());
+                            }
+                            session.getMetadata().put("knowledgeBaseMode", "HYBRID");
+                            session.getMetadata().put("reuseKnowledgeBaseIds", reuseKnowledgeBaseIds);
+                            if (referenceKnowledgeBaseIds != null && !referenceKnowledgeBaseIds.isEmpty()) {
+                                session.getMetadata().put("referenceKnowledgeBaseIds", referenceKnowledgeBaseIds);
+                            }
+                            session.getMetadata().put("modelConfigId", modelConfigId);
+                            session.getMetadata().put("mode", "STRUCTURED_OUTPUT");
+                            session.getMetadata().put("maxIterations", iterations);
+                            
+                            // 2️⃣ 创建事件流sink（缓存所有事件）
+                            Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().all();
+                            eventSinks.put(session.getSessionId(), sink);
+                            
+                            // 3️⃣ 添加复用节点并发送事件
+                            if (!reuseSettings.isEmpty()) {
+                                log.info("[StructuredOutput-Hybrid] ✅ 添加 {} 个复用设定并推送到前端", 
+                                    reuseSettings.size());
+                                
+                                List<SettingNode> reuseNodes = convertSettingsToNodes(reuseSettings);
+                                for (SettingNode node : reuseNodes) {
+                                    session.addNode(node);
+                                    // 🎯 关键：发送NodeCreatedEvent到前端
+                                    emitNodeCreatedEvent(session.getSessionId(), node, session);
+                                }
+                                
+                                log.info("[StructuredOutput-Hybrid] ✅ 复用节点事件已推送，现在启动AI生成");
+                            }
+                            
+                            // 4️⃣ 启动AI生成（异步）
+                            return Mono.justOrEmpty(strategyFactory.createConfigurableStrategy(template))
+                                .switchIfEmpty(Mono.error(new IllegalArgumentException("Cannot create strategy")))
+                                .flatMap(strategyAdapter -> 
+                                    novelAIService.getAIModelProviderByConfigId(userId, modelConfigId)
+                                        .flatMap(provider -> {
+                                            // 在后台异步执行生成
+                                            executeStructuredOutputLoop(
+                                                session, template, strategyAdapter, provider, iterations
+                                            )
+                                            .doOnError(error -> {
+                                                log.error("[StructuredOutput-Hybrid] 生成失败: {}", error.getMessage(), error);
+                                                emitErrorEvent(session.getSessionId(), "GENERATION_ERROR", 
+                                                    error.getMessage(), null, false);
+                                            })
+                                            .subscribe();  // 后台异步执行
+                                            
+                                            // 5️⃣ 立即返回session，让Controller订阅事件流
+                                            return Mono.just(session);
+                                        })
+                                );
+                        });
+                });
+        }
+        
+        // 未知模式，降级为无知识库
+        log.warn("[StructuredOutput] Unknown KB mode: {}, falling back to no KB", knowledgeBaseMode);
+        return startGenerationStructuredInternal(sessionId, userId, novelId, initialPrompt, 
+            promptTemplateId, modelConfigId, iterations);
+    }
+    
+    /**
+     * 内部方法：实际执行结构化输出生成
+     */
+    private Mono<SettingGenerationSession> startGenerationStructuredInternal(
+            String sessionId,
+            String userId,
+            String novelId,
+            String initialPrompt,
+            String promptTemplateId,
+            String modelConfigId,
+            int iterations) {
+        
+        log.info("[StructuredOutput] 开始执行结构化输出生成: sessionId={}, userId={}, iterations={}", sessionId, userId, iterations);
+        
+        // 1. 获取模板和策略
+        return promptTemplateRepository.findById(promptTemplateId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Prompt template not found: " + promptTemplateId)))
+            .flatMap(template -> {
+                // 2. 创建策略适配器
+                return Mono.justOrEmpty(strategyFactory.createConfigurableStrategy(template))
+                    .switchIfEmpty(Mono.error(new IllegalArgumentException("Cannot create strategy from template: " + promptTemplateId)))
+                    .flatMap(strategyAdapter -> {
+                        // 3. 创建会话（使用前端提供的sessionId，如果有的话）
+                        // 从settingGenerationConfig中获取策略名称，如果没有则使用模板名称
+                        String strategyName = (template.getSettingGenerationConfig() != null && 
+                                              template.getSettingGenerationConfig().getStrategyName() != null) 
+                                              ? template.getSettingGenerationConfig().getStrategyName() 
+                                              : template.getName();
+                        return sessionManager.createSession(sessionId, userId, novelId, initialPrompt, 
+                                                          strategyName, promptTemplateId)
+                            .flatMap(session -> {
+                                // 设置会话元数据
+                                session.setStatus(SettingGenerationSession.SessionStatus.GENERATING);
+                                if (session.getMetadata() == null) {
+                                    session.setMetadata(new java.util.concurrent.ConcurrentHashMap<>());
+                                }
+                                session.getMetadata().put("modelConfigId", modelConfigId);
+                                session.getMetadata().put("mode", "STRUCTURED_OUTPUT");
+                                session.getMetadata().put("maxIterations", iterations);
+                                
+                                // 4. 创建事件流sink（必须在生成开始前创建，缓存所有事件）
+                                Sinks.Many<SettingGenerationEvent> sink = Sinks.many().replay().all();
+                                eventSinks.put(session.getSessionId(), sink);
+                                
+                                // 5. 获取AI模型提供商并在后台异步执行生成
+                                novelAIService.getAIModelProviderByConfigId(userId, modelConfigId)
+                                    .flatMap(provider -> {
+                                        // 启动结构化输出循环（异步执行）
+                                        return executeStructuredOutputLoop(
+                                            session, 
+                                            template, 
+                                            strategyAdapter, 
+                                            provider, 
+                                            iterations
+                                        );
+                                    })
+                                    .doOnError(error -> {
+                                        log.error("[StructuredOutput] 生成失败: {}", error.getMessage(), error);
+                                        emitErrorEvent(session.getSessionId(), "GENERATION_ERROR", 
+                                            error.getMessage(), null, false);
+                                    })
+                                    .subscribe();  // 后台异步执行，不阻塞返回
+                                
+                                // 6. 立即返回session，让Controller订阅事件流
+                                return Mono.just(session);
+                            });
+                    });
+            });
+    }
+    
+    /**
+     * 执行结构化输出循环逻辑（多轮增量生成）
+     * 每轮都基于前面轮次生成的节点继续扩展
+     */
+    private Mono<Void> executeStructuredOutputLoop(
+            SettingGenerationSession session,
+            com.ainovel.server.domain.model.EnhancedUserPromptTemplate template,
+            ConfigurableStrategyAdapter strategyAdapter,
+            com.ainovel.server.service.ai.AIModelProvider provider,
+            int maxIterations) {
+        
+        log.info("[StructuredOutput] 开始多轮增量生成，共{}轮", maxIterations);
+        
+        return executeStructuredRound(
+            session, template, strategyAdapter, provider, 
+            1, maxIterations
+        );
+    }
+    
+    /**
+     * 执行单轮结构化输出生成（增量模式）
+     */
+    private Mono<Void> executeStructuredRound(
+            SettingGenerationSession session,
+            com.ainovel.server.domain.model.EnhancedUserPromptTemplate template,
+            ConfigurableStrategyAdapter strategyAdapter,
+            com.ainovel.server.service.ai.AIModelProvider provider,
+            int currentRound,
+            int totalRounds) {
+        
+        log.info("[StructuredOutput] 📝 开始第 {}/{} 轮生成", currentRound, totalRounds);
+        
+        // 获取当前已生成的节点列表（用于下一轮参考）
+        Map<String, SettingNode> existingNodes = session.getGeneratedNodes();
+        int existingCount = existingNodes != null ? existingNodes.size() : 0;
+        
+        SettingGenerationEvent.GenerationProgressEvent progressEvent = new SettingGenerationEvent.GenerationProgressEvent();
+        progressEvent.setMessage("第" + currentRound + "轮生成中（已有" + existingCount + "个节点）...");
+        progressEvent.setTotalNodes(totalRounds);
+        progressEvent.setCompletedNodes(currentRound - 1);
+        progressEvent.setProgress((double)(currentRound - 1) / totalRounds);
+        emitEvent(session.getSessionId(), progressEvent);
+        
+        // 1. 构建结构化输出请求（包含已有节点信息）
+        return buildStructuredOutputRequest(session, template, strategyAdapter, currentRound, existingNodes)
+            .flatMap(request -> {
+                // 2. 调用AI生成JSON
+                log.info("[StructuredOutput] 发起第{}轮AI请求: provider={}, model={}", 
+                    currentRound, provider.getProviderName(), provider.getModelName());
+                
+                return provider.generateContent(request)
+                    .flatMap(response -> {
+                        String jsonContent = response.getContent();
+                        log.debug("[StructuredOutput] 第{}轮收到响应，长度: {}", currentRound, jsonContent.length());
+                        
+                        try {
+                            // 3. 解析JSON为节点列表
+                            List<SettingNode> newNodes = parseJsonToNodes(jsonContent);
+                            log.info("[StructuredOutput] ✅ 第{}轮解析出 {} 个新节点", currentRound, newNodes.size());
+                            
+                            // 4. 应用新节点到会话（不标记完成，因为可能还有后续轮次）
+                            return applyNodesIncremental(session, newNodes, strategyAdapter)
+                                .then(Mono.defer(() -> {
+                                    // 5. 判断是否继续下一轮
+                                    if (currentRound < totalRounds) {
+                                        log.info("[StructuredOutput] 第{}轮完成，继续第{}轮", currentRound, currentRound + 1);
+                                        // 递归执行下一轮
+                                        return executeStructuredRound(
+                                            session, template, strategyAdapter, provider,
+                                            currentRound + 1, totalRounds
+                                        );
+                                    } else {
+                                        // 所有轮次完成，标记会话完成
+                                        log.info("[StructuredOutput] ✅ 所有{}轮生成完成", totalRounds);
+                                        markGenerationComplete(session.getSessionId(), "Structured output completed");
+                                        return Mono.empty();
+                                    }
+                                }));
+                            
+                        } catch (Exception e) {
+                            // 解析JSON失败 - 跳过这一轮，尝试下一轮
+                            log.error("[StructuredOutput] ❌ 第{}轮解析JSON失败: {}", currentRound, e.getMessage());
+                            
+                            if (currentRound < totalRounds) {
+                                log.warn("[StructuredOutput] 跳过第{}轮，继续第{}轮", currentRound, currentRound + 1);
+                                return executeStructuredRound(
+                                    session, template, strategyAdapter, provider,
+                                    currentRound + 1, totalRounds
+                                );
+                            } else {
+                                // 最后一轮也失败了，但如果已有节点就标记完成
+                                if (existingCount > 0) {
+                                    log.warn("[StructuredOutput] 最后一轮失败，但已有{}个节点，标记完成", existingCount);
+                                    markGenerationComplete(session.getSessionId(), "Partial structured output completed");
+                                    return Mono.empty();
+                                } else {
+                                    String errorMsg = "结构化输出生成失败：所有轮次都解析失败 - " + e.getMessage();
+                                    log.error("[StructuredOutput] {}", errorMsg);
+                                    emitErrorEvent(session.getSessionId(), "PARSE_ERROR", errorMsg, null, false);
+                                    return Mono.error(new RuntimeException(errorMsg));
+                                }
+                            }
+                        }
+                    });
+            })
+            .onErrorResume(error -> {
+                log.error("[StructuredOutput] 第 {} 轮出错: {}", currentRound, error.getMessage());
+                
+                // 如果不是最后一轮，尝试继续
+                if (currentRound < totalRounds && existingCount > 0) {
+                    log.warn("[StructuredOutput] 第{}轮出错，但继续下一轮", currentRound);
+                    return executeStructuredRound(
+                        session, template, strategyAdapter, provider,
+                        currentRound + 1, totalRounds
+                    );
+                }
+                
+                emitErrorEvent(session.getSessionId(), "GENERATION_ERROR", 
+                    "第" + currentRound + "轮生成出错: " + error.getMessage(), null, false);
+                return Mono.error(error);
+            });
+    }
+    
+    /**
+     * 构建结构化输出请求（包含已有节点信息）
+     */
+    private Mono<com.ainovel.server.domain.model.AIRequest> buildStructuredOutputRequest(
+            SettingGenerationSession session,
+            com.ainovel.server.domain.model.EnhancedUserPromptTemplate template,
+            ConfigurableStrategyAdapter strategyAdapter,
+            int roundNumber,
+            Map<String, SettingNode> existingNodes) {
+        
+        // 构建提示词上下文（复用现有逻辑）
+        Map<String, Object> ctx = buildPromptContext(session, template, strategyAdapter);
+        
+        return promptProvider.getSystemPrompt(session.getUserId(), ctx)
+            .zipWith(promptProvider.getUserPrompt(session.getUserId(), template.getId(), ctx))
+            .map(prompts -> {
+                String baseSystemPrompt = prompts.getT1();
+                String baseUserPrompt = prompts.getT2();
+                
+                // 增强系统提示词：要求输出JSON而不是文本
+                String structuredSystemPrompt = baseSystemPrompt + "\n\n" + buildStructuredOutputInstructions(roundNumber, existingNodes);
+                
+                // 构建消息列表
+                java.util.List<com.ainovel.server.domain.model.AIRequest.Message> messages = new java.util.ArrayList<>();
+                messages.add(com.ainovel.server.domain.model.AIRequest.Message.builder()
+                    .role("system")
+                    .content(structuredSystemPrompt)
+                    .build());
+                
+                messages.add(com.ainovel.server.domain.model.AIRequest.Message.builder()
+                    .role("user")
+                    .content(baseUserPrompt)
+                    .build());
+                
+                // 构建AI请求
+                String modelConfigId = (String) session.getMetadata().get("modelConfigId");
+                java.util.Map<String, Object> metadata = new java.util.HashMap<>();
+                metadata.put("userId", session.getUserId());
+                metadata.put("sessionId", session.getSessionId());
+                metadata.put("requestType", com.ainovel.server.domain.model.AIFeatureType.SETTING_TREE_GENERATION.name());
+                metadata.put("modelConfigId", modelConfigId);
+                metadata.put("roundNumber", roundNumber);
+                
+                // 🔧 为每一轮生成新的traceId，避免预扣费冲突
+                String traceId = java.util.UUID.randomUUID().toString();
+                log.debug("[StructuredOutput] 第{}轮生成新的traceId: {}", roundNumber, traceId);
+                
+                return com.ainovel.server.domain.model.AIRequest.builder()
+                    .messages(messages)
+                    .userId(session.getUserId())
+                    .sessionId(session.getSessionId())
+                    .traceId(traceId)
+                    .featureType(com.ainovel.server.domain.model.AIFeatureType.SETTING_TREE_GENERATION)
+                    .metadata(metadata)
+                    .build();
+            });
+    }
+    
+    /**
+     * 构建结构化输出指令（包含已有节点信息）
+     * 
+     * 🔧 过滤掉知识库复用的节点（fromKnowledgeBase=true），只展示AI生成的节点
+     */
+    private String buildStructuredOutputInstructions(int roundNumber, Map<String, SettingNode> existingNodes) {
+        StringBuilder instructions = new StringBuilder();
+        
+        instructions.append("## 🔧 结构化输出模式 (第").append(roundNumber).append("轮)\n\n");
+        instructions.append("**重要**：你必须直接输出一个**完整的JSON数组**，不要输出任何其他文字、解释或代码块标记。\n\n");
+        
+        // 如果有已生成的节点，提供完整信息作为参考
+        if (existingNodes != null && !existingNodes.isEmpty()) {
+            // 🎯 过滤掉知识库复用的节点，只保留AI生成的节点
+            Map<String, SettingNode> aiGeneratedNodes = existingNodes.entrySet().stream()
+                .filter(entry -> {
+                    SettingNode node = entry.getValue();
+                    // 检查是否为知识库复用节点
+                    if (node.getAttributes() != null) {
+                        Object fromKb = node.getAttributes().get("fromKnowledgeBase");
+                        return !(fromKb != null && (Boolean.TRUE.equals(fromKb) || "true".equals(String.valueOf(fromKb))));
+                    }
+                    return true; // 没有标记的节点视为AI生成
+                })
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            
+            // 如果过滤后没有AI生成的节点，说明这是第1轮，视为"首次AI生成"
+            if (aiGeneratedNodes.isEmpty()) {
+                log.info("[StructuredOutput] 第{}轮：所有{}个节点均为知识库复用，视为首次AI生成", 
+                    roundNumber, existingNodes.size());
+                instructions.append("## 本轮任务\n\n");
+                instructions.append("这是第一轮AI生成，请生成基础的设定节点框架，包括若干根节点及其子节点。\n\n");
+            } else {
+                // 有AI生成的节点，展示它们作为参考
+                instructions.append("## 📚 已有节点（完整信息）\n\n");
+                instructions.append("当前已有 ").append(aiGeneratedNodes.size()).append(" 个AI生成的节点，请仔细阅读这些节点的内容，在本轮生成中继续扩展和深化：\n\n");
+                
+                // 按照根节点->子节点的层级顺序展示
+                List<SettingNode> rootNodes = aiGeneratedNodes.values().stream()
+                    .filter(n -> n.getParentId() == null || n.getParentId().isBlank())
+                    .collect(Collectors.toList());
+                
+                List<SettingNode> childNodes = aiGeneratedNodes.values().stream()
+                    .filter(n -> n.getParentId() != null && !n.getParentId().isBlank())
+                    .collect(Collectors.toList());
+                
+                // 展示根节点
+                instructions.append("### 根节点（").append(rootNodes.size()).append("个）\n\n");
+                for (SettingNode node : rootNodes) {
+                    appendNodeFullInfo(instructions, node, aiGeneratedNodes);
+                }
+                
+                // 展示子节点
+                if (!childNodes.isEmpty()) {
+                    instructions.append("\n### 子节点（").append(childNodes.size()).append("个）\n\n");
+                    for (SettingNode node : childNodes) {
+                        appendNodeFullInfo(instructions, node, aiGeneratedNodes);
+                    }
+                }
+                
+                instructions.append("\n---\n\n");
+                
+                // 增量生成任务
+                instructions.append("**本轮任务**：\n");
+                instructions.append("1. 为现有节点添加更多子节点（特别是那些还没有子节点的）\n");
+                instructions.append("2. 为现有子节点添加孙节点，增加层级深度\n");
+                instructions.append("3. 扩展现有节点的横向内容（同级的新节点）\n");
+                instructions.append("4. 确保新生成的内容与已有节点保持一致性和连贯性\n");
+                instructions.append("5. 新节点的tempId要在已有节点的tempId基础上编号（如已有R1-1，新增R1-2、R1-3等）\n\n");
+            }
+        } else {
+            // 没有任何节点（包括复用的），这是真正的第一轮
+            instructions.append("## 本轮任务\n\n");
+            instructions.append("这是第一轮生成，请生成基础的设定节点框架，包括若干根节点及其子节点。\n\n");
+        }
+        
+        instructions.append("\n");
+        
+        instructions.append("## JSON格式要求\n\n");
+        instructions.append("```json\n");
+        instructions.append("[\n");
+        instructions.append("  {\n");
+        instructions.append("    \"tempId\": \"R1\",\n");
+        instructions.append("    \"name\": \"节点名称\",\n");
+        instructions.append("    \"type\": \"CHARACTER\",\n");
+        instructions.append("    \"description\": \"详细描述（至少50字，包含具体细节）\",\n");
+        instructions.append("    \"parentId\": null,\n");
+        instructions.append("    \"attributes\": {}\n");
+        instructions.append("  },\n");
+        instructions.append("  {\n");
+        instructions.append("    \"tempId\": \"R1-1\",\n");
+        instructions.append("    \"name\": \"子节点名称\",\n");
+        instructions.append("    \"type\": \"CONCEPT\",\n");
+        instructions.append("    \"description\": \"子节点详细描述...\",\n");
+        instructions.append("    \"parentId\": \"R1\",\n");
+        instructions.append("    \"attributes\": {}\n");
+        instructions.append("  }\n");
+        instructions.append("]\n");
+        instructions.append("```\n\n");
+        
+        instructions.append("## ⚠️ 字段说明（必须严格遵守）\n\n");
+        instructions.append("- **tempId**: 【必填】临时ID，用于父子引用（如 R1, R1-1, R1-2, R2, R2-1）\n");
+        instructions.append("  - ⚠️ **每个节点都必须有tempId，包括根节点！**\n");
+        instructions.append("  - 格式：根节点用R1、R2、R3...，子节点用R1-1、R1-2、R2-1...，孙节点用R1-1-1...\n");
+        instructions.append("- **name**: 节点名称（不能包含'/'字符，如需斜杠请使用全角'／'）\n");
+        instructions.append("- **type**: 节点类型，必须从以下枚举中选择：\n");
+        instructions.append("  CHARACTER, LOCATION, ITEM, LORE, FACTION, EVENT, CONCEPT, WORLDVIEW, \n");
+        instructions.append("  POWER_SYSTEM, GOLDEN_FINGER, TIMELINE, CREATURE, MAGIC_SYSTEM, TECHNOLOGY,\n");
+        instructions.append("  CULTURE, HISTORY, ORGANIZATION, PLEASURE_POINT, ANTICIPATION_HOOK, \n");
+        instructions.append("  THEME, TONE, STYLE, TROPE, PLOT_DEVICE, RELIGION, POLITICS, ECONOMY, GEOGRAPHY, OTHER\n");
+        instructions.append("- **description**: 节点详细描述（至少100字，包含具体细节和特色）\n");
+        instructions.append("- **parentId**: 父节点的tempId，根节点必须为null\n");
+        instructions.append("- **attributes**: 附加属性（可选，如 {\"age\": \"25\", \"power\": \"high\"}）\n\n");
+        
+        instructions.append("## 质量要求（必须满足）\n\n");
+        instructions.append("1. **节点数量**：至少生成15个节点\n");
+        instructions.append("2. **层级深度**：至少3层（根节点→二级节点→三级节点）\n");
+        instructions.append("3. **根节点数量**：2-5个根节点\n");
+        instructions.append("4. **父子完整性**：所有非根节点的parentId必须指向已存在的节点tempId\n");
+        instructions.append("5. **描述质量**：每个节点描述至少50字，包含具体细节和特色\n");
+        instructions.append("6. **类型多样性**：尽量使用多种不同的节点类型\n");
+        instructions.append("7. **层级设计**：先创建用户期待深度的根节点，再创建其子节点，而不是先创建完所有父节点才创建相关子节点。\n");
+        instructions.append("   例如：用户期待深度为3，则应创建1个根节点→3个二级子节点→9个三级子节点，而不是先创建所有根节点\n\n");
+        
+        instructions.append("## 输出要求（必须100%遵守）\n\n");
+        instructions.append("- **只输出纯JSON数组**，不要任何解释文字\n");
+        instructions.append("- 确保JSON格式完全正确，可被直接解析\n");
+        instructions.append("- ⚠️ **每个节点必须包含tempId字段，一个都不能少！**\n");
+        instructions.append("- ⚠️ **所有节点的parentId必须指向已存在节点的tempId**\n");
+        instructions.append("- 先创建根节点，再创建子节点，保持父子关系清晰\n");
+        instructions.append("- 描述要具体生动，避免空洞套话\n");
+        instructions.append("- 节点名称要简洁明了，描述要详细充实\n");
+        
+        return instructions.toString();
+    }
+    
+    /**
+     * 格式化节点完整信息（用于提示词）
+     */
+    private void appendNodeFullInfo(StringBuilder sb, SettingNode node, Map<String, SettingNode> allNodes) {
+        // 获取tempId
+        String tempId = "未知";
+        if (node.getAttributes() != null && node.getAttributes().containsKey("tempId")) {
+            tempId = String.valueOf(node.getAttributes().get("tempId"));
+        }
+        
+        // 获取父节点信息
+        String parentInfo = "null";
+        if (node.getParentId() != null && !node.getParentId().isBlank()) {
+            SettingNode parent = allNodes.get(node.getParentId());
+            if (parent != null) {
+                String parentTempId = parent.getAttributes() != null ? 
+                    String.valueOf(parent.getAttributes().getOrDefault("tempId", node.getParentId())) : 
+                    node.getParentId();
+                parentInfo = parentTempId + " [" + parent.getName() + "]";
+            } else {
+                parentInfo = node.getParentId();
+            }
+        }
+        
+        // 格式化输出
+        sb.append("**节点 ").append(tempId).append("：").append(node.getName()).append("**\n");
+        sb.append("- 类型：").append(node.getType()).append("\n");
+        sb.append("- 父节点：").append(parentInfo).append("\n");
+        sb.append("- 描述：").append(node.getDescription() != null ? node.getDescription() : "无").append("\n");
+        
+        // 如果有attributes中的额外信息，也显示出来
+        if (node.getAttributes() != null && !node.getAttributes().isEmpty()) {
+            StringBuilder attrs = new StringBuilder();
+            for (Map.Entry<String, Object> entry : node.getAttributes().entrySet()) {
+                if (!"tempId".equals(entry.getKey()) && entry.getValue() != null) {
+                    attrs.append(entry.getKey()).append("=").append(entry.getValue()).append("; ");
+                }
+            }
+            if (attrs.length() > 0) {
+                sb.append("- 额外属性：").append(attrs.toString().trim()).append("\n");
+            }
+        }
+        
+        sb.append("\n");
+    }
+    
+    /**
+     * 解析JSON字符串为节点列表
+     */
+    private List<SettingNode> parseJsonToNodes(String jsonContent) throws Exception {
+        // 提取JSON（可能包含在代码块中）
+        String extractedJson = extractJsonFromResponse(jsonContent);
+        
+        // 解析为Map列表
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> nodeDataList = objectMapper.readValue(
+            extractedJson, 
+            objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class)
+        );
+        
+        // 🔍 调试：打印解析出的节点数据
+        log.debug("[StructuredOutput] 解析出的节点原始数据：");
+        for (int i = 0; i < nodeDataList.size(); i++) {
+            Map<String, Object> data = nodeDataList.get(i);
+            log.debug("  [{}] tempId={}, name={}, parentId={}", 
+                i, data.get("tempId"), data.get("name"), data.get("parentId"));
+        }
+        
+        // 转换为SettingNode对象
+        List<SettingNode> nodes = new ArrayList<>();
+        for (Map<String, Object> nodeData : nodeDataList) {
+            SettingNode node = convertMapToSettingNode(nodeData);
+            nodes.add(node);
+        }
+        
+        return nodes;
+    }
+    
+    /**
+     * 从响应中提取JSON
+     */
+    private String extractJsonFromResponse(String response) {
+        if (response == null || response.trim().isEmpty()) {
+            throw new IllegalArgumentException("响应内容为空");
+        }
+        
+        String trimmed = response.trim();
+        
+        // 移除可能的代码块标记
+        if (trimmed.startsWith("```json")) {
+            trimmed = trimmed.substring(7);
+        } else if (trimmed.startsWith("```")) {
+            trimmed = trimmed.substring(3);
+        }
+        
+        if (trimmed.endsWith("```")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 3);
+        }
+        
+        trimmed = trimmed.trim();
+        
+        // 查找JSON数组的开始和结束
+        int start = trimmed.indexOf('[');
+        int end = trimmed.lastIndexOf(']');
+        
+        if (start == -1 || end == -1 || start >= end) {
+            throw new IllegalArgumentException("未找到有效的JSON数组");
+        }
+        
+        return trimmed.substring(start, end + 1);
+    }
+    
+    /**
+     * 将Map转换为SettingNode对象
+     */
+    private SettingNode convertMapToSettingNode(Map<String, Object> data) {
+        SettingNode node = new SettingNode();
+        node.setId(java.util.UUID.randomUUID().toString());
+        
+        // 初始化attributes
+        Map<String, Object> attrs = new HashMap<>();
+        if (data.containsKey("attributes") && data.get("attributes") instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> existingAttrs = (Map<String, Object>) data.get("attributes");
+            attrs.putAll(existingAttrs);
+        }
+        
+        // 将tempId存储在attributes中
+        if (data.containsKey("tempId")) {
+            attrs.put("tempId", String.valueOf(data.get("tempId")));
+        }
+        
+        node.setAttributes(attrs);
+        
+        if (data.containsKey("name")) {
+            node.setName(String.valueOf(data.get("name")));
+        }
+        
+        if (data.containsKey("type")) {
+            String typeStr = String.valueOf(data.get("type"));
+            try {
+                node.setType(SettingType.valueOf(typeStr));
+            } catch (IllegalArgumentException e) {
+                log.warn("未知的节点类型: {}, 使用OTHER", typeStr);
+                node.setType(SettingType.OTHER);
+            }
+        }
+        
+        if (data.containsKey("description")) {
+            node.setDescription(String.valueOf(data.get("description")));
+        }
+        
+        if (data.containsKey("parentId") && data.get("parentId") != null) {
+            String parentId = String.valueOf(data.get("parentId"));
+            if (!"null".equals(parentId)) {
+                node.setParentId(parentId);
+            }
+        }
+        
+        node.setChildren(new ArrayList<>());
+        node.setGenerationStatus(SettingNode.GenerationStatus.COMPLETED);
+        
+        return node;
+    }
+    
+    /**
+     * 增量应用节点（不标记完成，用于多轮生成）
+     */
+    private Mono<Void> applyNodesIncremental(
+            SettingGenerationSession session,
+            List<SettingNode> nodes,
+            ConfigurableStrategyAdapter strategyAdapter) {
+        
+        log.info("[StructuredOutput] 增量应用 {} 个节点到会话", nodes.size());
+        
+        return applyNodesToSession(session, nodes, strategyAdapter);
+    }
+    
+    /**
+     * 应用节点并标记完成（用于单轮生成或最后一轮）
+     */
+    private Mono<Void> applyNodesAndComplete(
+            SettingGenerationSession session,
+            List<SettingNode> nodes,
+            ConfigurableStrategyAdapter strategyAdapter) {
+        
+        log.info("[StructuredOutput] 应用 {} 个节点到会话并标记完成", nodes.size());
+        
+        return applyNodesToSession(session, nodes, strategyAdapter)
+            .then(Mono.fromRunnable(() -> {
+                // 标记会话完成
+                markGenerationComplete(session.getSessionId(), "Structured output completed");
+                log.info("[StructuredOutput] ✅ 结构化输出生成完成");
+            }));
+    }
+    
+    /**
+     * 核心方法：应用节点到会话
+     */
+    private Mono<Void> applyNodesToSession(
+            SettingGenerationSession session,
+            List<SettingNode> nodes,
+            ConfigurableStrategyAdapter strategyAdapter) {
+        
+        log.info("[StructuredOutput] 开始应用 {} 个节点", nodes.size());
+        
+        // 获取或创建跨轮次的tempId映射表（累积所有轮次的映射）
+        @SuppressWarnings("unchecked")
+        Map<String, String> globalTempIdMap = (Map<String, String>) session.getMetadata().get("tempIdMap");
+        if (globalTempIdMap == null) {
+            globalTempIdMap = new java.util.concurrent.ConcurrentHashMap<>();
+            session.getMetadata().put("tempIdMap", globalTempIdMap);
+        }
+        
+        // 将当前批次的新节点tempId添加到全局映射表
+        for (SettingNode node : nodes) {
+            Object tempIdObj = node.getAttributes() != null ? node.getAttributes().get("tempId") : null;
+            if (tempIdObj != null) {
+                String tempId = String.valueOf(tempIdObj);
+                if (!tempId.isBlank()) {
+                    globalTempIdMap.put(tempId, node.getId());
+                    log.debug("[StructuredOutput] 注册tempId映射: {} -> {}", tempId, node.getId());
+                }
+            }
+        }
+        
+        log.info("[StructuredOutput] 当前全局tempId映射表大小: {}", globalTempIdMap.size());
+        
+        // 解析parentId（支持跨轮次的tempId引用）
+        for (SettingNode node : nodes) {
+            if (node.getParentId() != null && !node.getParentId().isBlank()) {
+                String originalParentId = node.getParentId();
+                // 如果parentId是tempId，转换为真实ID
+                String realParentId = globalTempIdMap.get(originalParentId);
+                if (realParentId != null) {
+                    log.debug("[StructuredOutput] 转换parentId: {} -> {}", originalParentId, realParentId);
+                    node.setParentId(realParentId);
+                } else {
+                    log.warn("[StructuredOutput] ⚠️ 找不到tempId映射: {}，可用映射: {}", 
+                        originalParentId, globalTempIdMap.keySet());
+                }
+            }
+        }
+        
+        // 添加所有节点到会话
+        return Flux.fromIterable(nodes)
+            .flatMap(node -> sessionManager.addNodeToSession(session.getSessionId(), node)
+                .doOnNext(s -> {
+                    // 发送节点创建事件
+                    emitNodeCreatedEvent(session.getSessionId(), node, session);
+                    log.debug("[StructuredOutput] 节点已添加: {}", node.getName());
+                })
+            )
+            .then();
+    }
+    
+    // ==================== 积分奖励辅助方法 ====================
+    
+    /**
+     * 处理策略使用时的积分奖励
+     * 1. 增加模板的usageCount
+     * 2. 给模板作者增加1积分（自己使用自己的策略不获得积分）
+     * 
+     * @param promptTemplateId 策略模板ID
+     * @param currentUserId 当前使用策略的用户ID
+     * @return 处理结果的Mono
+     */
+    private Mono<Void> handleStrategyUsageReward(String promptTemplateId, String currentUserId) {
+        if (promptTemplateId == null || currentUserId == null) {
+            return Mono.empty();
+        }
+        
+        return promptTemplateRepository.findById(promptTemplateId)
+            .flatMap(template -> {
+                // 增加使用次数
+                template.incrementUsageCount();
+                
+                // 保存模板更新
+                return promptTemplateRepository.save(template)
+                    .flatMap(savedTemplate -> {
+                        // 检查作者是否是当前用户
+                        String authorId = savedTemplate.getAuthorId();
+                        if (authorId == null || authorId.equals(currentUserId)) {
+                            // 自己使用自己的策略不获得积分
+                            log.debug("策略使用：自己使用自己的策略，不增加积分。模板ID: {}, 用户ID: {}", 
+                                    promptTemplateId, currentUserId);
+                            return Mono.empty();
+                        }
+                        
+                        // 给作者增加积分
+                        return creditService.addCredits(authorId, 1L, "策略被使用奖励 - 模板: " + savedTemplate.getName())
+                            .doOnSuccess(success -> {
+                                if (Boolean.TRUE.equals(success)) {
+                                    log.info("✅ 策略使用积分奖励成功：作者ID: {}, 模板ID: {}, 模板名称: {}, 当前使用次数: {}", 
+                                            authorId, promptTemplateId, savedTemplate.getName(), savedTemplate.getUsageCount());
+                                } else {
+                                    log.warn("⚠️ 策略使用积分奖励失败：作者ID: {}, 模板ID: {}", authorId, promptTemplateId);
+                                }
+                            })
+                            .then();
+                    });
+            })
+            .onErrorResume(error -> {
+                // 即使积分奖励失败，也不影响主流程
+                log.error("❌ 处理策略使用积分奖励时发生错误: templateId={}, userId={}, error={}", 
+                        promptTemplateId, currentUserId, error.getMessage(), error);
+                return Mono.empty();
+            });
     }
 }

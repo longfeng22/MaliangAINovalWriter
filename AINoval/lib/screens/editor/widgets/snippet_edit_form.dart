@@ -105,6 +105,8 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
   
   bool _isLoading = false;
   bool _isFavorite = false;
+  bool _titleError = false;  // 标题错误状态
+  String? _titleErrorText;    // 标题错误提示文本
   
   late NovelSnippetRepository _snippetRepository;
 
@@ -129,9 +131,34 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
   Future<void> _saveSnippet() async {
     if (_isLoading) return;
     
+    // 清除之前的错误状态
     setState(() {
+      _titleError = false;
+      _titleErrorText = null;
       _isLoading = true;
     });
+
+    // 前端验证：检查标题是否为空
+    final title = _titleController.text.trim();
+    if (title.isEmpty) {
+      setState(() {
+        _titleError = true;
+        _titleErrorText = '片段标题不能为空';
+        _isLoading = false;
+      });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('请输入片段标题', style: WebTheme.bodyMedium.copyWith(color: WebTheme.white)),
+            backgroundColor: WebTheme.error,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
+      }
+      return;
+    }
 
     try {
       // 检查是否为创建模式（ID为空）
@@ -159,16 +186,12 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
           finalSnippet = newSnippet.copyWith(isFavorite: _isFavorite);
         }
         
-        setState(() {
-          _isLoading = false;
-        });
-
-        widget.onSaved?.call(finalSnippet);
-        
-        // 触发事件总线，通知片段列表刷新
-        EventBus.instance.fire(SnippetCreatedEvent(snippet: finalSnippet));
-        
+        // 在widget可能被移除前，先更新状态并显示消息
         if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+          
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('片段创建成功', style: WebTheme.bodyMedium.copyWith(color: WebTheme.white)),
@@ -178,6 +201,12 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
             ),
           );
         }
+        
+        // 触发事件总线，通知片段列表刷新
+        EventBus.instance.fire(SnippetCreatedEvent(snippet: finalSnippet));
+        
+        // 最后调用回调，因为这可能会关闭widget
+        widget.onSaved?.call(finalSnippet);
       } else {
         // 更新现有片段
         // 更新标题
@@ -212,13 +241,12 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
         // 获取最新的片段数据
         final updatedSnippet = await _snippetRepository.getSnippetDetail(widget.snippet.id);
         
-        setState(() {
-          _isLoading = false;
-        });
-
-        widget.onSaved?.call(updatedSnippet);
-        
+        // 在widget可能被移除前，先更新状态并显示消息
         if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+          
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('片段保存成功', style: WebTheme.bodyMedium.copyWith(color: WebTheme.white)),
@@ -228,16 +256,35 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
             ),
           );
         }
+        
+        // 最后调用回调，因为这可能会关闭widget
+        widget.onSaved?.call(updatedSnippet);
       }
     } catch (e) {
       AppLogger.e('FloatingSnippetEditor', '保存片段失败', e);
+      
+      // 检查widget是否仍然mounted，再进行UI更新
+      if (!mounted) return;
+      
       setState(() {
         _isLoading = false;
       });
+      
+      // 处理具体错误类型
+      String errorMessage = _formatUserFriendlyError(e);
+      
+      // 如果是标题验证错误，更新UI状态
+      if (e.toString().contains('片段标题不能为空') || e.toString().contains('标题不能为空')) {
+        setState(() {
+          _titleError = true;
+          _titleErrorText = '片段标题不能为空';
+        });
+      }
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('保存失败: $e', style: WebTheme.bodyMedium.copyWith(color: WebTheme.white)),
+            content: Text(errorMessage, style: WebTheme.bodyMedium.copyWith(color: WebTheme.white)),
             backgroundColor: WebTheme.error,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -258,13 +305,12 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
     try {
       await _snippetRepository.deleteSnippet(widget.snippet.id);
       
-      setState(() {
-        _isLoading = false;
-      });
-
-      widget.onDeleted?.call(widget.snippet.id);
-      
+      // 在widget可能被移除前，先更新状态并显示消息
       if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('片段删除成功', style: WebTheme.bodyMedium.copyWith(color: WebTheme.white)),
@@ -274,11 +320,19 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
           ),
         );
       }
+      
+      // 最后调用回调，因为这可能会关闭widget
+      widget.onDeleted?.call(widget.snippet.id);
     } catch (e) {
       AppLogger.e('FloatingSnippetEditor', '删除片段失败', e);
+      
+      // 检查widget是否仍然mounted，再进行UI更新
+      if (!mounted) return;
+      
       setState(() {
         _isLoading = false;
       });
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -335,9 +389,53 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
     return result ?? false;
   }
 
+  /// 将技术性错误转换为用户友好的错误消息
+  String _formatUserFriendlyError(dynamic error) {
+    final errorString = error.toString().toLowerCase();
+    
+    // 验证相关错误
+    if (errorString.contains('片段标题不能为空') || errorString.contains('标题不能为空')) {
+      return '请输入片段标题';
+    }
+    
+    // 网络相关错误
+    if (errorString.contains('connection') || errorString.contains('network') || errorString.contains('timeout')) {
+      return '网络连接失败，请检查网络后重试';
+    }
+    
+    // 认证相关错误
+    if (errorString.contains('unauthorized') || errorString.contains('401') || errorString.contains('authentication')) {
+      return '登录状态已过期，请重新登录';
+    }
+    
+    // 服务器错误
+    if (errorString.contains('500') || errorString.contains('server') || errorString.contains('internal')) {
+      return '服务器暂时无法访问，请稍后重试';
+    }
+    
+    // 权限相关错误
+    if (errorString.contains('forbidden') || errorString.contains('403')) {
+      return '没有权限执行此操作';
+    }
+    
+    // 验证错误
+    if (errorString.contains('validation') || errorString.contains('invalid')) {
+      // 尝试提取具体的验证错误信息
+      if (error.toString().contains('ApiException:')) {
+        final message = error.toString().split('ApiException:').last.trim();
+        if (message.isNotEmpty) {
+          return message;
+        }
+      }
+      return '输入信息有误，请检查后重新提交';
+    }
+    
+    // 默认友好错误消息
+    return '操作失败，请稍后重试';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isDark = WebTheme.isDarkMode(context);
 
     return Container(
       decoration: BoxDecoration(
@@ -370,7 +468,6 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
   }
 
   Widget _buildHeader() {
-    final isDark = WebTheme.isDarkMode(context);
     
     return Container(
       padding: const EdgeInsets.all(6),
@@ -392,30 +489,62 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
         children: [
           // 标题输入框
           Expanded(
-            child: Container(
-              height: 36,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: TextField(
-                controller: _titleController,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: WebTheme.getTextColor(context),
-                ),
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  hintText: 'Name your snippet...',
-                  hintStyle: TextStyle(
-                    fontSize: 14,
-                    color: WebTheme.getSecondaryTextColor(context),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 36,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: _titleError 
+                      ? Border.all(color: WebTheme.error, width: 1.5)
+                      : null,
                   ),
-                  contentPadding: EdgeInsets.zero,
+                  child: TextField(
+                    controller: _titleController,
+                    onChanged: (value) {
+                      // 用户开始输入时清除错误状态
+                      if (_titleError && value.trim().isNotEmpty) {
+                        setState(() {
+                          _titleError = false;
+                          _titleErrorText = null;
+                        });
+                      }
+                    },
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: WebTheme.getTextColor(context),
+                    ),
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      hintText: 'Name your snippet...',
+                      hintStyle: TextStyle(
+                        fontSize: 14,
+                        color: _titleError 
+                          ? WebTheme.error.withOpacity(0.7)
+                          : WebTheme.getSecondaryTextColor(context),
+                      ),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
                 ),
-              ),
+                // 错误提示文本
+                if (_titleError && _titleErrorText != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12, top: 2),
+                    child: Text(
+                      _titleErrorText!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: WebTheme.error,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
           
@@ -442,7 +571,6 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
     required VoidCallback onPressed,
     Color? color,
   }) {
-    final isDark = WebTheme.isDarkMode(context);
     
     return Container(
       width: 36,
@@ -504,7 +632,6 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
   }
 
   Widget _buildContent() {
-    final isDark = WebTheme.isDarkMode(context);
     
     return Column(
       children: [
@@ -550,7 +677,6 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
   }
 
   Widget _buildFooter() {
-    final isDark = WebTheme.isDarkMode(context);
     final wordCount = _contentController.text.split(RegExp(r'\s+')).where((word) => word.isNotEmpty).length;
     
     return Container(
@@ -602,7 +728,6 @@ class _SnippetEditContentState extends State<_SnippetEditContent> {
     required String label,
     required VoidCallback onPressed,
   }) {
-    final isDark = WebTheme.isDarkMode(context);
     
     return InkWell(
       onTap: onPressed,

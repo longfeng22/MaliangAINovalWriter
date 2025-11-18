@@ -14,6 +14,8 @@ import com.ainovel.server.domain.model.User;
 import com.ainovel.server.service.JwtService;
 import com.ainovel.server.service.CreditService;
 import com.ainovel.server.service.UserService;
+import com.ainovel.server.service.UserLoginLogService;
+import com.ainovel.server.domain.model.UserLoginLog;
 import com.ainovel.server.web.dto.AuthRequest;
 import com.ainovel.server.web.dto.AuthResponse;
 import com.ainovel.server.web.dto.ChangePasswordRequest;
@@ -31,6 +33,7 @@ import reactor.core.publisher.Mono;
 import jakarta.validation.Valid;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 
 /**
  * 认证控制器
@@ -46,6 +49,7 @@ public class AuthController {
     private final JwtService jwtService;
     private final VerificationCodeService verificationCodeService;
     private final CreditService creditService;
+    private final UserLoginLogService loginLogService;
     
     // 注册功能开关
     @Value("${ainovel.registration.quick-enabled:true}")
@@ -58,37 +62,81 @@ public class AuthController {
     @Autowired
     public AuthController(UserService userService, PasswordEncoder passwordEncoder, 
                          JwtService jwtService, VerificationCodeService verificationCodeService,
-                         CreditService creditService) {
+                         CreditService creditService, UserLoginLogService loginLogService) {
         this.userService = userService;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.verificationCodeService = verificationCodeService;
         this.creditService = creditService;
+        this.loginLogService = loginLogService;
+    }
+    
+    /**
+     * 从请求中提取IP地址
+     */
+    private String getClientIpAddress(ServerHttpRequest request) {
+        String xForwardedFor = request.getHeaders().getFirst("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
+            return xForwardedFor.split(",")[0].trim();
+        }
+        
+        String xRealIp = request.getHeaders().getFirst("X-Real-IP");
+        if (xRealIp != null && !xRealIp.isEmpty()) {
+            return xRealIp;
+        }
+        
+        if (request.getRemoteAddress() != null) {
+            return request.getRemoteAddress().getAddress().getHostAddress();
+        }
+        
+        return "unknown";
+    }
+    
+    /**
+     * 从请求中提取User-Agent
+     */
+    private String getUserAgent(ServerHttpRequest request) {
+        String userAgent = request.getHeaders().getFirst("User-Agent");
+        return userAgent != null ? userAgent : "unknown";
     }
     
     /**
      * 用户登录
      * @param request 登录请求
+     * @param httpRequest HTTP请求（用于提取IP和User-Agent）
      * @return 认证响应
      */
     @PostMapping("/login")
-    public Mono<ResponseEntity<Object>> login(@RequestBody AuthRequest request) {
+    public Mono<ResponseEntity<Object>> login(@RequestBody AuthRequest request, ServerHttpRequest httpRequest) {
+        String ipAddress = getClientIpAddress(httpRequest);
+        String userAgent = getUserAgent(httpRequest);
+        
         return userService.findUserByUsername(request.getUsername())
                 .filter(user -> passwordEncoder.matches(request.getPassword(), user.getPassword()))
-                .map(user -> {
+                .flatMap(user -> {
                     String token = jwtService.generateToken(user);
                     String refreshToken = jwtService.generateRefreshToken(user);
                     
-                    AuthResponse response = new AuthResponse(
-                            token,
-                            refreshToken,
-                            user.getId(),
-                            user.getUsername(),
-                            user.getDisplayName()
-                    );
-                    
-                    // 成功：保持向后兼容，直接返回顶层字段
-                    return ResponseEntity.ok((Object) response);
+                    // 记录登录日志
+                    return loginLogService.recordSuccessfulLogin(
+                            user.getId(), 
+                            user.getUsername(), 
+                            UserLoginLog.LoginType.PASSWORD,
+                            ipAddress,
+                            userAgent
+                    ).thenReturn(user)
+                    .map(u -> {
+                        AuthResponse response = new AuthResponse(
+                                token,
+                                refreshToken,
+                                u.getId(),
+                                u.getUsername(),
+                                u.getDisplayName()
+                        );
+                        
+                        // 成功：保持向后兼容，直接返回顶层字段
+                        return ResponseEntity.ok((Object) response);
+                    });
                 })
                 // 失败：返回带自定义消息的错误体，避免客户端误判为"登录过期"
                 .switchIfEmpty(Mono.just(ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -98,11 +146,15 @@ public class AuthController {
     /**
      * 手机号登录
      * @param request 手机号登录请求
+     * @param httpRequest HTTP请求（用于提取IP和User-Agent）
      * @return 认证响应
      */
     @PostMapping("/login/phone")
-    public Mono<ResponseEntity<Object>> phoneLogin(@Valid @RequestBody PhoneLoginRequest request) {
+    public Mono<ResponseEntity<Object>> phoneLogin(@Valid @RequestBody PhoneLoginRequest request, ServerHttpRequest httpRequest) {
         log.info("收到手机号登录请求，phone: {}", request.getPhone());
+        
+        String ipAddress = getClientIpAddress(httpRequest);
+        String userAgent = getUserAgent(httpRequest);
         
         return verificationCodeService.verifyPhoneCode(request.getPhone(), request.getVerificationCode(), "login")
                 .flatMap(verified -> {
@@ -117,20 +169,30 @@ public class AuthController {
                     log.warn("手机号登录失败，手机号未注册，phone: {}", request.getPhone());
                     return Mono.error(new ValidationException("该手机号尚未注册"));
                 }))
-                .map(user -> {
+                .flatMap(user -> {
                     log.info("手机号登录成功，用户ID: {}, phone: {}", user.getId(), request.getPhone());
                     String token = jwtService.generateToken(user);
                     String refreshToken = jwtService.generateRefreshToken(user);
                     
-                    AuthResponse response = new AuthResponse(
-                            token,
-                            refreshToken,
-                            user.getId(),
-                            user.getUsername(),
-                            user.getDisplayName()
-                    );
-                    
-                    return ResponseEntity.ok((Object) response);
+                    // 记录登录日志
+                    return loginLogService.recordSuccessfulLogin(
+                            user.getId(), 
+                            user.getUsername(), 
+                            UserLoginLog.LoginType.PHONE,
+                            ipAddress,
+                            userAgent
+                    ).thenReturn(user)
+                    .map(u -> {
+                        AuthResponse response = new AuthResponse(
+                                token,
+                                refreshToken,
+                                u.getId(),
+                                u.getUsername(),
+                                u.getDisplayName()
+                        );
+                        
+                        return ResponseEntity.ok((Object) response);
+                    });
                 })
                 .onErrorResume(ValidationException.class, e -> {
                     log.error("手机号登录验证异常，phone: {}, 错误: {}", request.getPhone(), e.getMessage());
@@ -148,11 +210,15 @@ public class AuthController {
     /**
      * 邮箱登录
      * @param request 邮箱登录请求
+     * @param httpRequest HTTP请求（用于提取IP和User-Agent）
      * @return 认证响应
      */
     @PostMapping("/login/email")
-    public Mono<ResponseEntity<Object>> emailLogin(@Valid @RequestBody EmailLoginRequest request) {
+    public Mono<ResponseEntity<Object>> emailLogin(@Valid @RequestBody EmailLoginRequest request, ServerHttpRequest httpRequest) {
         log.info("收到邮箱登录请求，email: {}", request.getEmail());
+        
+        String ipAddress = getClientIpAddress(httpRequest);
+        String userAgent = getUserAgent(httpRequest);
         
         return verificationCodeService.verifyEmailCode(request.getEmail(), request.getVerificationCode(), "login")
                 .flatMap(verified -> {
@@ -167,20 +233,30 @@ public class AuthController {
                     log.warn("邮箱登录失败，邮箱未注册，email: {}", request.getEmail());
                     return Mono.error(new ValidationException("该邮箱尚未注册"));
                 }))
-                .map(user -> {
+                .flatMap(user -> {
                     log.info("邮箱登录成功，用户ID: {}, email: {}", user.getId(), request.getEmail());
                     String token = jwtService.generateToken(user);
                     String refreshToken = jwtService.generateRefreshToken(user);
                     
-                    AuthResponse response = new AuthResponse(
-                            token,
-                            refreshToken,
-                            user.getId(),
-                            user.getUsername(),
-                            user.getDisplayName()
-                    );
-                    
-                    return ResponseEntity.ok((Object) response);
+                    // 记录登录日志
+                    return loginLogService.recordSuccessfulLogin(
+                            user.getId(), 
+                            user.getUsername(), 
+                            UserLoginLog.LoginType.EMAIL,
+                            ipAddress,
+                            userAgent
+                    ).thenReturn(user)
+                    .map(u -> {
+                        AuthResponse response = new AuthResponse(
+                                token,
+                                refreshToken,
+                                u.getId(),
+                                u.getUsername(),
+                                u.getDisplayName()
+                        );
+                        
+                        return ResponseEntity.ok((Object) response);
+                    });
                 })
                 .onErrorResume(ValidationException.class, e -> {
                     log.error("邮箱登录验证异常，email: {}, 错误: {}", request.getEmail(), e.getMessage());

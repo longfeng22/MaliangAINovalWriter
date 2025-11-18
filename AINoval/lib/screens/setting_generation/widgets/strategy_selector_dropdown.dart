@@ -26,10 +26,12 @@ class _StrategySelectorDropdownState extends State<StrategySelectorDropdown> {
   final GlobalKey _buttonKey = GlobalKey();
   OverlayEntry? _overlayEntry;
   bool _isOpen = false;
+  bool _isDisposing = false;
 
   @override
   void dispose() {
-    _removeOverlay();
+    _isDisposing = true;
+    _removeOverlay(force: true);
     super.dispose();
   }
 
@@ -95,16 +97,19 @@ class _StrategySelectorDropdownState extends State<StrategySelectorDropdown> {
     overlay.insert(_overlayEntry!);
   }
 
-  void _removeOverlay() {
+  void _removeOverlay({bool force = false}) {
     if (_overlayEntry != null) {
       _overlayEntry!.remove();
       _overlayEntry = null;
     }
-    if (mounted) {
-      setState(() {
-        _isOpen = false;
-      });
+    // 在 dispose 阶段或未挂载时，直接更新标志，避免调用 setState 触发断言
+    if (force || _isDisposing || !mounted) {
+      _isOpen = false;
+      return;
     }
+    setState(() {
+      _isOpen = false;
+    });
   }
 
   Widget _buildDropdownContent() {

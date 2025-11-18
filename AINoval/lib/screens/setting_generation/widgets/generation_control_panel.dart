@@ -16,6 +16,8 @@ import 'package:ainoval/screens/settings/settings_panel.dart';
 import 'package:ainoval/screens/editor/managers/editor_state_manager.dart';
 import 'package:ainoval/models/editor_settings.dart';
 import 'package:ainoval/utils/web_theme.dart';
+import 'package:ainoval/models/knowledge_base_integration_mode.dart';
+import 'package:ainoval/screens/setting_generation/widgets/knowledge_base_setting_selector.dart';
 
 /// 生成控制面板
 class GenerationControlPanel extends StatefulWidget {
@@ -23,6 +25,11 @@ class GenerationControlPanel extends StatefulWidget {
   final UnifiedAIModel? selectedModel;
   final String? initialStrategy;
   final Function(String prompt, String strategy, String modelConfigId)? onGenerationStart;
+  // 📚 知识库集成参数
+  final KnowledgeBaseIntegrationMode? initialKnowledgeBaseMode;
+  final List<SelectedKnowledgeBaseItem>? initialSelectedKnowledgeBases;
+  // 📚 混合模式专用：参考列表
+  final List<SelectedKnowledgeBaseItem>? initialReferenceKnowledgeBases;
 
   const GenerationControlPanel({
     Key? key,
@@ -30,6 +37,9 @@ class GenerationControlPanel extends StatefulWidget {
     this.selectedModel,
     this.initialStrategy,
     this.onGenerationStart,
+    this.initialKnowledgeBaseMode,
+    this.initialSelectedKnowledgeBases,
+    this.initialReferenceKnowledgeBases,
   }) : super(key: key);
 
   @override
@@ -44,6 +54,12 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
   String? _currentActiveSessionId;
   // 🔧 跟踪用户是否手动修改了原始创意，避免覆盖用户输入
   bool _userHasModifiedPrompt = false;
+  // 📚 知识库集成模式
+  KnowledgeBaseIntegrationMode _knowledgeBaseMode = KnowledgeBaseIntegrationMode.none;
+  // 📚 选中的知识库项目（用于复用模式）
+  List<SelectedKnowledgeBaseItem> _selectedKnowledgeBasesForReuse = [];
+  // 📚 选中的知识库项目（用于仿写/混合模式）
+  List<SelectedKnowledgeBaseItem> _selectedKnowledgeBasesForReference = [];
 
   @override
   void initState() {
@@ -59,6 +75,28 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
 
     _selectedModel = widget.selectedModel ??
         (defaultConfig != null ? PrivateAIModel(defaultConfig) : null);
+
+    // 📚 初始化知识库参数
+    if (widget.initialKnowledgeBaseMode != null) {
+      _knowledgeBaseMode = widget.initialKnowledgeBaseMode!;
+    }
+    
+    // 📚 混合模式：分别初始化复用和参考列表
+    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.hybrid) {
+      if (widget.initialSelectedKnowledgeBases != null && widget.initialSelectedKnowledgeBases!.isNotEmpty) {
+        _selectedKnowledgeBasesForReuse = List.from(widget.initialSelectedKnowledgeBases!);
+      }
+      if (widget.initialReferenceKnowledgeBases != null && widget.initialReferenceKnowledgeBases!.isNotEmpty) {
+        _selectedKnowledgeBasesForReference = List.from(widget.initialReferenceKnowledgeBases!);
+      }
+    } else if (widget.initialSelectedKnowledgeBases != null && widget.initialSelectedKnowledgeBases!.isNotEmpty) {
+      // 📚 复用或仿写模式：根据模式分配到对应的列表
+      if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse) {
+        _selectedKnowledgeBasesForReuse = List.from(widget.initialSelectedKnowledgeBases!);
+      } else {
+        _selectedKnowledgeBasesForReference = List.from(widget.initialSelectedKnowledgeBases!);
+      }
+    }
 
     // 🔧 在初始化时同步当前活动会话的原始创意
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -192,6 +230,16 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
                         _buildStrategySelector(),
                         const SizedBox(height: 16),
                         
+                        // 📚 知识库模式选择器
+                        _buildKnowledgeBaseModeSelector(),
+                        const SizedBox(height: 16),
+                        
+                        // 📚 根据模式显示知识库选择器
+                        if (_knowledgeBaseMode != KnowledgeBaseIntegrationMode.none) ...[
+                          _buildKnowledgeBaseSelector(),
+                          const SizedBox(height: 16),
+                        ],
+                        
                         // 模型选择器
                         _buildModelSelector(),
                         const SizedBox(height: 20),
@@ -216,6 +264,15 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
   
 
   Widget _buildPromptInput(SettingGenerationState state) {
+    // 📚 复用模式下输入框不可编辑
+    final isReadOnly = _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse;
+    final hintText = isReadOnly
+        ? '复用模式下无需输入提示词，直接选择知识库小说'
+        : (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.imitation || 
+           _knowledgeBaseMode == KnowledgeBaseIntegrationMode.hybrid)
+            ? '请详细描述生成需求，选中的知识库设定将作为参考加入提示词...'
+            : '例如：一个发生在赛博朋克都市的侦探故事\n\n详细描述你的创作想法：\n• 故事背景和世界观设定\n• 主要角色的性格和关系\n• 核心冲突和情节走向\n• 想要表达的主题思想\n• 期望的风格和氛围...';
+    
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -231,11 +288,16 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
         Container(
           decoration: BoxDecoration(
             border: Border.all(color: WebTheme.getBorderColor(context)),
+            color: isReadOnly 
+                ? WebTheme.getBorderColor(context).withOpacity(0.1)
+                : null,
           ),
           child: TextField(
             controller: _promptController,
+            enabled: !isReadOnly,
+            readOnly: isReadOnly,
             decoration: InputDecoration(
-              hintText: '例如：一个发生在赛博朋克都市的侦探故事\n\n详细描述你的创作想法：\n• 故事背景和世界观设定\n• 主要角色的性格和关系\n• 核心冲突和情节走向\n• 想要表达的主题思想\n• 期望的风格和氛围...',
+              hintText: hintText,
               hintStyle: TextStyle(
                 color: WebTheme.getSecondaryTextColor(context),
                 fontSize: 14,
@@ -247,7 +309,9 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
             style: TextStyle(
               fontSize: 15,
               height: 1.5,
-              color: WebTheme.getTextColor(context),
+              color: isReadOnly 
+                  ? WebTheme.getSecondaryTextColor(context)
+                  : WebTheme.getTextColor(context),
             ),
             // 🎯 进一步扩大输入空间 - 支持更大的创作描述
             maxLines: 12,
@@ -365,13 +429,38 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
     final isGenerating = state is SettingGenerationInProgress && state.isGenerating;
     final hasGeneratedSettings = state is SettingGenerationInProgress ||
         state is SettingGenerationCompleted;
+    
+    // 📚 根据知识库模式决定按钮文本
+    String buttonText = hasGeneratedSettings ? '重新生成' : '生成设定';
+    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse) {
+      buttonText = '开始设定复用';
+    }
+    
+    // 📚 根据知识库模式决定按钮是否可用
+    bool canGenerate = false;
+    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse) {
+      // 复用模式：只需选择知识库即可
+      canGenerate = !isGenerating && 
+                   _selectedModel != null && 
+                   _selectedKnowledgeBasesForReuse.isNotEmpty;
+    } else if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.none) {
+      // 普通模式：需要输入提示词
+      canGenerate = !isGenerating && 
+                   _selectedModel != null && 
+                   _promptController.text.trim().isNotEmpty;
+    } else {
+      // 仿写/混合模式：需要输入提示词和选择知识库
+      canGenerate = !isGenerating && 
+                   _selectedModel != null && 
+                   _promptController.text.trim().isNotEmpty &&
+                   _selectedKnowledgeBasesForReference.isNotEmpty;
+    }
 
     return Container(
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: isGenerating || _selectedModel == null || _promptController.text.trim().isEmpty
-            ? null
-            : () async {
+        onPressed: canGenerate
+            ? () async {
                 final ok = await _precheckToolModelAndMaybePrompt();
                 if (!ok) return;
                 final prompt = _promptController.text.trim();
@@ -387,6 +476,59 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
                   final String? publicProvider = usePublic ? model.provider : null;
                   final String? publicModelId = usePublic ? model.modelId : null;
 
+                  // 📚 准备知识库参数
+                  String? knowledgeBaseMode;
+                  List<String>? knowledgeBaseIds;
+                  List<String>? reuseKnowledgeBaseIds;
+                  List<String>? referenceKnowledgeBaseIds;
+                  Map<String, List<String>>? knowledgeBaseCategories;
+                  
+                  if (_knowledgeBaseMode != KnowledgeBaseIntegrationMode.none) {
+                    knowledgeBaseMode = _knowledgeBaseMode.value;
+                    
+                    // 📚 混合模式：分别处理复用和参考
+                    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.hybrid) {
+                      // 复用列表
+                      if (_selectedKnowledgeBasesForReuse.isNotEmpty) {
+                        reuseKnowledgeBaseIds = _selectedKnowledgeBasesForReuse
+                            .map((item) => item.knowledgeBaseId)
+                            .toList();
+                      }
+                      
+                      // 参考列表
+                      if (_selectedKnowledgeBasesForReference.isNotEmpty) {
+                        referenceKnowledgeBaseIds = _selectedKnowledgeBasesForReference
+                            .map((item) => item.knowledgeBaseId)
+                            .toList();
+                      }
+                      
+                      // 合并分类
+                      knowledgeBaseCategories = {};
+                      for (var item in _selectedKnowledgeBasesForReuse) {
+                        knowledgeBaseCategories[item.knowledgeBaseId] = 
+                            item.selectedCategories.map((c) => c.value).toList();
+                      }
+                      for (var item in _selectedKnowledgeBasesForReference) {
+                        knowledgeBaseCategories[item.knowledgeBaseId] = 
+                            item.selectedCategories.map((c) => c.value).toList();
+                      }
+                    } else {
+                      // 📚 复用或仿写模式：使用通用的knowledgeBaseIds
+                      final selectedItems = _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse
+                          ? _selectedKnowledgeBasesForReuse
+                          : _selectedKnowledgeBasesForReference;
+                      
+                      if (selectedItems.isNotEmpty) {
+                        knowledgeBaseIds = selectedItems.map((item) => item.knowledgeBaseId).toList();
+                        knowledgeBaseCategories = {};
+                        for (var item in selectedItems) {
+                          knowledgeBaseCategories[item.knowledgeBaseId] = 
+                              item.selectedCategories.map((c) => c.value).toList();
+                        }
+                      }
+                    }
+                  }
+
                   context.read<SettingGenerationBloc>().add(
                     StartGenerationEvent(
                       initialPrompt: prompt,
@@ -395,18 +537,21 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
                       usePublicTextModel: usePublic,
                       textPhasePublicProvider: publicProvider,
                       textPhasePublicModelId: publicModelId,
+                      knowledgeBaseMode: knowledgeBaseMode,
+                      knowledgeBaseIds: knowledgeBaseIds,
+                      knowledgeBaseCategories: knowledgeBaseCategories,
+                      // 📚 混合模式专用参数
+                      reuseKnowledgeBaseIds: reuseKnowledgeBaseIds,
+                      referenceKnowledgeBaseIds: referenceKnowledgeBaseIds,
+                      // 🔧 结构化输出循环模式参数（默认启用）
+                      useStructuredOutput: true,
+                      structuredIterations: 3,
                     ),
                   );
                 }
-              },
-        style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          backgroundColor: WebTheme.getPrimaryColor(context),
-          foregroundColor: Colors.white,
-          shape: const RoundedRectangleBorder(
-          ),
-          elevation: 0,
-        ),
+              }
+            : null,
+        style: WebTheme.getPrimaryButtonStyle(context),
         child: isGenerating
             ? Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -434,13 +579,15 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    hasGeneratedSettings ? Icons.refresh : Icons.auto_awesome,
+                    _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse
+                        ? Icons.file_copy
+                        : (hasGeneratedSettings ? Icons.refresh : Icons.auto_awesome),
                     size: 18,
                     color: Colors.white,
                   ),
                   const SizedBox(width: 12),
                   Text(
-                    hasGeneratedSettings ? '重新生成' : '生成设定',
+                    buttonText,
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w500,
@@ -453,7 +600,269 @@ class _GenerationControlPanelState extends State<GenerationControlPanel> {
     );
   }
 
-  /// 轻量前置检查：当没有可用公共模型或缺少 jsonify/jsonIf 标签，且用户也未设置“工具调用默认”时，提示去设置。
+  /// 📚 构建知识库模式选择器
+  Widget _buildKnowledgeBaseModeSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              '知识库模式',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: WebTheme.getTextColor(context),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Tooltip(
+              message: '使用知识库中的小说设定来辅助生成',
+              child: Icon(
+                Icons.help_outline,
+                size: 16,
+                color: WebTheme.getSecondaryTextColor(context),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: WebTheme.getBorderColor(context)),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: DropdownButton<KnowledgeBaseIntegrationMode>(
+            value: _knowledgeBaseMode,
+            isExpanded: true,
+            underline: const SizedBox(),
+            icon: Icon(
+              Icons.arrow_drop_down,
+              color: WebTheme.getSecondaryTextColor(context),
+            ),
+            style: TextStyle(
+              fontSize: 14,
+              color: WebTheme.getTextColor(context),
+            ),
+            onChanged: (mode) {
+              if (mode != null) {
+                setState(() {
+                  _knowledgeBaseMode = mode;
+                  // 切换模式时清空选择
+                  _selectedKnowledgeBasesForReuse = [];
+                  _selectedKnowledgeBasesForReference = [];
+                });
+              }
+            },
+            items: KnowledgeBaseIntegrationMode.values.map((mode) {
+              return DropdownMenuItem(
+                value: mode,
+                child: Tooltip(
+                  message: mode.description,
+                  child: Text(
+                    mode.displayName,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: WebTheme.getTextColor(context),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        // 显示模式说明
+        if (_knowledgeBaseMode != KnowledgeBaseIntegrationMode.none) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: WebTheme.getPrimaryColor(context).withOpacity(0.1),
+              border: Border.all(
+                color: WebTheme.getPrimaryColor(context).withOpacity(0.3),
+              ),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 14,
+                  color: WebTheme.getPrimaryColor(context),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _knowledgeBaseMode.description,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: WebTheme.getTextColor(context),
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 📚 构建知识库选择器
+  Widget _buildKnowledgeBaseSelector() {
+    // 混合模式：显示两个选择器（复用 + 参考）
+    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.hybrid) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 复用知识库选择器
+          Text(
+            '复用知识库设定',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: WebTheme.getTextColor(context),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: WebTheme.getPrimaryColor(context).withOpacity(0.05),
+              border: Border.all(
+                color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
+              ),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 14,
+                  color: WebTheme.getPrimaryColor(context),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '这些设定将被直接复用（不经过AI）',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: WebTheme.getTextColor(context),
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          KnowledgeBaseSettingSelector(
+            selectedItems: _selectedKnowledgeBasesForReuse,
+            onSelectionChanged: (items) {
+              setState(() {
+                _selectedKnowledgeBasesForReuse = items;
+              });
+            },
+            multipleSelection: true, // 混合模式下复用也支持多选
+            hintText: '搜索要复用的知识库小说（支持多选）...',
+          ),
+          const SizedBox(height: 24),
+          
+          // 参考知识库选择器
+          Text(
+            '参考知识库设定',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: WebTheme.getTextColor(context),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: WebTheme.getSecondaryColor(context).withOpacity(0.05),
+              border: Border.all(
+                color: WebTheme.getSecondaryColor(context).withOpacity(0.2),
+              ),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 14,
+                  color: WebTheme.getSecondaryColor(context),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '这些设定将加入提示词，作为AI参考',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: WebTheme.getTextColor(context),
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          KnowledgeBaseSettingSelector(
+            selectedItems: _selectedKnowledgeBasesForReference,
+            onSelectionChanged: (items) {
+              setState(() {
+                _selectedKnowledgeBasesForReference = items;
+              });
+            },
+            multipleSelection: true,
+            hintText: '搜索参考的知识库小说（支持多选）...',
+          ),
+        ],
+      );
+    }
+    
+    // 其他模式：单个选择器
+    final selectedItems = _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse
+        ? _selectedKnowledgeBasesForReuse
+        : _selectedKnowledgeBasesForReference;
+    
+    final multipleSelection = true; // 全部改为支持多选
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '选择知识库小说',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            color: WebTheme.getTextColor(context),
+          ),
+        ),
+        const SizedBox(height: 12),
+        KnowledgeBaseSettingSelector(
+          selectedItems: selectedItems,
+          onSelectionChanged: (items) {
+            setState(() {
+              if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse) {
+                _selectedKnowledgeBasesForReuse = items;
+              } else {
+                _selectedKnowledgeBasesForReference = items;
+              }
+            });
+          },
+          multipleSelection: multipleSelection,
+          hintText: '搜索知识库小说（支持多选）...',
+        ),
+      ],
+    );
+  }
+
+  /// 轻量前置检查：当没有可用公共模型或缺少 jsonify/jsonIf 标签，且用户也未设置"工具调用默认"时，提示去设置。
   /// 返回 true 表示继续生成，false 表示用户选择了取消或去设置。
   Future<bool> _precheckToolModelAndMaybePrompt() async {
     // 用户已设置工具默认且已验证 → 直接通过

@@ -31,6 +31,13 @@ public class CreditTransaction {
     private Integer inputTokens;
     private Integer outputTokens;
     private Long creditsDeducted;
+    
+    // 🚀 新增：预扣费+后调整机制相关字段
+    private Integer actualInputTokens;
+    private Integer actualOutputTokens;
+    private Long actualCost;
+    private Long adjustmentAmount;
+    private String adjustmentType; // "ADDITIONAL_CHARGE", "REFUND", "NO_ADJUSTMENT"
 
     @Indexed
     private String status; // PENDING, DEDUCTED, FAILED, COMPENSATED, ADJUSTED

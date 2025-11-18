@@ -333,6 +333,24 @@ public class AdminUserController {
     }
 
     /**
+     * 将指定用户的 tokenVersion +1（强制所有旧token失效）
+     */
+    @PostMapping("/{id}/token-version/bump")
+    public Mono<ResponseEntity<ApiResponse<Integer>>> bumpUserTokenVersion(@PathVariable String id) {
+        return adminUserService.bumpUserTokenVersion(id)
+                .map(updated -> ResponseEntity.ok(ApiResponse.success(updated.getTokenVersion())))
+                .onErrorResume(e -> Mono.just(ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()))));
+    }
+
+    private UserUpdateRequest toUpdateRequest(User user) {
+        UserUpdateRequest req = new UserUpdateRequest();
+        req.setEmail(user.getEmail());
+        req.setDisplayName(user.getDisplayName());
+        req.setAccountStatus(user.getAccountStatus());
+        return req;
+    }
+
+    /**
      * 默认密码提供者（可替换为读取配置或环境变量）
      */
     static class DefaultPasswordProvider {

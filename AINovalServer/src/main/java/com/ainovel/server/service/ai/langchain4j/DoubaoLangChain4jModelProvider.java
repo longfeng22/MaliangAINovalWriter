@@ -20,6 +20,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -169,7 +170,17 @@ public class DoubaoLangChain4jModelProvider extends AbstractUnifiedModelProvider
                 })
                 // 仅做换行符标准化，避免逐块排版破坏段落
                 .map(this::normalizeLineBreaksSafely)
-                .doOnError(e -> log.error("Doubao 流式生成出错: {}, 模型: {}", e.getMessage(), modelName, e));
+                .doOnError(e -> {
+                    if (e instanceof WebClientResponseException wex) {
+                        int status = wex.getStatusCode().value();
+                        String body = null;
+                        try { body = wex.getResponseBodyAsString(); } catch (Exception ignore) {}
+                        log.error("Doubao 流式生成出错: status={}, message={}, body={}, 模型: {}",
+                                status, wex.getMessage(), body, modelName, wex);
+                    } else {
+                        log.error("Doubao 流式生成出错: {}, 模型: {}", e.getMessage(), modelName, e);
+                    }
+                });
     }
     
 
@@ -190,7 +201,7 @@ public class DoubaoLangChain4jModelProvider extends AbstractUnifiedModelProvider
         try {
             // 构建请求体
             Map<String, Object> requestBody = createDoubaoRequestBody(request, true);
-            log.info("开始豆包流式请求, 模型: {}, 请求体: {}", modelName, requestBody);
+            //log.info("开始豆包流式请求, 模型: {}, 请求体: {}", modelName, requestBody);
             
             // 调用流式API
             doubaoWebClient.post()
@@ -222,17 +233,17 @@ public class DoubaoLangChain4jModelProvider extends AbstractUnifiedModelProvider
                                 }
                                 
                                 // 详细日志：显示原始JSON
-                                log.info("豆包原始JSON响应: {}", chunk);
+                                //log.info("豆包原始JSON响应: {}", chunk);
                                 
                                 DoubaoResponse doubaoResponse = objectMapper.readValue(chunk, DoubaoResponse.class);
                                 if (doubaoResponse.getChoices() != null && !doubaoResponse.getChoices().isEmpty()) {
                                     DoubaoResponse.Choice choice = doubaoResponse.getChoices().get(0);
                                     if (choice.getDelta() != null) {
                                         // 详细日志：查看delta的所有字段
-                                        log.info("豆包Delta详情: content='{}', reasoning_content='{}', role='{}'", 
-                                                choice.getDelta().getContent(),
-                                                choice.getDelta().getReasoningContent(),
-                                                choice.getDelta().getRole());
+//                                        log.info("豆包Delta详情: content='{}', reasoning_content='{}', role='{}'",
+//                                                choice.getDelta().getContent(),
+//                                                choice.getDelta().getReasoningContent(),
+//                                                choice.getDelta().getRole());
                                         
                                         // 优先处理reasoning_content，这是豆包特有的字段
                                         String content = choice.getDelta().getReasoningContent();
@@ -242,12 +253,12 @@ public class DoubaoLangChain4jModelProvider extends AbstractUnifiedModelProvider
                                         }
                                         
                                         if (content != null && !content.isEmpty()) {
-                                            log.info("豆包解析到内容片段(原始): '{}'", content);
-                                            log.info("豆包内容包含换行符: \\n={}, \\r\\n={}, 实际换行={}", 
-                                                    content.contains("\\n"), 
-                                                    content.contains("\\r\\n"),
-                                                    content.contains("\n"));
-                                            
+//                                            log.info("豆包解析到内容片段(原始): '{}'", content);
+//                                            log.info("豆包内容包含换行符: \\n={}, \\r\\n={}, 实际换行={}",
+//                                                    content.contains("\\n"),
+//                                                    content.contains("\\r\\n"),
+//                                                    content.contains("\n"));
+//
                                             // 显示每个字符的详细信息（前30个字符）
                                             if (content.length() > 0) {
                                                 StringBuilder charDetails = new StringBuilder();
@@ -256,7 +267,7 @@ public class DoubaoLangChain4jModelProvider extends AbstractUnifiedModelProvider
                                                     char c = content.charAt(i);
                                                     charDetails.append(String.format("'%c'(%d) ", c, (int)c));
                                                 }
-                                                log.info("豆包内容字符详情(前{}字符): {}", limit, charDetails.toString());
+                                                //log.info("豆包内容字符详情(前{}字符): {}", limit, charDetails.toString());
                                             }
                                             
                                             sink.tryEmitNext(content);
@@ -275,8 +286,19 @@ public class DoubaoLangChain4jModelProvider extends AbstractUnifiedModelProvider
                             }
                         },
                         error -> {
-                            log.error("豆包流式API调用失败: {}", error.getMessage());
-                            sink.tryEmitNext("错误：" + error.getMessage());
+                            if (error instanceof WebClientResponseException wex) {
+                                int status = wex.getStatusCode().value();
+                                String body = null;
+                                try { body = wex.getResponseBodyAsString(); } catch (Exception ignore) {}
+                                if (body != null && body.length() > 2000) {
+                                    body = body.substring(0, 2000);
+                                }
+                                log.error("豆包流式API调用失败 - 状态码: {}, message: {}, 响应体: {}", status, wex.getMessage(), body);
+                                sink.tryEmitNext("错误：" + status + " " + wex.getMessage() + (body != null && !body.isEmpty() ? " - " + body : ""));
+                            } else {
+                                log.error("豆包流式API调用失败: {}", error.getMessage());
+                                sink.tryEmitNext("错误：" + error.getMessage());
+                            }
                             sink.tryEmitComplete();
                         },
                         () -> {
@@ -312,9 +334,15 @@ public class DoubaoLangChain4jModelProvider extends AbstractUnifiedModelProvider
             requestBody.put("temperature", request.getTemperature());
         }
         
-        // 设置最大令牌数
+        // 设置最大令牌数 - 豆包特殊处理：限制不超过32768
         if (request.getMaxTokens() != null) {
-            requestBody.put("max_tokens", request.getMaxTokens());
+            int maxTokens = request.getMaxTokens();
+            // 豆包模型的max_tokens上限是32768，超出会返回400错误
+            if (maxTokens > 32768) {
+                log.warn("豆包模型max_tokens限制：原值{}超出上限32768，已自动调整", maxTokens);
+                maxTokens = 32768;
+            }
+            requestBody.put("max_tokens", maxTokens);
         }
         
         // 如果是流式请求，设置stream参数

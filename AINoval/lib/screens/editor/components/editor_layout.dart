@@ -77,7 +77,23 @@ class EditorLayout extends StatelessWidget {
                   },
                   builder: (context, state) {
                     if (state is editor_bloc.EditorLoading) {
-                      return const Center(child: CircularProgressIndicator());
+                      return Center(
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: WebTheme.getSurfaceColor(context),
+                            border: Border.all(color: WebTheme.getBorderColor(context)),
+                          ),
+                          child: SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 3,
+                              valueColor: AlwaysStoppedAnimation<Color>(WebTheme.getTextColor(context)),
+                            ),
+                          ),
+                        ),
+                      );
                     } else if (state is editor_bloc.EditorLoaded) {
                       if (stateManager.shouldCheckControllers(state)) {
                         editorController.ensureControllersForNovel(state.novel);

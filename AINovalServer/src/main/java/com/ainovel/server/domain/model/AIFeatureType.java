@@ -55,9 +55,28 @@ public enum AIFeatureType {
 
     ,
     /**
+     * 设定生成工具调用阶段
+     */
+    SETTING_GENERATION_TOOL
+    ,
+    /**
      * 小说编排（大纲/章节/组合）
      */
-    NOVEL_COMPOSE
+    NOVEL_COMPOSE,
+    
+    /**
+     * 故事剧情续写（总结当前剧情并生成下一个大纲）
+     */
+    STORY_PLOT_CONTINUATION,
+    
+    /**
+     * 知识库拆书 - 设定提取（也用于积分预估）
+     */
+    KNOWLEDGE_EXTRACTION_SETTING,
 
-    // 未来可扩展其他功能点，如角色生成、大纲优化等
+    /**
+     * 知识库拆书 - 章节大纲生成
+     */
+    KNOWLEDGE_EXTRACTION_OUTLINE
+
 }

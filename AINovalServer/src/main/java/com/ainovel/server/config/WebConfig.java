@@ -31,8 +31,19 @@ public class WebConfig implements WebFluxConfigurer {
     
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        // 静态资源配置：映射所有静态文件到 /app/web/ 目录
-        registry.addResourceHandler("/**")
+        // 静态资源配置：映射前端静态文件到 /app/web/ 目录
+        // 注意：不要拦截 /api/** 路径，避免影响API请求
+        registry.addResourceHandler(
+                "/",
+                "/index.html",
+                "/assets/**",
+                "/icons/**",
+                "/canvaskit/**",
+                "/*.js",
+                "/*.json",
+                "/*.css",
+                "/favicon.ico"
+        )
                 .addResourceLocations("file:/app/web/")
                 .setCacheControl(CacheControl.noCache())
                 .resourceChain(true);

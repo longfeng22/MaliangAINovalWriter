@@ -138,6 +138,7 @@ public class LegacyAISettingGenerationStrategyFactory {
         
         Map<String, String> attributes = data.getAttributes() != null ? data.getAttributes() : Collections.emptyMap();
         List<String> tags = data.getTags() != null ? data.getTags() : Collections.emptyList();
+        String parentId = data.getParentId(); // 获取父设定ID
 
         return NovelSettingItem.builder()
                 .id(UUID.randomUUID().toString())
@@ -148,6 +149,7 @@ public class LegacyAISettingGenerationStrategyFactory {
                 .description(data.getDescription().trim())
                 .attributes(attributes)
                 .tags(tags)
+                .parentId(parentId) // 设置父设定ID
                 .priority(3) 
                 .generatedBy("AI_SETTING_GENERATION")
                 .status("SUGGESTED")

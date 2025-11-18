@@ -117,7 +117,15 @@ public interface AIService {
      * @param apiEndpoint API端点 (可选)
      * @return AI模型提供商实例
      */
-    AIModelProvider createAIModelProvider(String provider, String modelName, String apiKey, String apiEndpoint);
+    // 已废弃并删除实现：请使用 createProviderByConfigId
+
+    /**
+     * 根据配置ID创建AI模型提供商（统一入口）。
+     * - 优先解析用户私有配置；不存在则回退公共配置
+     * - 自动解密/获取API Key与Endpoint
+     * - 自动挂载装饰器链（Billing→Tracing→Provider）
+     */
+    AIModelProvider createProviderByConfigId(String userId, String configId);
 
     /**
      * 设置是否使用LangChain4j实现 (全局配置)

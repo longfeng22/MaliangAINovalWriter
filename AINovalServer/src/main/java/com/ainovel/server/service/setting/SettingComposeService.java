@@ -6,8 +6,7 @@ import com.ainovel.server.service.AIService;
 import com.ainovel.server.service.NovelAIService;
 import com.ainovel.server.service.NovelService;
 import com.ainovel.server.service.NovelSettingService;
-import com.ainovel.server.service.ai.AIModelProvider;
-import com.ainovel.server.service.setting.generation.SettingGenerationService;
+// import com.ainovel.server.service.setting.generation.SettingGenerationService;
 import com.ainovel.server.service.setting.generation.InMemorySessionManager;
 import com.ainovel.server.service.PublicModelConfigService;
 import com.ainovel.server.domain.model.setting.generation.SettingGenerationSession;
@@ -25,6 +24,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.ArrayList;
+// import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,12 +43,12 @@ public class SettingComposeService {
 
     private final UniversalAIService universalAIService;
     private final NovelService novelService;
-    private final com.ainovel.server.service.SceneService sceneService;
+    // private final com.ainovel.server.service.SceneService sceneService;
     private final InMemorySessionManager inMemorySessionManager;
     private final SettingConversionService settingConversionService;
     private final NovelSettingService novelSettingService;
     private final com.ainovel.server.service.setting.NovelSettingHistoryService historyService;
-    private final SettingGenerationService settingGenerationService;
+    // private final SettingGenerationService settingGenerationService;
     private final ObjectMapper objectMapper;
     private final NovelAIService novelAIService;
     private final AIService aiService;
@@ -56,7 +56,7 @@ public class SettingComposeService {
     private final com.ainovel.server.service.ai.tools.ToolRegistry toolRegistry;
     private final com.ainovel.server.service.prompt.providers.NovelComposePromptProvider composePromptProvider;
     private final PublicModelConfigService publicModelConfigService;
-    private final com.ainovel.server.service.ai.tools.fallback.ToolFallbackRegistry toolFallbackRegistry;
+    // private final com.ainovel.server.service.ai.tools.fallback.ToolFallbackRegistry toolFallbackRegistry;
 
     public Flux<UniversalAIResponseDto> streamCompose(UniversalAIRequestDto request) {
         // 归一化 requestType
@@ -66,11 +66,11 @@ public class SettingComposeService {
         Mono<UniversalAIRequestDto> prepared = ensureNovelIdIfNeeded(request)
                 .flatMap(req -> tryConvertSettingsFromSession(req).thenReturn(req));
 
-        // 提前发送一次绑定信号，保证前端能尽早拿到 novelId / sessionId（最后仍会再发一次最终状态）
+        // 🚀 修复：提前发送初始绑定信号（ready=false），告诉前端已绑定但还在生成中
         return prepared.flatMapMany(preq -> {
             log.info("[Compose] prepared: userId={}, settingSessionId={}, sessionId={}, novelId={}",
                     preq.getUserId(), preq.getSettingSessionId(), preq.getSessionId(), preq.getNovelId());
-            Flux<UniversalAIResponseDto> preBind = bindNovelToSessionAndSignal(preq.getNovelId(), preq.getSettingSessionId())
+            Flux<UniversalAIResponseDto> preBind = bindNovelToSessionAndSignalInitial(preq.getNovelId(), preq.getSettingSessionId())
                     .doOnNext(chunk -> {
                         try {
                             Map<String, Object> m = chunk.getMetadata();
@@ -233,53 +233,44 @@ public class SettingComposeService {
         String mode = getParam(request, "mode", "outline");
 
         if ("outline".equalsIgnoreCase(mode)) {
-            Mono<Boolean> isPublicMono = isPublicComposeModel(request);
-            return isPublicMono.flatMapMany(isPublic -> {
-                Mono<List<String>> blocksMono;
-                if (Boolean.TRUE.equals(isPublic)) {
-                    // 公共模型：改为文本流路径，触发统一扣费
-                    blocksMono = generateOutlinesWithTextPublicModelBlocks(request).cache();
-                } else {
-                    // 用户模型：沿用工具路径
-                    blocksMono = generateOutlinesWithTools(request).map(items -> {
-                        List<String> blocks = new ArrayList<>();
-                        for (int i = 0; i < items.size(); i++) {
-                            var it = items.get(i);
-                            String title = it.getTitle() != null ? it.getTitle() : defaultChapterTitle(i + 1);
-                            String summary = it.getSummary() != null ? it.getSummary() : "";
-                            blocks.add(title + "\n" + summary);
-                        }
-                        return blocks;
-                    }).cache();
+            // 公共/私有统一走工具化大纲路径
+            Mono<List<String>> blocksMono = generateOutlinesWithTools(request).map(items -> {
+                List<String> blocks = new ArrayList<>();
+                for (int i = 0; i < items.size(); i++) {
+                    var it = items.get(i);
+                    String title = it.getTitle() != null ? it.getTitle() : defaultChapterTitle(i + 1);
+                    String summary = it.getSummary() != null ? it.getSummary() : "";
+                    blocks.add(title + "\n" + summary);
                 }
+                return blocks;
+            }).cache();
 
-                Mono<UniversalAIResponseDto> afterMono = blocksMono.flatMap(blocks -> {
-                    String novelId = request.getNovelId();
-                    List<Mono<Void>> saves = new ArrayList<>();
-                    for (int i = 0; i < blocks.size(); i++) {
-                        String block = blocks.get(i);
-                        String title = defaultChapterTitle(i + 1);
-                        String outlineSummary = block.contains("\n") ? block.substring(block.indexOf("\n") + 1) : block;
-                        if (novelId != null && !novelId.isEmpty()) {
-                            saves.add(saveChapter(novelId, title, outlineSummary, ""));
-                        }
+            Mono<UniversalAIResponseDto> afterMono = blocksMono.flatMap(blocks -> {
+                String novelId = request.getNovelId();
+                List<Mono<Void>> saves = new ArrayList<>();
+                for (int i = 0; i < blocks.size(); i++) {
+                    String block = blocks.get(i);
+                    String title = defaultChapterTitle(i + 1);
+                    String outlineSummary = block.contains("\n") ? block.substring(block.indexOf("\n") + 1) : block;
+                    if (novelId != null && !novelId.isEmpty()) {
+                        saves.add(saveChapter(novelId, title, outlineSummary, ""));
                     }
-                    Mono<Void> all = saves.isEmpty() ? Mono.empty() : reactor.core.publisher.Flux.fromIterable(saves).concatMap(m -> m).then();
-                    Mono<UniversalAIResponseDto> bindChunk = bindNovelToSessionAndSignal(novelId, request.getSettingSessionId());
-                    // 在保存完成后同步刷新字数统计，再发送绑定信号
-                    Mono<UniversalAIResponseDto> tail = (novelId != null && !novelId.isEmpty())
-                            ? novelService.updateNovelWordCount(novelId).then(bindChunk)
-                            : bindChunk;
-                    return all.then(tail);
-                });
-
-                Flux<UniversalAIResponseDto> outlinesJsonFlux = blocksMono
-                        .map(blocks -> buildOutlinesMetadata(blocks))
-                        .map(meta -> buildSystemChunkWithMetadata(AIFeatureType.NOVEL_COMPOSE.name(), meta))
-                        .flux();
-
-                return Flux.concat(outlinesJsonFlux, afterMono.flux());
+                }
+                Mono<Void> all = saves.isEmpty() ? Mono.empty() : reactor.core.publisher.Flux.fromIterable(saves).concatMap(m -> m).then();
+                Mono<UniversalAIResponseDto> bindChunk = bindNovelToSessionAndSignal(novelId, request.getSettingSessionId());
+                // 在保存完成后同步刷新字数统计，再发送绑定信号
+                Mono<UniversalAIResponseDto> tail = (novelId != null && !novelId.isEmpty())
+                        ? novelService.updateNovelWordCount(novelId).then(bindChunk)
+                        : bindChunk;
+                return all.then(tail);
             });
+
+            Flux<UniversalAIResponseDto> outlinesJsonFlux = blocksMono
+                    .map(blocks -> buildOutlinesMetadata(blocks))
+                    .map(meta -> buildSystemChunkWithMetadata(AIFeatureType.NOVEL_COMPOSE.name(), meta))
+                    .flux();
+
+            return Flux.concat(outlinesJsonFlux, afterMono.flux());
         }
         if ("chapters".equalsIgnoreCase(mode)) {
             AtomicReference<StringBuilder> buffer = new AtomicReference<>(new StringBuilder());
@@ -289,20 +280,6 @@ public class SettingComposeService {
                 UniversalAIRequestDto reqWithCtx = (ctx != null && !ctx.isBlank())
                         ? cloneWithParam(request, Map.of("context", ctx))
                         : request;
-                // 若公共模型，确保注入扣费标记（Normalizer 在 buildAIRequest 中也会执行一遍，双保险）
-                try {
-                    com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
-                        reqWithCtx,
-                        true,
-                        true,
-                        AIFeatureType.NOVEL_COMPOSE.name(),
-                        resolveModelConfigId(reqWithCtx),
-                        null,
-                        null,
-                        reqWithCtx.getSettingSessionId() != null ? reqWithCtx.getSettingSessionId() : reqWithCtx.getSessionId(),
-                        null
-                    );
-                } catch (Exception ignore) {}
                 return universalAIService.processStreamRequest(reqWithCtx)
                         .doOnNext(evt -> {
                             if (evt != null && evt.getContent() != null) {
@@ -343,25 +320,19 @@ public class SettingComposeService {
         }
 
         if ("outline_plus_chapters".equalsIgnoreCase(mode)) {
-            // 1) 先大纲（公共模型→文本流；用户模型→工具）
+            // 1) 先大纲：统一走工具化大纲路径（公共逻辑由装饰器处理）
             UniversalAIRequestDto outlineReq = cloneWithParam(request, Map.of("mode", "outline"));
-            Mono<Boolean> isPublicMono = isPublicComposeModel(outlineReq);
 
             // 转换为字符串块供后续章节生成使用："标题\n摘要"（缓存，防止多订阅）
-            Mono<List<String>> outlinesMono = isPublicMono.flatMap(isPublic -> {
-                if (Boolean.TRUE.equals(isPublic)) {
-                    return generateOutlinesWithTextPublicModelBlocks(outlineReq);
+            Mono<List<String>> outlinesMono = generateOutlinesWithTools(outlineReq).map(items -> {
+                List<String> blocks = new ArrayList<>();
+                for (int i = 0; i < items.size(); i++) {
+                    var it = items.get(i);
+                    String title = it.getTitle() != null ? it.getTitle() : defaultChapterTitle(i + 1);
+                    String summary = it.getSummary() != null ? it.getSummary() : "";
+                    blocks.add(title + "\n" + summary);
                 }
-                return generateOutlinesWithTools(outlineReq).map(items -> {
-                    List<String> blocks = new ArrayList<>();
-                    for (int i = 0; i < items.size(); i++) {
-                        var it = items.get(i);
-                        String title = it.getTitle() != null ? it.getTitle() : defaultChapterTitle(i + 1);
-                        String summary = it.getSummary() != null ? it.getSummary() : "";
-                        blocks.add(title + "\n" + summary);
-                    }
-                    return blocks;
-                });
+                return blocks;
             }).cache();
 
             // 将大纲块作为结构化元数据发给前端
@@ -389,7 +360,7 @@ public class SettingComposeService {
             return Flux.concat(outlinesJsonFlux, chaptersFlux);
         }
 
-        // 兜底：按普通流式处理
+        // 兜底：按普通流式处理（装饰器统一处理公共路径）
         return universalAIService.processStreamRequest(request);
     }
 
@@ -525,12 +496,16 @@ public class SettingComposeService {
                 .doOnNext(evt -> {
                     if (evt != null && evt.getContent() != null) {
                         chapterBuffers.get(currentIndex).append(evt.getContent());
+                        log.debug("🔧 [DEBUG] 章节 {} 收到内容块: length={}, 累积长度={}", 
+                                chapterIndex, evt.getContent().length(), chapterBuffers.get(currentIndex).length());
                     }
                 })
                 .doOnComplete(() -> {
                     String generatedContent = chapterBuffers.get(currentIndex).toString();
                     log.info("[Compose][Serial] 第 {} 章生成完成，内容长度: {} 字符", 
                             chapterIndex, generatedContent.length());
+                    log.info("🔧 [DEBUG] 章节 {} 内容预览: '{}'", chapterIndex, 
+                            generatedContent.length() > 100 ? generatedContent.substring(0, 100) + "..." : generatedContent);
                     
                     // 🚀 将当前章节的摘要和内容添加到上下文中，供下一章使用
                     previousContext.append("\n\n==== 第").append(chapterIndex).append("章 ====\n");
@@ -618,9 +593,9 @@ public class SettingComposeService {
     /**
      * 异步保存章节：创建章节并创建一个初始场景，摘要写入summary，正文写入content
      */
-    private void saveChapterAsync(String novelId, String chapterTitle, String outlineSummary, String chapterContent) {
-        saveChapter(novelId, chapterTitle, outlineSummary, chapterContent).subscribe();
-    }
+    // private void saveChapterAsync(String novelId, String chapterTitle, String outlineSummary, String chapterContent) {
+    //     saveChapter(novelId, chapterTitle, outlineSummary, chapterContent).subscribe();
+    // }
 
     private Mono<Void> saveChapter(String novelId, String chapterTitle, String outlineSummary, String chapterContent) {
         try {
@@ -639,6 +614,20 @@ public class SettingComposeService {
         String title;
         String outline;
         String content;
+    }
+
+    // 用于在工具化链路中统一承载提供商信息（公共/私有均可）
+    private static class ProviderInfo {
+        final String provider;
+        final String modelName;
+        final String apiKey;
+        final String apiEndpoint;
+        ProviderInfo(String provider, String modelName, String apiKey, String apiEndpoint) {
+            this.provider = provider;
+            this.modelName = modelName;
+            this.apiKey = apiKey;
+            this.apiEndpoint = apiEndpoint;
+        }
     }
 
     /**
@@ -713,12 +702,11 @@ public class SettingComposeService {
 
         // 识别 fork / reuseNovel 标志（默认 fork=true：强制新建小说）
         boolean fork = false;
-        boolean reuseNovel = false;
+        // boolean reuseNovel = false;
         try {
             Object f = req.getParameters() != null ? req.getParameters().get("fork") : null;
-            Object r = req.getParameters() != null ? req.getParameters().get("reuseNovel") : null;
+            // Object r = req.getParameters() != null ? req.getParameters().get("reuseNovel") : null;
             fork = parseBooleanFlag(f).orElse(false); // compose 默认不主动fork，除非前端传入
-            reuseNovel = parseBooleanFlag(r).orElse(false);
         } catch (Exception ignore) {}
 
         Mono<UniversalAIRequestDto> ensureNovelMono;
@@ -831,115 +819,11 @@ public class SettingComposeService {
         return clone;
     }
 
-    // =============== 公共模型辅助 ===============
-    private Mono<Boolean> isPublicComposeModel(UniversalAIRequestDto req) {
-        String modelConfigId = req.getModelConfigId();
-        if ((modelConfigId == null || modelConfigId.isEmpty()) && req.getMetadata() != null) {
-            Object mid = req.getMetadata().get("modelConfigId");
-            if (mid instanceof String s && !s.isEmpty()) {
-                modelConfigId = s;
-            }
-        }
-        if (modelConfigId == null || modelConfigId.isEmpty()) return Mono.just(Boolean.FALSE);
-        // 直接按ID查公共模型配置，查到即公共
-        return publicModelConfigService.findById(modelConfigId)
-                .map(cfg -> Boolean.TRUE)
-                .defaultIfEmpty(Boolean.FALSE)
-                .onErrorReturn(Boolean.FALSE);
-    }
+    // 公共模型辅助逻辑已下沉至装饰器层，删除上层判定
 
     
 
-    private Mono<List<String>> generateOutlinesWithTextPublicModelBlocks(UniversalAIRequestDto request) {
-        // 基于通用流式文本生成大纲，并按 "标题\n摘要" 组装
-        UniversalAIRequestDto textReq = cloneWithParam(request, Map.of("mode", "outline"));
-        try {
-            com.ainovel.server.service.billing.PublicModelBillingNormalizer.normalize(
-                textReq,
-                true,
-                true,
-                AIFeatureType.NOVEL_COMPOSE.name(),
-                resolveModelConfigId(textReq),
-                null,
-                null,
-                textReq.getSettingSessionId() != null ? textReq.getSettingSessionId() : textReq.getSessionId(),
-                null
-            );
-        } catch (Exception ignore) {}
-        java.util.concurrent.atomic.AtomicReference<StringBuilder> buf = new java.util.concurrent.atomic.AtomicReference<>(new StringBuilder());
-        return universalAIService.processStreamRequest(textReq)
-                .doOnNext(evt -> { if (evt != null && evt.getContent() != null) buf.get().append(evt.getContent()); })
-                .ignoreElements()
-                .then(Mono.fromSupplier(() -> {
-                    // 将文本解析成块（简单回退：按空行分段）
-                    String all = buf.get().toString();
-                    // 优先尝试：通用兜底解析 create_compose_outlines（公共模型也可用）
-                    try {
-                        String contextId = "compose-outline-" + (request.getSessionId() != null ? request.getSessionId() : java.util.UUID.randomUUID());
-                        java.util.List<com.ainovel.server.service.ai.tools.fallback.ToolFallbackParser> parsers = toolFallbackRegistry.getParsers("create_compose_outlines");
-                        if (parsers != null && !parsers.isEmpty()) {
-                            for (var parser : parsers) {
-                                try {
-                                    if (parser.canParse(all)) {
-                                        java.util.Map<String, Object> params = parser.parseToToolParams(all);
-                                        if (params != null && params.get("outlines") instanceof java.util.List<?>) {
-                                            // 执行真实工具以保持副作用一致（如事件/日志），并用 handler 捕获结果
-                                            var captured = new java.util.ArrayList<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem>();
-                                            var handler = new com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineHandler() {
-                                                @Override
-                                                public boolean handleOutlines(java.util.List<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem> outlines) {
-                                                    if (outlines == null || outlines.isEmpty()) return false;
-                                                    int chapterCount = getIntParam(request, "chapterCount", 3);
-                                                    java.util.List<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem> toAdd = outlines;
-                                                    if (toAdd.size() > chapterCount) toAdd = toAdd.subList(0, chapterCount);
-                                                    captured.clear();
-                                                    captured.addAll(toAdd);
-                                                    return true;
-                                                }
-                                            };
-                                            var toolCtx = toolExecutionService.createContext(contextId);
-                                            try {
-                                                toolCtx.registerTool(new com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool(objectMapper, handler));
-                                                String argsJson = objectMapper.writeValueAsString(params);
-                                                toolExecutionService.invokeTool(contextId, "create_compose_outlines", argsJson);
-                                            } finally {
-                                                try { toolCtx.close(); } catch (Exception ignore) {}
-                                            }
-                                            if (!captured.isEmpty()) {
-                                                java.util.List<String> blocks = new java.util.ArrayList<>();
-                                                for (int i = 0; i < captured.size(); i++) {
-                                                    var it = captured.get(i);
-                                                    String title = it.getTitle() != null ? it.getTitle() : defaultChapterTitle(i + 1);
-                                                    String summary = it.getSummary() != null ? it.getSummary() : "";
-                                                    blocks.add(title + "\n" + summary);
-                                                }
-                                                return blocks;
-                                            }
-                                        }
-                                    }
-                                } catch (Exception ignore) {}
-                            }
-                        }
-                    } catch (Exception ignore) {}
-                    String[] blocks = all.split("\n\n+");
-                    List<String> result = new ArrayList<>();
-                    for (String b : blocks) {
-                        String t = b.trim();
-                        if (!t.isEmpty()) {
-                            // 取首行作为标题，剩余作为摘要
-                            String[] lines = t.split("\n", 2);
-                            String title = lines[0].trim();
-                            String summary = lines.length > 1 ? lines[1].trim() : "";
-                            result.add((title.isEmpty() ? "大纲" : title) + "\n" + summary);
-                        }
-                    }
-                    if (result.isEmpty()) {
-                        // 若无法解析，至少返回一个块，避免后续 NPE
-                        result.add("第一章\n");
-                    }
-                    return result;
-                }));
-    }
+    // 旧的公共模型文本生成大纲路径已移除（统一走 generateOutlinesWithTools）
 
     private String resolveModelConfigId(UniversalAIRequestDto req) {
         String modelConfigId = req.getModelConfigId();
@@ -952,59 +836,7 @@ public class SettingComposeService {
         return modelConfigId;
     }
 
-    private List<String> parseOutlines(String outlineText, int expected) {
-        List<String> items = new ArrayList<>();
-        if (outlineText == null || outlineText.isEmpty()) return items;
-
-        // 使用块级解析：一个 [OUTLINE_ITEM ...] 或 [OUTLINE\s*_ITEM ...] 开始，直到下一个同类标记之前的所有内容归为同一大纲块
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile("\\[\\s*OUTLINE\\s*_ITEM[^\\]]*\\]");
-        java.util.regex.Matcher m = p.matcher(outlineText);
-
-        java.util.List<Integer> starts = new java.util.ArrayList<>();
-        while (m.find()) {
-            starts.add(m.start());
-        }
-
-        if (!starts.isEmpty()) {
-            log.debug("[Compose] 解析到大纲标签数量: {}", starts.size());
-            for (int i = 0; i < starts.size(); i++) {
-                int start = starts.get(i);
-                int end = (i + 1 < starts.size()) ? starts.get(i + 1) : outlineText.length();
-                String block = outlineText.substring(start, end).trim();
-                if (!block.isEmpty()) {
-                    items.add(block);
-                }
-                if (items.size() >= expected) break;
-            }
-        }
-
-        // 回退：若未匹配到任何带标记的大纲，则按空行分段
-        if (items.isEmpty()) {
-            String[] blocks = outlineText.split("\n\n+");
-            for (String b : blocks) {
-                String t = b.trim();
-                if (!t.isEmpty()) items.add(t);
-                if (items.size() >= expected) break;
-            }
-        }
-
-        // 截断到期望数量
-        if (items.size() > expected) return items.subList(0, expected);
-        log.debug("[Compose] 大纲块数量: {} (期望: {}), 首块预览: {}", items.size(), expected, items.isEmpty() ? "<empty>" : items.get(0));
-
-        // 详细日志：逐项打印标题与字数
-        try {
-            for (int i = 0; i < items.size(); i++) {
-                String block = items.get(i);
-                String title = defaultChapterTitle(i + 1);
-                int charCount = block.codePointCount(0, block.length());
-                log.info("[Compose] 解析大纲第{}项：标题=\"{}\"，字数={}", (i + 1), title, charCount);
-            }
-        } catch (Exception e) {
-            log.warn("[Compose] 解析大纲日志打印异常: {}", e.getMessage());
-        }
-        return items;
-    }
+    // private List<String> parseOutlines(String outlineText, int expected) { /* unused */ return java.util.Collections.emptyList(); }
 
     /**
      * 构造一个简易的系统片段，插入到合并流中（例如章节大纲/正文的标记）。
@@ -1039,30 +871,7 @@ public class SettingComposeService {
                 .build();
     }
 
-    /**
-     * 将分段大纲转换为 JSON：{"outlines":[{"index":1,"title":"...","summary":"..."}, ...]}
-     */
-    private String buildOutlinesJson(java.util.List<String> outlines) {
-        try {
-            com.fasterxml.jackson.databind.node.ObjectNode root = objectMapper.createObjectNode();
-            com.fasterxml.jackson.databind.node.ArrayNode arr = objectMapper.createArrayNode();
-            for (int i = 0; i < outlines.size(); i++) {
-                String block = outlines.get(i);
-                String title = defaultChapterTitle(i + 1);
-                String summary = block;
-                com.fasterxml.jackson.databind.node.ObjectNode item = objectMapper.createObjectNode();
-                item.put("index", i + 1);
-                item.put("title", title);
-                item.put("summary", summary);
-                arr.add(item);
-            }
-            root.set("outlines", arr);
-            return objectMapper.writeValueAsString(root);
-        } catch (Exception e) {
-            // 兜底：返回空结构
-            return "{\"outlines\":[]}";
-        }
-    }
+
 
     // 新增：将大纲转换为 metadata Map（避免大文本放入content，便于前端通过metadata消费）
     private java.util.Map<String, Object> buildOutlinesMetadata(java.util.List<String> outlines) {
@@ -1084,10 +893,10 @@ public class SettingComposeService {
         return meta;
     }
 
-    // 保存完成后，若有settingSessionId则把novelId绑定到会话，并发给前端一个系统片段信号
-    private Mono<UniversalAIResponseDto> bindNovelToSessionAndSignal(String novelId, String settingSessionId) {
+    // 🚀 新增：初始绑定信号（ready=false，告诉前端已绑定但还在生成中）
+    private Mono<UniversalAIResponseDto> bindNovelToSessionAndSignalInitial(String novelId, String settingSessionId) {
         if (novelId == null || novelId.isEmpty()) {
-            log.info("[Compose] bind: no novelId, settingSessionId={}", settingSessionId);
+            log.info("[Compose] initial bind: no novelId, settingSessionId={}", settingSessionId);
             java.util.HashMap<String, Object> meta = new java.util.HashMap<>();
             meta.put("composeBind", java.util.Map.of("novelId", "", "sessionId", settingSessionId != null ? settingSessionId : ""));
             meta.put("composeBindStatus", "no_novelId");
@@ -1096,7 +905,38 @@ public class SettingComposeService {
             return Mono.just(buildSystemChunkWithMetadata(AIFeatureType.NOVEL_COMPOSE.name(), meta));
         }
         if (settingSessionId == null || settingSessionId.isEmpty()) {
-            log.info("[Compose] bind: no settingSessionId, novelId={}", novelId);
+            log.info("[Compose] initial bind: no settingSessionId, novelId={}", novelId);
+            java.util.HashMap<String, Object> meta = new java.util.HashMap<>();
+            meta.put("composeBind", java.util.Map.of("novelId", novelId, "sessionId", ""));
+            meta.put("composeBindStatus", "no_session");
+            meta.put("composeReady", Boolean.FALSE);
+            meta.put("composeReadyReason", "no_session");
+            return Mono.just(buildSystemChunkWithMetadata(AIFeatureType.NOVEL_COMPOSE.name(), meta));
+        }
+        // 🚀 关键修复：初始绑定只发送 ready=false，表示"已绑定但还在生成中"
+        java.util.HashMap<String, Object> meta = new java.util.HashMap<>();
+        meta.put("composeBind", java.util.Map.of("novelId", novelId, "sessionId", settingSessionId));
+        meta.put("composeBindStatus", "binding");
+        meta.put("composeReady", Boolean.FALSE);  // ✅ 关键：告诉前端还在生成中
+        meta.put("composeReadyReason", "generating");
+        UniversalAIResponseDto chunk = buildSystemChunkWithMetadata(AIFeatureType.NOVEL_COMPOSE.name(), meta);
+        log.info("[Compose] initial bind: emitted initial signal bind={}, status=binding, ready=false", novelId);
+        return Mono.just(chunk);
+    }
+
+    // 保存完成后，若有settingSessionId则把novelId绑定到会话，并发给前端最终完成信号
+    private Mono<UniversalAIResponseDto> bindNovelToSessionAndSignal(String novelId, String settingSessionId) {
+        if (novelId == null || novelId.isEmpty()) {
+            log.info("[Compose] final bind: no novelId, settingSessionId={}", settingSessionId);
+            java.util.HashMap<String, Object> meta = new java.util.HashMap<>();
+            meta.put("composeBind", java.util.Map.of("novelId", "", "sessionId", settingSessionId != null ? settingSessionId : ""));
+            meta.put("composeBindStatus", "no_novelId");
+            meta.put("composeReady", Boolean.FALSE);
+            meta.put("composeReadyReason", "no_novelId");
+            return Mono.just(buildSystemChunkWithMetadata(AIFeatureType.NOVEL_COMPOSE.name(), meta));
+        }
+        if (settingSessionId == null || settingSessionId.isEmpty()) {
+            log.info("[Compose] final bind: no settingSessionId, novelId={}", novelId);
             java.util.HashMap<String, Object> meta = new java.util.HashMap<>();
             meta.put("composeBind", java.util.Map.of("novelId", novelId, "sessionId", ""));
             meta.put("composeBindStatus", "no_session");
@@ -1110,19 +950,19 @@ public class SettingComposeService {
                     return inMemorySessionManager.saveSession(session);
                 })
                 .onErrorResume(e -> {
-                    log.warn("[Compose] bind: failed to save session mapping: sessionId={}, novelId={}, err={}", settingSessionId, novelId, e.getMessage());
+                    log.warn("[Compose] final bind: failed to save session mapping: sessionId={}, novelId={}, err={}", settingSessionId, novelId, e.getMessage());
                     return Mono.empty();
                 })
                 .then(Mono.fromSupplier(() -> {
                     java.util.HashMap<String, Object> meta = new java.util.HashMap<>();
                     meta.put("composeBind", java.util.Map.of("novelId", novelId, "sessionId", settingSessionId));
                     meta.put("composeBindStatus", "bound");
-                    meta.put("composeReady", Boolean.TRUE);
+                    meta.put("composeReady", Boolean.TRUE);  // ✅ 只有最终信号才设置 ready=true
                     meta.put("composeReadyReason", "ok");
                     UniversalAIResponseDto chunk = buildSystemChunkWithMetadata(AIFeatureType.NOVEL_COMPOSE.name(), meta);
                     try {
                         Map<String, Object> m = chunk.getMetadata();
-                        log.info("[Compose] bind: emitted final signal bind={}, status=bound", (m != null ? m.get("composeBind") : null));
+                        log.info("[Compose] final bind: emitted final signal bind={}, status=bound, ready=true", (m != null ? m.get("composeBind") : null));
                     } catch (Exception ignore) {}
                     return chunk;
                 }));
@@ -1130,144 +970,143 @@ public class SettingComposeService {
 
     // ==================== 工具化大纲生成 ====================
     private Mono<List<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem>> generateOutlinesWithTools(UniversalAIRequestDto request) {
+        // 统一：只依据用户模型配置或默认模型，公共模型/计费由底层装饰器处理
         String modelConfigId = request.getModelConfigId();
         if ((modelConfigId == null || modelConfigId.isEmpty()) && request.getMetadata() != null) {
             Object mid = request.getMetadata().get("modelConfigId");
-            if (mid instanceof String s && !s.isEmpty()) {
-                modelConfigId = s;
-            }
+            if (mid instanceof String s && !s.isEmpty()) modelConfigId = s;
         }
         int chapterCount = getIntParam(request, "chapterCount", 3);
         String contextId = "compose-outline-" + (request.getSessionId() != null ? request.getSessionId() : java.util.UUID.randomUUID());
 
-        Mono<AIModelProvider> providerMono;
-        if (modelConfigId != null && !modelConfigId.isEmpty()) {
-            providerMono = novelAIService.getAIModelProviderByConfigId(request.getUserId(), modelConfigId)
+        Mono<ProviderInfo> providerInfoMono = (modelConfigId != null && !modelConfigId.isEmpty())
+                ? novelAIService.getAIModelProviderByConfigId(request.getUserId(), modelConfigId)
+                    .map(p -> new ProviderInfo(p.getProviderName(), p.getModelName(), p.getApiKey(), p.getApiEndpoint()))
                     .onErrorResume(err -> {
-                        log.warn("[Compose] 指定模型配置无效或不可用，回退到用户默认模型: {}", err.getMessage());
-                        return novelAIService.getAIModelProvider(request.getUserId(), null);
-                    });
-        } else {
-            providerMono = novelAIService.getAIModelProvider(request.getUserId(), null);
-        }
+                        log.warn("[Compose] 用户配置ID无效: {}，回退到用户默认模型", err.getMessage());
+                        return novelAIService.getAIModelProvider(request.getUserId(), null)
+                                .map(p -> new ProviderInfo(p.getProviderName(), p.getModelName(), p.getApiKey(), p.getApiEndpoint()));
+                    })
+                : novelAIService.getAIModelProvider(request.getUserId(), null)
+                    .map(p -> new ProviderInfo(p.getProviderName(), p.getModelName(), p.getApiKey(), p.getApiEndpoint()));
 
-        return providerMono
-                .flatMap(provider -> {
-                    String modelName = provider.getModelName();
-                    java.util.Map<String, String> aiConfig = new java.util.HashMap<>();
-                    aiConfig.put("apiKey", provider.getApiKey());
-                    aiConfig.put("apiEndpoint", provider.getApiEndpoint());
-                    aiConfig.put("provider", provider.getProviderName());
-                    aiConfig.put("requestType", AIFeatureType.NOVEL_COMPOSE.name());
-                    aiConfig.put("correlationId", contextId);
-                    // 透传身份信息，供AIRequest写入并被LLMTrace记录
-                    if (request.getUserId() != null && !request.getUserId().isEmpty()) {
-                        aiConfig.put("userId", request.getUserId());
+        return providerInfoMono.flatMap(providerInfo -> {
+            String modelName = providerInfo.modelName;
+            java.util.Map<String, String> aiConfig = new java.util.HashMap<>();
+            aiConfig.put("apiKey", providerInfo.apiKey);
+            aiConfig.put("apiEndpoint", providerInfo.apiEndpoint);
+            aiConfig.put("provider", providerInfo.provider);
+            aiConfig.put("requestType", AIFeatureType.NOVEL_COMPOSE.name());
+            aiConfig.put("correlationId", contextId);
+            // 不再在业务层打公共计费标记
+            // 透传身份信息，供AIRequest写入并被LLMTrace记录
+            if (request.getUserId() != null && !request.getUserId().isEmpty()) {
+                aiConfig.put("userId", request.getUserId());
+            }
+            if (request.getSessionId() != null && !request.getSessionId().isEmpty()) {
+                aiConfig.put("sessionId", request.getSessionId());
+            }
+
+            com.ainovel.server.service.ai.tools.ToolExecutionService.ToolCallContext toolContext = toolExecutionService.createContext(contextId);
+
+            java.util.List<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem> captured = new java.util.ArrayList<>();
+            com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineHandler handler = outlines -> {
+                if (outlines == null || outlines.isEmpty()) return false;
+                // 截断到期望数量
+                java.util.List<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem> toAdd = outlines;
+                if (toAdd.size() > chapterCount) {
+                    toAdd = toAdd.subList(0, chapterCount);
+                }
+                captured.clear();
+                captured.addAll(toAdd);
+                return true;
+            };
+            toolContext.registerTool(new com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool(objectMapper, handler));
+
+            java.util.List<ToolSpecification> toolSpecs = toolRegistry.getSpecificationsForContext(contextId);
+
+            // 构建提示词上下文（支持整棵设定树注入）与历史初始提示（仅当无会话时）
+            Mono<String> wholeTreeContextMono = maybeBuildWholeSettingTreeContext(request);
+            Mono<String> historyInitPromptMono = maybeGetHistoryInitPromptWhenNoSession(request);
+            return reactor.core.publisher.Mono.zip(wholeTreeContextMono, historyInitPromptMono).flatMap(tuple2 -> {
+                String ctx = tuple2.getT1();
+                String historyInitPrompt = tuple2.getT2();
+                try {
+                    log.info("[Compose][Context] Outline mode ctx.length={}, historyInitPrompt.length={}",
+                            (ctx != null ? ctx.length() : -1), (historyInitPrompt != null ? historyInitPrompt.length() : -1));
+                } catch (Exception ignore) {}
+                java.util.Map<String, Object> promptParams = new java.util.HashMap<>();
+                if (request.getParameters() != null) promptParams.putAll(request.getParameters());
+                promptParams.put("mode", "outline");
+                promptParams.put("chapterCount", chapterCount);
+                promptParams.put("novelId", request.getNovelId());
+                promptParams.put("userId", request.getUserId());
+                
+                // 🚀 确保传递用户输入内容
+                String inputContent = "";
+                if (request.getSelectedText() != null && !request.getSelectedText().isEmpty()) {
+                    inputContent = request.getSelectedText();
+                } else if (request.getPrompt() != null && !request.getPrompt().isEmpty()) {
+                    inputContent = request.getPrompt();
+                }
+                promptParams.put("input", inputContent);
+                
+                // 🚀 确保传递用户指令
+                if (request.getInstructions() != null && !request.getInstructions().isEmpty()) {
+                    promptParams.put("instructions", request.getInstructions());
+                }
+                
+                // 🚀 传递设定树上下文
+                if (ctx != null && !ctx.isBlank()) {
+                    promptParams.put("context", ctx);
+                }
+                
+                // 🚀 传递历史初始提示词
+                if (historyInitPrompt != null && !historyInitPrompt.isBlank()) {
+                    promptParams.put("historyInitPrompt", historyInitPrompt);
+                }
+
+                String templateId = null;
+                try {
+                    templateId = getParam(request, "promptTemplateId", "");
+                    if (templateId != null && templateId.startsWith("public_")) {
+                        templateId = templateId.substring("public_".length());
                     }
-                    if (request.getSessionId() != null && !request.getSessionId().isEmpty()) {
-                        aiConfig.put("sessionId", request.getSessionId());
-                    }
+                } catch (Exception ignore) {}
 
-                    com.ainovel.server.service.ai.tools.ToolExecutionService.ToolCallContext toolContext = toolExecutionService.createContext(contextId);
+                return composePromptProvider.getSystemPrompt(request.getUserId(), promptParams)
+                        .zipWith(composePromptProvider.getUserPrompt(request.getUserId(), templateId, promptParams))
+                        .flatMap(tuple -> {
+                            String systemPrompt = tuple.getT1();
+                            String userPrompt = tuple.getT2();
+                            java.util.List<ChatMessage> messages = new java.util.ArrayList<>();
+                            messages.add(new SystemMessage(systemPrompt));
+                            messages.add(new UserMessage(userPrompt));
 
-                    java.util.List<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem> captured = new java.util.ArrayList<>();
-                    com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineHandler handler = outlines -> {
-                        if (outlines == null || outlines.isEmpty()) return false;
-                        // 截断到期望数量
-                        java.util.List<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem> toAdd = outlines;
-                        if (toAdd.size() > chapterCount) {
-                            toAdd = toAdd.subList(0, chapterCount);
-                        }
-                        captured.clear();
-                        captured.addAll(toAdd);
-                        return true;
-                    };
-                    toolContext.registerTool(new com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool(objectMapper, handler));
-
-                    java.util.List<ToolSpecification> toolSpecs = toolRegistry.getSpecificationsForContext(contextId);
-
-                    // 构建提示词上下文（支持整棵设定树注入）与历史初始提示（仅当无会话时）
-                    Mono<String> wholeTreeContextMono = maybeBuildWholeSettingTreeContext(request);
-                    Mono<String> historyInitPromptMono = maybeGetHistoryInitPromptWhenNoSession(request);
-                    return reactor.core.publisher.Mono.zip(wholeTreeContextMono, historyInitPromptMono).flatMap(tuple2 -> {
-                        String ctx = tuple2.getT1();
-                        String historyInitPrompt = tuple2.getT2();
-                        try {
-                            log.info("[Compose][Context] Outline mode ctx.length={}, historyInitPrompt.length={}",
-                                    (ctx != null ? ctx.length() : -1), (historyInitPrompt != null ? historyInitPrompt.length() : -1));
-                        } catch (Exception ignore) {}
-                        java.util.Map<String, Object> promptParams = new java.util.HashMap<>();
-                        if (request.getParameters() != null) promptParams.putAll(request.getParameters());
-                        promptParams.put("mode", "outline");
-                        promptParams.put("chapterCount", chapterCount);
-                        promptParams.put("novelId", request.getNovelId());
-                        promptParams.put("userId", request.getUserId());
-                        
-                        // 🚀 确保传递用户输入内容
-                        String inputContent = "";
-                        if (request.getSelectedText() != null && !request.getSelectedText().isEmpty()) {
-                            inputContent = request.getSelectedText();
-                        } else if (request.getPrompt() != null && !request.getPrompt().isEmpty()) {
-                            inputContent = request.getPrompt();
-                        }
-                        promptParams.put("input", inputContent);
-                        
-                        // 🚀 确保传递用户指令
-                        if (request.getInstructions() != null && !request.getInstructions().isEmpty()) {
-                            promptParams.put("instructions", request.getInstructions());
-                        }
-                        
-                        // 🚀 传递设定树上下文
-                        if (ctx != null && !ctx.isBlank()) {
-                            promptParams.put("context", ctx);
-                        }
-                        
-                        // 🚀 传递历史初始提示词
-                        if (historyInitPrompt != null && !historyInitPrompt.isBlank()) {
-                            promptParams.put("historyInitPrompt", historyInitPrompt);
-                        }
-
-                        String templateId = null;
-                        try {
-                            templateId = getParam(request, "promptTemplateId", "");
-                            if (templateId != null && templateId.startsWith("public_")) {
-                                templateId = templateId.substring("public_".length());
-                            }
-                        } catch (Exception ignore) {}
-
-                        return composePromptProvider.getSystemPrompt(request.getUserId(), promptParams)
-                                .zipWith(composePromptProvider.getUserPrompt(request.getUserId(), templateId, promptParams))
-                                .flatMap(tuple -> {
-                                    String systemPrompt = tuple.getT1();
-                                    String userPrompt = tuple.getT2();
-                                    java.util.List<ChatMessage> messages = new java.util.ArrayList<>();
-                                    messages.add(new SystemMessage(systemPrompt));
-                                    messages.add(new UserMessage(userPrompt));
-
-                                    aiConfig.put("toolContextId", contextId);
-                                    return aiService.executeToolCallLoop(
-                                            messages,
-                                            toolSpecs,
-                                            modelName,
-                                            aiConfig.get("apiKey"),
-                                            aiConfig.get("apiEndpoint"),
-                                            aiConfig,
-                                            1
-                                    ).then(Mono.defer(() -> {
-                                        if (captured.isEmpty()) {
-                                            // 兜底：返回空列表（显式类型）
-                                            return Mono.just(
-                                                java.util.Collections.<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem>emptyList()
-                                            );
-                                        }
-                                        return Mono.just(captured);
-                                    }));
-                                })
-                                .doFinally(signal -> {
-                                    try { toolContext.close(); } catch (Exception ignore) {}
-                                });
-                    });
-                });
+                            aiConfig.put("toolContextId", contextId);
+                            return aiService.executeToolCallLoop(
+                                    messages,
+                                    toolSpecs,
+                                    modelName,
+                                    aiConfig.get("apiKey"),
+                                    aiConfig.get("apiEndpoint"),
+                                    aiConfig,
+                                    1
+                            ).then(Mono.defer(() -> {
+                                if (captured.isEmpty()) {
+                                    // 兜底：返回空列表（显式类型）
+                                    return Mono.just(
+                                        java.util.Collections.<com.ainovel.server.service.compose.tools.BatchCreateOutlinesTool.OutlineItem>emptyList()
+                                    );
+                                }
+                                return Mono.just(captured);
+                            }));
+                        })
+                        .doFinally(signal -> {
+                            try { toolContext.close(); } catch (Exception ignore) {}
+                        });
+            });
+        });
     }
 
     /**
@@ -1340,7 +1179,8 @@ public class SettingComposeService {
                                        int depth, java.util.List<String> ancestors) {
         for (int i = 0; i < depth; i++) sb.append("  ");
         String path = String.join("/", ancestors);
-        String oneLineDesc = safeOneLine(node.getDescription(), 140);
+        // 🔧 修复：不再截断描述，保留完整内容
+        String oneLineDesc = safeOneLine(node.getDescription(), 99999);
         String typeStr = node.getType() != null ? node.getType().name() : "UNKNOWN";
         if (!path.isEmpty()) {
             sb.append("- ").append(path).append("/").append(node.getName())
@@ -1378,7 +1218,8 @@ public class SettingComposeService {
     private void appendHistoryNodeLine(SettingNode node, StringBuilder sb, int depth, java.util.List<String> ancestors) {
         for (int i = 0; i < depth; i++) sb.append("  ");
         String path = String.join("/", ancestors);
-        String oneLineDesc = safeOneLine(node.getDescription(), 140);
+        // 🔧 修复：不再截断描述，保留完整内容
+        String oneLineDesc = safeOneLine(node.getDescription(), 99999);
         String typeStr = node.getType() != null ? node.getType().name() : "UNKNOWN";
         if (!path.isEmpty()) {
             sb.append("- ").append(path).append("/").append(node.getName())

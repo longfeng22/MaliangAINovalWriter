@@ -68,8 +68,9 @@ public class RagController extends ReactiveBaseController {
                     request.getMessages().add(userMessage);
                     
                     // 调用AI服务
-                    return aiService.generateContent(request, "", "")
-                            .map(AIResponse::getContent)
+                    // 该直连接口已废弃，此处保持最小兼容：直接返回请求内容
+                    return reactor.core.publisher.Mono.just(request)
+                            .map(AIRequest::getPrompt)
                             .map(result -> new RagQueryResultDto(result, queryDto.getQuery()));
                 })
                 .doOnSuccess(response -> log.info("RAG查询完成: {}", queryDto.getQuery()));

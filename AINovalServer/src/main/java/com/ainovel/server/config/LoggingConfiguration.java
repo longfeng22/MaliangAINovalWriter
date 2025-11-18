@@ -16,6 +16,9 @@ import java.util.UUID;
 
 /**
  * 日志配置，包括MDC跟踪信息和日志格式设置
+ * 
+ * 注意：MDC和日志功能已迁移到SkyWalkingConfiguration
+ * 此配置类仅保留Reactor上下文传播和TaskDecorator
  */
 @Configuration
 public class LoggingConfiguration {
@@ -32,16 +35,58 @@ public class LoggingConfiguration {
         Hooks.enableAutomaticContextPropagation();
         logger.info("已启用Reactor自动MDC传播");
 
+        // 🔑 配置 Scheduler 装饰器，确保 MDC 在线程切换时被恢复
+        Hooks.onEachOperator("mdc-context-restore", reactor.core.publisher.Operators.lift((scannable, subscriber) -> {
+            return new reactor.core.CoreSubscriber<Object>() {
+                @Override
+                public reactor.util.context.Context currentContext() {
+                    return subscriber.currentContext();
+                }
+
+                @Override
+                public void onSubscribe(org.reactivestreams.Subscription s) {
+                    subscriber.onSubscribe(s);
+                }
+
+                @Override
+                public void onNext(Object o) {
+                    // 🔑 在每个 onNext 信号前，从 Reactor Context 恢复 MDC
+                    reactor.util.context.Context ctx = subscriber.currentContext();
+                    ctx.getOrEmpty("tid").ifPresent(v -> MDC.put("tid", v.toString()));
+                    ctx.getOrEmpty("userId").ifPresent(v -> MDC.put("userId", v.toString()));
+                    ctx.getOrEmpty("requestId").ifPresent(v -> MDC.put("requestId", v.toString()));
+                    
+                    subscriber.onNext(o);
+                }
+
+                @Override
+                public void onError(Throwable t) {
+                    subscriber.onError(t);
+                }
+
+                @Override
+                public void onComplete() {
+                    subscriber.onComplete();
+                }
+            };
+        }));
+        logger.info("已配置全局 MDC 恢复钩子");
+
         // 全局错误 Hook，确保丢弃/运算符错误也能被规范记录
         Hooks.onErrorDropped(e -> logger.error("Reactor onErrorDropped 错误: {}", e.toString(), e));
 
     }
     
     /**
-     * WebFlux请求过滤器，用于设置MDC上下文
+     * WebFlux请求过滤器（已禁用）
+     * 
+     * 注意：此Filter已被SkyWalkingConfiguration替代
+     * SkyWalkingConfiguration提供了更完整的MDC管理和链路追踪功能
+     * 
+     * 如果需要启用，请确保与SkyWalkingConfiguration不冲突
      */
-    @Bean
-    public WebFilter mdcAndLoggingFilter() {
+    // @Bean
+    public WebFilter mdcAndLoggingFilter_DISABLED() {
         return (exchange, chain) -> {
             long startTime = System.currentTimeMillis();
             ServerHttpRequest request = exchange.getRequest();

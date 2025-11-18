@@ -1368,7 +1368,7 @@ class _OverlaySceneBeatPanelState extends State<OverlaySceneBeatPanel>
     if (_selectedUnifiedModel!.isPublic) {
       final publicModel = (_selectedUnifiedModel as PublicAIModel).publicConfig;
       modelConfig = UserAIModelConfigModel.fromJson({
-        'id': 'public_${publicModel.id}',
+        'id': publicModel.id, // 直接使用公共模型ID，不拼接前缀
         'userId': AppConfig.userId ?? 'unknown',
         'alias': publicModel.displayName,
         'modelName': publicModel.modelId,

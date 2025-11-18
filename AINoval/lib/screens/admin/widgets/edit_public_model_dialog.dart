@@ -706,6 +706,14 @@ class _EditPublicModelDialogState extends State<EditPublicModelDialog> {
         return '设定编排（大纲/章节/组合）';
       case AIFeatureType.settingTreeGeneration:
         return '设定树生成';
+      case AIFeatureType.settingGenerationTool:
+        return '设定生成工具调用阶段';
+      case AIFeatureType.storyPlotContinuation:
+        return '故事剧情续写（总结当前剧情并生成下一个大纲）';
+      case AIFeatureType.knowledgeExtractionSetting:
+        return '知识库拆书 - 设定提取';
+      case AIFeatureType.knowledgeExtractionOutline:
+        return '知识库拆书 - 章节大纲生成';
     }
   }
 

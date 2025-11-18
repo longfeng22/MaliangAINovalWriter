@@ -162,21 +162,24 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
       return _buildNoSelectionView();
     }
 
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildNodeInfo(selectedNode, hasSession),
-          const SizedBox(height: 16),
-          _buildModificationSection(),
-          const SizedBox(height: 16),
-          _buildScopeSelector(),
-          const SizedBox(height: 16),
-          _buildModelSelector(),
-          const SizedBox(height: 16),
-          _buildActionButtons(selectedNode),
-        ],
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildNodeInfo(selectedNode, hasSession),
+            const SizedBox(height: 16),
+            _buildModificationSection(),
+            const SizedBox(height: 16),
+            _buildScopeSelector(),
+            const SizedBox(height: 16),
+            _buildModelSelector(),
+            const SizedBox(height: 16),
+            _buildActionButtons(selectedNode),
+          ],
+        ),
       ),
     );
   }
@@ -310,10 +313,7 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                               );
                             }
                           : null,
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        shape: const RoundedRectangleBorder(),
-                      ),
+                      style: WebTheme.getPrimaryButtonStyle(context),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -562,11 +562,7 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                         const CancelPendingChangesEvent(),
                       );
                     },
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: const RoundedRectangleBorder(
-                      ),
-                    ),
+                    style: WebTheme.getSecondaryButtonStyle(context),
                     child: const Text('取消', style: TextStyle(fontSize: 12)),
                   ),
                 ),
@@ -578,11 +574,7 @@ class _EditorPanelWidgetState extends State<EditorPanelWidget> {
                         const ApplyPendingChangesEvent(),
                       );
                     },
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: const RoundedRectangleBorder(
-                      ),
-                    ),
+                    style: WebTheme.getPrimaryButtonStyle(context),
                     child: const Text('应用', style: TextStyle(fontSize: 12)),
                   ),
                 ),

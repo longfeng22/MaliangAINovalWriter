@@ -37,8 +37,9 @@ public class DoubaoTokenPricingCalculator extends AbstractTokenPricingCalculator
     }
 
     /**
-     * 计算 doubao-seed-1.6 系列按区间的费用（单位：人民币）。
+     * 计算 doubao-seed-1.6 系列按区间的费用。
      * 价格单位：元/百万 token。
+     * @return 返回USD成本
      */
     private java.math.BigDecimal computeSeed16Cost(String modelId, int inputTokens, int outputTokens) {
         double inK = inputTokens / 1000.0;     // 千token
@@ -82,9 +83,15 @@ public class DoubaoTokenPricingCalculator extends AbstractTokenPricingCalculator
             }
         }
 
-        double cost = (inputTokens / 1_000_000.0) * inPricePerMillion
+        // 计算人民币成本
+        double costInCNY = (inputTokens / 1_000_000.0) * inPricePerMillion
                 + (outputTokens / 1_000_000.0) * outPricePerMillion;
-        return java.math.BigDecimal.valueOf(cost).setScale(PRECISION, ROUNDING_MODE);
+        
+        // 转换为USD（1 USD = 7.0 CNY）
+        final double CNY_TO_USD_RATE = 7.0;
+        double costInUSD = costInCNY / CNY_TO_USD_RATE;
+        
+        return java.math.BigDecimal.valueOf(costInUSD).setScale(PRECISION, ROUNDING_MODE);
     }
 
     public Mono<List<ModelPricing>> getDefaultDoubaoPricing() {
@@ -109,19 +116,34 @@ public class DoubaoTokenPricingCalculator extends AbstractTokenPricingCalculator
             // 第三方在Doubao平台售卖（示例） - 更新为带版本号的模型ID
             create("kimi-k2-250905", "kimi-k2", 4.0, 16.0, 128000, "Kimi K2 on Doubao"),
             create("deepseek-v3-250324", "deepseek-v3", 2.0, 8.0, 128000, "DeepSeek V3 on Doubao"),
-            create("deepseek-v3-1-250821", "deepseek-v3.1", 4.0, 12.0, 128000, "DeepSeek V3.1 on Doubao"),
+            create("deepseek-v3-1-terminus", "deepseek-v3.1", 4.0, 12.0, 128000, "DeepSeek V3.1 on Doubao"),
             create("deepseek-r1-250528", "deepseek-r1", 4.0, 16.0, 128000, "DeepSeek R1 on Doubao")
         );
         return Mono.just(defaults);
     }
 
+    /**
+     * 创建定价信息
+     * @param inPrice 输入价格（元/百万tokens）
+     * @param outPrice 输出价格（元/百万tokens）
+     * @return 转换后的ModelPricing（USD/1K tokens）
+     */
     private ModelPricing create(String modelId, String name, double inPrice, double outPrice, int maxTokens, String desc) {
+        // 转换单位：元/百万tokens → USD/1K tokens
+        // 公式：(CNY per million) / 1000 / exchange_rate = USD per 1K
+        // 假设汇率：1 USD = 7.0 CNY
+        final double CNY_TO_USD_RATE = 7.0;
+        final double MILLION_TO_THOUSAND = 1000.0;
+        
+        double inputPriceUsdPerThousand = inPrice / MILLION_TO_THOUSAND / CNY_TO_USD_RATE;
+        double outputPriceUsdPerThousand = outPrice / MILLION_TO_THOUSAND / CNY_TO_USD_RATE;
+        
         return ModelPricing.builder()
             .provider(PROVIDER_NAME)
             .modelId(modelId)
             .modelName(name)
-            .inputPricePerThousandTokens(inPrice)
-            .outputPricePerThousandTokens(outPrice)
+            .inputPricePerThousandTokens(inputPriceUsdPerThousand)
+            .outputPricePerThousandTokens(outputPriceUsdPerThousand)
             .maxContextTokens(maxTokens)
             .supportsStreaming(true)
             .description(desc)

@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
@@ -38,6 +39,7 @@ import com.ainovel.server.domain.model.User;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SceneServiceImpl implements SceneService {
 
     private final SceneRepository sceneRepository;
@@ -51,44 +53,81 @@ public class SceneServiceImpl implements SceneService {
     @Override
     public Mono<Scene> findSceneById(String id) {
         return sceneRepository.findById(id)
-                .switchIfEmpty(Mono.error(new ResourceNotFoundException("场景不存在: " + id)));
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("场景不存在: " + id)))
+                .map(this::ensureQuillFormat);  // 🔥 读取时也确保格式正确
     }
 
     @Override
     public Mono<Scene> getSceneById(String id) {
         // 简化版findSceneById，保持一致
         return sceneRepository.findById(id)
-                .switchIfEmpty(Mono.error(new ResourceNotFoundException("场景不存在: " + id)));
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("场景不存在: " + id)))
+                .map(this::ensureQuillFormat);  // 🔥 读取时也确保格式正确
+    }
+    
+    /**
+     * 确保场景内容是Quill Delta JSON格式
+     * 用于读取时的格式保护，防止旧的纯文本数据被返回给前端
+     */
+    private Scene ensureQuillFormat(Scene scene) {
+        if (scene == null || scene.getContent() == null || scene.getContent().isEmpty()) {
+            return scene;
+        }
+        
+        // 检查content是否是Quill格式
+        if (!com.ainovel.server.common.util.RichTextUtil.isQuillDeltaJson(scene.getContent())) {
+            // 不是Quill格式，需要转换
+            String originalContent = scene.getContent();
+            String quillContent = com.ainovel.server.common.util.RichTextUtil.plainTextToDeltaJson(originalContent);
+            scene.setContent(quillContent);
+            
+            log.warn("⚠️ 检测到场景内容不是Quill格式，已自动转换。场景ID: {}, 原始长度: {}, 转换后长度: {}", 
+                    scene.getId(), originalContent.length(), quillContent.length());
+            
+            // 🔥 关键：异步更新数据库，修复这条脏数据
+            sceneRepository.save(scene)
+                    .doOnSuccess(saved -> log.info("✅ 已自动修复数据库中的场景格式。场景ID: {}", scene.getId()))
+                    .doOnError(error -> log.error("❌ 自动修复场景格式失败。场景ID: {}, 错误: {}", scene.getId(), error.getMessage()))
+                    .subscribe();  // 异步执行，不阻塞当前请求
+        }
+        
+        return scene;
     }
 
     @Override
     public Flux<Scene> findSceneByChapterId(String chapterId) {
-        return sceneRepository.findByChapterId(chapterId);
+        return sceneRepository.findByChapterId(chapterId)
+                .map(this::ensureQuillFormat);  // 🔥 读取时确保格式
     }
 
     @Override
     public Flux<Scene> findSceneByChapterIdOrdered(String chapterId) {
-        return sceneRepository.findByChapterIdOrderBySequenceAsc(chapterId);
+        return sceneRepository.findByChapterIdOrderBySequenceAsc(chapterId)
+                .map(this::ensureQuillFormat);  // 🔥 读取时确保格式
     }
 
     @Override
     public Flux<Scene> findScenesByNovelId(String novelId) {
-        return sceneRepository.findByNovelId(novelId);
+        return sceneRepository.findByNovelId(novelId)
+                .map(this::ensureQuillFormat);  // 🔥 读取时确保格式
     }
 
     @Override
     public Flux<Scene> findScenesByNovelIdOrdered(String novelId) {
-        return sceneRepository.findByNovelIdOrderByChapterIdAscSequenceAsc(novelId);
+        return sceneRepository.findByNovelIdOrderByChapterIdAscSequenceAsc(novelId)
+                .map(this::ensureQuillFormat);  // 🔥 读取时确保格式
     }
 
     @Override
     public Flux<Scene> findScenesByChapterIds(List<String> chapterIds) {
-        return sceneRepository.findByChapterIdIn(chapterIds);
+        return sceneRepository.findByChapterIdIn(chapterIds)
+                .map(this::ensureQuillFormat);  // 🔥 读取时确保格式
     }
 
     @Override
     public Flux<Scene> findScenesByNovelIdAndType(String novelId, String sceneType) {
-        return sceneRepository.findByNovelIdAndSceneType(novelId, sceneType);
+        return sceneRepository.findByNovelIdAndSceneType(novelId, sceneType)
+                .map(this::ensureQuillFormat);  // 🔥 读取时确保格式
     }
 
     @Override
@@ -373,8 +412,19 @@ public class SceneServiceImpl implements SceneService {
         return sceneRepository.findById(id)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("场景不存在: " + id)))
                 .flatMap(scene -> {
+                    // 🔥 关键修复：检查并转换content格式
+                    String quillContent;
+                    if (com.ainovel.server.common.util.RichTextUtil.isQuillDeltaJson(content)) {
+                        // 已经是Quill格式，直接使用
+                        quillContent = content;
+                    } else {
+                        // 纯文本格式，需要转换为Quill格式
+                        quillContent = com.ainovel.server.common.util.RichTextUtil.plainTextToDeltaJson(content);
+                        log.info("更新场景内容: 纯文本已转换为Quill Delta JSON格式。场景ID: {}", id);
+                    }
+                    
                     // 如果内容没有变化，直接返回
-                    if (scene.getContent() != null && scene.getContent().equals(content)) {
+                    if (scene.getContent() != null && scene.getContent().equals(quillContent)) {
                         return Mono.just(scene);
                     }
 
@@ -394,12 +444,13 @@ public class SceneServiceImpl implements SceneService {
                     scene.getHistory().add(entry);
 
                     // 更新内容和版本
-                    scene.setContent(content);
+                    scene.setContent(quillContent);
                     scene.setVersion(scene.getVersion() + 1);
                     scene.setUpdatedAt(LocalDateTime.now());
 
-                    // 使用元数据服务更新场景字数
-                    final int wordCount = metadataService.calculateWordCount(content);
+                    // 使用元数据服务更新场景字数（基于纯文本）
+                    String plainText = com.ainovel.server.common.util.RichTextUtil.deltaJsonToPlainText(quillContent);
+                    final int wordCount = plainText.length();
                     scene.setWordCount(wordCount);
 
                     final Scene updatedScene = scene;
@@ -546,14 +597,31 @@ public class SceneServiceImpl implements SceneService {
         newScene.setNovelId(novelId);
         newScene.setChapterId(chapterId);
         newScene.setTitle(title);
+        
         // 设置场景内容：如果提供了content则使用，否则使用空Quill格式
         if (content != null && !content.trim().isEmpty()) {
-            newScene.setContent(content);
-            newScene.setWordCount(content.length()); // 设置实际字数
+            // 🔥 关键修复：检查content是否已经是Quill Delta JSON格式
+            String quillContent;
+            if (com.ainovel.server.common.util.RichTextUtil.isQuillDeltaJson(content)) {
+                // 已经是Quill格式，直接使用
+                quillContent = content;
+                log.debug("场景内容已经是Quill Delta JSON格式，直接使用");
+            } else {
+                // 纯文本格式，需要转换为Quill格式
+                quillContent = com.ainovel.server.common.util.RichTextUtil.plainTextToDeltaJson(content);
+                log.info("场景内容是纯文本，已转换为Quill Delta JSON格式。原始长度: {}, 转换后长度: {}", 
+                        content.length(), quillContent.length());
+            }
+            
+            newScene.setContent(quillContent);
+            // 计算实际的纯文本字数（不包括JSON格式字符）
+            String plainText = com.ainovel.server.common.util.RichTextUtil.deltaJsonToPlainText(quillContent);
+            newScene.setWordCount(plainText.length());
         } else {
             newScene.setContent("[{\"insert\":\"\\n\"}]"); // 初始内容为标准空Quill格式
             newScene.setWordCount(0); // 初始字数为0
         }
+        
         newScene.setCreatedAt(LocalDateTime.now());
         newScene.setUpdatedAt(LocalDateTime.now());
         newScene.setVersion(1);

@@ -42,4 +42,10 @@ public class AiGeneratedSettingData {
      * 设定项标签（可选）
      */
     private List<String> tags;
+    
+    /**
+     * 父设定ID（可选）
+     * 用于建立设定之间的层级关系
+     */
+    private String parentId;
 } 

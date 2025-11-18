@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:uuid/uuid.dart';
 import '../../../../config/app_config.dart';
 import '../../../../models/setting_generation_session.dart';
 import '../../../../models/setting_generation_event.dart';
@@ -135,6 +136,7 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
   /// 4. 生成完成后会自动创建历史记录
   @override
   Stream<SettingGenerationEvent> startGeneration({
+    required String sessionId,  // 🔧 前端生成的sessionId
     required String initialPrompt,
     required String promptTemplateId,
     String? novelId,
@@ -143,11 +145,62 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
     bool? usePublicTextModel,
     String? textPhasePublicProvider,
     String? textPhasePublicModelId,
+    // 📚 知识库集成参数
+    String? knowledgeBaseMode,
+    List<String>? knowledgeBaseIds,
+    Map<String, List<String>>? knowledgeBaseCategories,
+    // 📚 混合模式专用参数
+    List<String>? reuseKnowledgeBaseIds,
+    List<String>? referenceKnowledgeBaseIds,
+    // 🔧 结构化输出循环模式参数
+    bool? useStructuredOutput,
+    int? structuredIterations,
+  }) {
+    return _startGenerationWithRetry(
+      sessionId: sessionId,
+      initialPrompt: initialPrompt,
+      promptTemplateId: promptTemplateId,
+      novelId: novelId,
+      modelConfigId: modelConfigId,
+      userId: userId,
+      usePublicTextModel: usePublicTextModel,
+      textPhasePublicProvider: textPhasePublicProvider,
+      textPhasePublicModelId: textPhasePublicModelId,
+      knowledgeBaseMode: knowledgeBaseMode,
+      knowledgeBaseIds: knowledgeBaseIds,
+      knowledgeBaseCategories: knowledgeBaseCategories,
+      reuseKnowledgeBaseIds: reuseKnowledgeBaseIds,
+      referenceKnowledgeBaseIds: referenceKnowledgeBaseIds,
+      useStructuredOutput: useStructuredOutput,
+      structuredIterations: structuredIterations,
+    );
+  }
+
+  Stream<SettingGenerationEvent> _startGenerationWithRetry({
+    required String sessionId,  // 🔧 前端生成的sessionId
+    required String initialPrompt,
+    required String promptTemplateId,
+    String? novelId,
+    required String modelConfigId,
+    String? userId,
+    bool? usePublicTextModel,
+    String? textPhasePublicProvider,
+    String? textPhasePublicModelId,
+    String? knowledgeBaseMode,
+    List<String>? knowledgeBaseIds,
+    Map<String, List<String>>? knowledgeBaseCategories,
+    // 📚 混合模式专用参数
+    List<String>? reuseKnowledgeBaseIds,
+    List<String>? referenceKnowledgeBaseIds,
+    // 🔧 结构化输出循环模式参数
+    bool? useStructuredOutput,
+    int? structuredIterations,
   }) {
     try {
-      AppLogger.info(_tag, '启动设定生成: promptTemplateId=$promptTemplateId');
+      AppLogger.info(_tag, '启动设定生成: sessionId=$sessionId, promptTemplateId=$promptTemplateId, useStructuredOutput=$useStructuredOutput, knowledgeBaseMode=$knowledgeBaseMode');
       
       final requestBody = {
+        'sessionId': sessionId,  // 🔧 传递前端生成的sessionId
         'initialPrompt': initialPrompt,
         'promptTemplateId': promptTemplateId,
         'modelConfigId': modelConfigId,
@@ -160,6 +213,19 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
         if (usePublicTextModel == true) 'usePublicTextModel': true,
         if (textPhasePublicProvider != null) 'textPhasePublicProvider': textPhasePublicProvider,
         if (textPhasePublicModelId != null) 'textPhasePublicModelId': textPhasePublicModelId,
+        // 📚 知识库集成参数
+        if (knowledgeBaseMode != null) 'knowledgeBaseMode': knowledgeBaseMode,
+        if (knowledgeBaseIds != null && knowledgeBaseIds.isNotEmpty) 'knowledgeBaseIds': knowledgeBaseIds,
+        if (knowledgeBaseCategories != null && knowledgeBaseCategories.isNotEmpty) 
+          'knowledgeBaseCategories': knowledgeBaseCategories,
+        // 📚 混合模式专用参数
+        if (reuseKnowledgeBaseIds != null && reuseKnowledgeBaseIds.isNotEmpty) 
+          'reuseKnowledgeBaseIds': reuseKnowledgeBaseIds,
+        if (referenceKnowledgeBaseIds != null && referenceKnowledgeBaseIds.isNotEmpty) 
+          'referenceKnowledgeBaseIds': referenceKnowledgeBaseIds,
+        // 🔧 结构化输出循环模式参数
+        if (useStructuredOutput == true) 'useStructuredOutput': true,
+        if (structuredIterations != null) 'structuredIterations': structuredIterations,
       };
 
       // 如果没有传入userId，尝试从AppConfig获取
@@ -358,6 +424,32 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
       return result['message'] ?? '节点内容已更新';
     } catch (e) {
       AppLogger.error(_tag, '更新节点内容失败', e);
+      rethrow;
+    }
+  }
+
+  /// 删除节点及其所有子节点
+  @override
+  Future<Map<String, dynamic>> deleteNode({
+    required String sessionId,
+    required String nodeId,
+  }) async {
+    try {
+      AppLogger.info(_tag, '删除节点: $nodeId from session: $sessionId');
+      
+      final result = await _apiClient.delete(
+        '/setting-generation/$sessionId/nodes/$nodeId',
+      );
+      
+      // 后端返回: { success: true, data: { nodeId, deletedNodeIds, message } }
+      final Map<String, dynamic> payload = (result is Map<String, dynamic> && result['data'] is Map<String, dynamic>)
+          ? (result['data'] as Map<String, dynamic>)
+          : (result is Map<String, dynamic> ? result : {});
+      
+      AppLogger.info(_tag, '节点删除成功: $nodeId, 共删除 ${payload['deletedNodeIds']?.length ?? 0} 个节点');
+      return payload;
+    } catch (e) {
+      AppLogger.error(_tag, '删除节点失败', e);
       rethrow;
     }
   }
@@ -831,6 +923,7 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
     required int expectedRootNodes,
     required int maxDepth,
     String? baseStrategyId,
+    bool? hidePrompts,
   }) async {
     try {
       AppLogger.info(_tag, '创建用户自定义策略: $name');
@@ -844,6 +937,7 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
         'expectedRootNodes': expectedRootNodes,
         'maxDepth': maxDepth,
         if (baseStrategyId != null) 'baseStrategyId': baseStrategyId,
+        if (hidePrompts != null) 'hidePrompts': hidePrompts,
       };
 
       final result = await _apiClient.post(
@@ -1041,6 +1135,58 @@ class SettingGenerationRepositoryImpl implements SettingGenerationRepository {
       AppLogger.info(_tag, '策略删除成功');
     } catch (e) {
       AppLogger.error(_tag, '删除策略失败', e);
+      rethrow;
+    }
+  }
+  
+  /// 点赞策略
+  @override
+  Future<Map<String, dynamic>> likeStrategy({
+    required String strategyId,
+  }) async {
+    try {
+      AppLogger.info(_tag, '点赞策略: $strategyId');
+      
+      final result = await _apiClient.post(
+        '/setting-generation/strategies/$strategyId/like'
+      );
+      
+      if (result is Map<String, dynamic>) {
+        if (result['success'] == true && result['data'] != null) {
+          AppLogger.info(_tag, '点赞成功');
+          return result['data'] as Map<String, dynamic>;
+        }
+      }
+      
+      return {};
+    } catch (e) {
+      AppLogger.error(_tag, '点赞失败', e);
+      rethrow;
+    }
+  }
+  
+  /// 收藏策略
+  @override
+  Future<Map<String, dynamic>> favoriteStrategy({
+    required String strategyId,
+  }) async {
+    try {
+      AppLogger.info(_tag, '收藏策略: $strategyId');
+      
+      final result = await _apiClient.post(
+        '/setting-generation/strategies/$strategyId/favorite'
+      );
+      
+      if (result is Map<String, dynamic>) {
+        if (result['success'] == true && result['data'] != null) {
+          AppLogger.info(_tag, '收藏成功');
+          return result['data'] as Map<String, dynamic>;
+        }
+      }
+      
+      return {};
+    } catch (e) {
+      AppLogger.error(_tag, '收藏失败', e);
       rethrow;
     }
   }

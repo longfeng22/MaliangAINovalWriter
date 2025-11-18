@@ -12,7 +12,15 @@ import 'package:ainoval/screens/editor/widgets/floating_setting_dialogs.dart';
 import 'package:ainoval/screens/editor/widgets/custom_dropdown.dart';
 import 'package:ainoval/widgets/common/app_search_field.dart'; // 导入统一搜索组件
 import 'package:ainoval/utils/web_theme.dart'; // 导入全局主题
+// 📚 知识库集成
+import 'package:ainoval/models/knowledge_base_integration_mode.dart';
+import 'package:ainoval/screens/setting_generation/widgets/knowledge_base_setting_selector.dart';
+import 'package:ainoval/services/api_service/repositories/knowledge_base_repository.dart';
 // import 'dart:async';
+// 🎯 拖放功能
+import 'package:ainoval/models/context_drag_data.dart';
+import 'package:ainoval/models/context_selection_models.dart';
+import 'package:ainoval/widgets/common/draggable_context_item.dart';
 
 /// 小说设定侧边栏组件
 /// 
@@ -41,6 +49,12 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
   
   // 展开的设定类型集合（用于按类型分组时）
   final Set<String> _expandedTypeIds = {};
+  
+  // 🚀 新增：多选模式状态
+  bool _isMultiSelectMode = false;
+  
+  // 🚀 新增：选中的设定条目ID集合
+  final Set<String> _selectedItemIds = {};
 
   @override
   bool get wantKeepAlive => true; // 🚀 保持页面存活状态
@@ -262,36 +276,179 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
     );
   }
   
-  // 删除设定条目
-  // void _deleteSettingItem(String itemId) {
-  //   showDialog(
-  //     context: context,
-  //     builder: (context) => AlertDialog(
-  //       title: const Text('确认删除'),
-  //       content: const Text('确定要删除这个设定条目吗？此操作不可撤销。'),
-  //       actions: [
-  //         TextButton(
-  //           onPressed: () => Navigator.of(context).pop(),
-  //           child: const Text('取消'),
-  //         ),
-  //         ElevatedButton(
-  //           onPressed: () {
-  //             Navigator.of(context).pop();
-  //             context.read<SettingBloc>().add(DeleteSettingItem(
-  //               novelId: widget.novelId,
-  //               itemId: itemId,
-  //             ));
-  //           },
-  //           style: ElevatedButton.styleFrom(
-  //             backgroundColor: WebTheme.error,
-  //             foregroundColor: WebTheme.white,
-  //           ),
-  //           child: const Text('删除'),
-  //         ),
-  //       ],
-  //     ),
-  //   );
-  // }
+  // 🚀 删除单个设定条目
+  void _deleteSettingItem(String itemId) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: WebTheme.getCardColor(context),
+        title: Text(
+          '确认删除',
+          style: TextStyle(
+            color: WebTheme.getTextColor(context),
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        content: Text(
+          '确定要删除这个设定条目吗？此操作不可撤销。',
+          style: TextStyle(
+            color: WebTheme.getSecondaryTextColor(context),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(
+              '取消',
+              style: TextStyle(
+                color: WebTheme.getSecondaryTextColor(context),
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              // 🔧 执行删除操作
+              final settingBloc = context.read<SettingBloc>();
+              settingBloc.add(DeleteSettingItem(
+                novelId: widget.novelId,
+                itemId: itemId,
+              ));
+              AppLogger.i('NovelSettingSidebar', '删除设定条目: $itemId');
+              
+              // 🔧 删除后延迟刷新列表
+              Future.delayed(const Duration(milliseconds: 500), () {
+                if (mounted) {
+                  settingBloc.add(LoadSettingItems(novelId: widget.novelId));
+                }
+              });
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: WebTheme.error,
+              foregroundColor: WebTheme.white,
+            ),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // 🚀 新增：切换多选模式
+  void _toggleMultiSelectMode() {
+    setState(() {
+      _isMultiSelectMode = !_isMultiSelectMode;
+      if (!_isMultiSelectMode) {
+        // 退出多选模式时清空选中项
+        _selectedItemIds.clear();
+      }
+    });
+    AppLogger.i('NovelSettingSidebar', '切换多选模式: $_isMultiSelectMode');
+  }
+  
+  // 🚀 新增：切换条目选中状态
+  void _toggleItemSelection(String itemId) {
+    setState(() {
+      if (_selectedItemIds.contains(itemId)) {
+        _selectedItemIds.remove(itemId);
+      } else {
+        _selectedItemIds.add(itemId);
+      }
+    });
+  }
+  
+  // 🚀 新增：全选/取消全选
+  void _toggleSelectAll(List<NovelSettingItem> allVisibleItems) {
+    setState(() {
+      if (_selectedItemIds.length == allVisibleItems.length) {
+        // 如果已经全选，则取消全选
+        _selectedItemIds.clear();
+      } else {
+        // 否则全选所有可见条目
+        _selectedItemIds.clear();
+        for (final item in allVisibleItems) {
+          if (item.id != null) {
+            _selectedItemIds.add(item.id!);
+          }
+        }
+      }
+    });
+  }
+  
+  // 🚀 新增：批量删除选中的条目
+  void _deleteSelectedItems() {
+    if (_selectedItemIds.isEmpty) {
+      return;
+    }
+    
+    // 保存要删除的ID列表
+    final itemsToDelete = List<String>.from(_selectedItemIds);
+    
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: WebTheme.getCardColor(context),
+        title: Text(
+          '确认批量删除',
+          style: TextStyle(
+            color: WebTheme.getTextColor(context),
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        content: Text(
+          '确定要删除选中的 ${itemsToDelete.length} 个设定条目吗？此操作不可撤销。',
+          style: TextStyle(
+            color: WebTheme.getSecondaryTextColor(context),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(
+              '取消',
+              style: TextStyle(
+                color: WebTheme.getSecondaryTextColor(context),
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(dialogContext).pop();
+              final settingBloc = context.read<SettingBloc>();
+              
+              // 🔧 批量删除
+              for (final itemId in itemsToDelete) {
+                settingBloc.add(DeleteSettingItem(
+                  novelId: widget.novelId,
+                  itemId: itemId,
+                ));
+              }
+              AppLogger.i('NovelSettingSidebar', '批量删除 ${itemsToDelete.length} 个设定条目');
+              
+              // 🔧 清空选中并退出多选模式
+              setState(() {
+                _selectedItemIds.clear();
+                _isMultiSelectMode = false;
+              });
+              
+              // 🔧 删除后延迟刷新列表
+              await Future.delayed(const Duration(milliseconds: 800));
+              if (mounted) {
+                settingBloc.add(LoadSettingItems(novelId: widget.novelId));
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: WebTheme.error,
+              foregroundColor: WebTheme.white,
+            ),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+  }
   
   // 保存设定条目
   void _saveSettingItem(NovelSettingItem item, String? groupId) {
@@ -390,6 +547,244 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
     return null;
   }
   
+  /// 📚 显示添加知识库设定对话框
+  void _showAddKnowledgeBaseDialog() {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => _KnowledgeBaseImportDialog(
+        novelId: widget.novelId,
+        onImport: _importFromKnowledgeBase,
+      ),
+    );
+  }
+  
+  /// 📚 从知识库导入设定
+  Future<void> _importFromKnowledgeBase(
+    List<SelectedKnowledgeBaseItem> selectedItems,
+  ) async {
+    if (selectedItems.isEmpty) {
+      return;
+    }
+    
+    try {
+      // 显示加载提示
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => Center(
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: WebTheme.getCardColor(context),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(
+                  color: WebTheme.getPrimaryColor(context),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  '正在导入知识库设定...',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: WebTheme.getTextColor(context),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      
+      final repository = context.read<KnowledgeBaseRepository>();
+      final settingBloc = context.read<SettingBloc>();
+      
+      int successCount = 0;
+      int failureCount = 0;
+      
+      // 遍历选中的知识库
+      for (final item in selectedItems) {
+        try {
+          // 获取知识库详情
+          final knowledgeBase = await repository.getKnowledgeBaseDetail(item.knowledgeBaseId);
+          
+          // 遍历选中的分类
+          for (final category in item.selectedCategories) {
+            try {
+              // 根据分类从知识库中提取设定内容
+              List<NovelSettingItem>? settingsList;
+              String categoryName = category.displayName;
+              
+              // 根据不同分类提取相应的设定列表
+              switch (category) {
+                case KnowledgeBaseSettingCategory.narrativeStyle:
+                case KnowledgeBaseSettingCategory.writingStyle:
+                case KnowledgeBaseSettingCategory.wordUsage:
+                case KnowledgeBaseSettingCategory.coreConflict:
+                case KnowledgeBaseSettingCategory.suspenseDesign:
+                case KnowledgeBaseSettingCategory.storyPacing:
+                  settingsList = knowledgeBase.narrativeStyleSettings;
+                  break;
+                case KnowledgeBaseSettingCategory.characterBuilding:
+                case KnowledgeBaseSettingCategory.worldview:
+                case KnowledgeBaseSettingCategory.goldenFinger:
+                  settingsList = knowledgeBase.characterPlotSettings;
+                  break;
+                case KnowledgeBaseSettingCategory.resonance:
+                case KnowledgeBaseSettingCategory.pleasurePoint:
+                case KnowledgeBaseSettingCategory.excitementPoint:
+                  settingsList = knowledgeBase.readerEmotionSettings;
+                  break;
+                case KnowledgeBaseSettingCategory.hotMemes:
+                case KnowledgeBaseSettingCategory.funnyPoints:
+                  settingsList = knowledgeBase.hotMemesSettings;
+                  break;
+                case KnowledgeBaseSettingCategory.custom:
+                  settingsList = knowledgeBase.customSettings;
+                  break;
+                case KnowledgeBaseSettingCategory.chapterOutline:
+                  // 章节大纲不导入为设定
+                  continue;
+              }
+              
+              // 如果有设定项目，批量导入
+              if (settingsList != null && settingsList.isNotEmpty) {
+                for (final setting in settingsList) {
+                  // 🔧 修复：强制使用映射的类型，因为知识库中的设定type可能都是"OTHER"
+                  final mappedType = _getCategorySettingType(category).value;
+                  
+                  // 🔧 修复：使用原始设定的描述，而不是硬编码的来源信息
+                  // 如果需要标注来源，可以在描述末尾追加来源信息
+                  final originalDescription = setting.description ?? setting.content ?? '';
+                  
+                  final settingItem = NovelSettingItem(
+                    name: '${knowledgeBase.title} - ${setting.name}',
+                    content: setting.content,
+                    description: originalDescription.isEmpty ? '从知识库《${knowledgeBase.title}》的$categoryName分类导入' : originalDescription ,
+                    type: mappedType, // 使用映射后的类型，不使用原有的type
+                    tags: ['知识库导入', knowledgeBase.title, categoryName, ...(setting.tags ?? [])],
+                  );
+                  
+                  // 创建设定条目
+                  settingBloc.add(CreateSettingItem(
+                    novelId: widget.novelId,
+                    item: settingItem,
+                  ));
+                  
+                  successCount++;
+                  
+                  // 添加短暂延迟，避免请求过快
+                  await Future.delayed(const Duration(milliseconds: 100));
+                }
+              }
+            } catch (e) {
+              AppLogger.e('NovelSettingSidebar', '导入分类 ${category.displayName} 失败', e);
+              failureCount++;
+            }
+          }
+        } catch (e) {
+          AppLogger.e('NovelSettingSidebar', '获取知识库详情失败: ${item.knowledgeBaseId}', e);
+          failureCount++;
+        }
+      }
+      
+      // 关闭加载提示
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+      
+      // 延迟刷新列表
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) {
+        settingBloc.add(LoadSettingItems(novelId: widget.novelId));
+      }
+      
+      // 显示结果提示
+      if (mounted) {
+        final message = successCount > 0
+            ? '成功导入 $successCount 个设定${failureCount > 0 ? '，失败 $failureCount 个' : ''}'
+            : '导入失败，请重试';
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: successCount > 0 
+                ? Colors.green 
+                : WebTheme.error,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      AppLogger.e('NovelSettingSidebar', '导入知识库设定失败', e);
+      
+      // 关闭加载提示
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+      
+      // 显示错误提示
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('导入失败: ${e.toString()}'),
+            backgroundColor: WebTheme.error,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+  
+  /// 📚 根据知识库分类获取对应的设定类型
+  /// 
+  /// 知识库分类到设定类型的映射关系：
+  /// - 叙事/文风类 → 风格(STYLE)
+  /// - 冲突/悬念/节奏 → 情节工具(PLOT_DEVICE)
+  /// - 人物塑造 → 角色(CHARACTER)
+  /// - 世界观 → 世界观(WORLDVIEW)
+  /// - 金手指 → 能力系统(POWER_SYSTEM)
+  /// - 爽点/共鸣 → 爽点(PLEASURE_POINT)
+  /// - 热梗/搞笑 → 常见套路(TROPE)
+  SettingType _getCategorySettingType(KnowledgeBaseSettingCategory category) {
+    switch (category) {
+      case KnowledgeBaseSettingCategory.narrativeStyle:
+        return SettingType.style; // 叙事方式
+      case KnowledgeBaseSettingCategory.writingStyle:
+        return SettingType.style; // 文风
+      case KnowledgeBaseSettingCategory.wordUsage:
+        return SettingType.style; // 用词特点
+      case KnowledgeBaseSettingCategory.coreConflict:
+        return SettingType.plotDevice; // 核心冲突
+      case KnowledgeBaseSettingCategory.suspenseDesign:
+        return SettingType.plotDevice; // 悬念设计
+      case KnowledgeBaseSettingCategory.storyPacing:
+        return SettingType.plotDevice; // 故事节奏
+      case KnowledgeBaseSettingCategory.characterBuilding:
+        return SettingType.character; // 人物塑造
+      case KnowledgeBaseSettingCategory.worldview:
+        return SettingType.worldview; // 世界观
+      case KnowledgeBaseSettingCategory.goldenFinger:
+        return SettingType.powerSystem; // 金手指
+      case KnowledgeBaseSettingCategory.resonance:
+        return SettingType.pleasurePoint; // 共鸣
+      case KnowledgeBaseSettingCategory.pleasurePoint:
+        return SettingType.pleasurePoint; // 爽点
+      case KnowledgeBaseSettingCategory.excitementPoint:
+        return SettingType.pleasurePoint; // 嗨点
+      case KnowledgeBaseSettingCategory.hotMemes:
+        return SettingType.trope; // 热梗
+      case KnowledgeBaseSettingCategory.funnyPoints:
+        return SettingType.trope; // 搞笑点
+      case KnowledgeBaseSettingCategory.custom:
+        return SettingType.other; // 自定义
+      case KnowledgeBaseSettingCategory.chapterOutline:
+        return SettingType.event; // 章节大纲
+    }
+  }
+  
   @override
   Widget build(BuildContext context) {
     super.build(context); // 🚀 必须调用父类的build方法
@@ -482,13 +877,13 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
               child: Container(
                 height: 28,
                 decoration: BoxDecoration(
-                  color: _groupingMode == 'type' 
-                      ? WebTheme.getPrimaryColor(context)
+                  color: _groupingMode == 'type'
+                      ? WebTheme.getTextColor(context).withOpacity(0.12)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
-                    color: _groupingMode == 'type' 
-                        ? WebTheme.getPrimaryColor(context)
+                    color: _groupingMode == 'type'
+                        ? WebTheme.getTextColor(context)
                         : WebTheme.getSecondaryBorderColor(context),
                     width: 1,
                   ),
@@ -500,7 +895,7 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
                       Icons.category,
                       size: 14,
                       color: _groupingMode == 'type' 
-                          ? WebTheme.white
+                          ? WebTheme.getTextColor(context)
                           : WebTheme.getSecondaryTextColor(context),
                     ),
                     const SizedBox(width: 4),
@@ -510,7 +905,7 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
                         color: _groupingMode == 'type' 
-                            ? WebTheme.white
+                            ? WebTheme.getTextColor(context)
                             : WebTheme.getSecondaryTextColor(context),
                       ),
                     ),
@@ -529,13 +924,13 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
               child: Container(
                 height: 28,
                 decoration: BoxDecoration(
-                  color: _groupingMode == 'group' 
-                      ? WebTheme.getPrimaryColor(context)
+                  color: _groupingMode == 'group'
+                      ? WebTheme.getTextColor(context).withOpacity(0.12)
                       : Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
-                    color: _groupingMode == 'group' 
-                        ? WebTheme.getPrimaryColor(context)
+                    color: _groupingMode == 'group'
+                        ? WebTheme.getTextColor(context)
                         : WebTheme.getSecondaryBorderColor(context),
                     width: 1,
                   ),
@@ -547,7 +942,7 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
                       Icons.folder,
                       size: 14,
                       color: _groupingMode == 'group' 
-                          ? WebTheme.white
+                          ? WebTheme.getTextColor(context)
                           : WebTheme.getSecondaryTextColor(context),
                     ),
                     const SizedBox(width: 4),
@@ -557,7 +952,7 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
                         color: _groupingMode == 'group' 
-                            ? WebTheme.white
+                            ? WebTheme.getTextColor(context)
                             : WebTheme.getSecondaryTextColor(context),
                       ),
                     ),
@@ -573,6 +968,10 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
   
   // 构建搜索和操作栏
   Widget _buildSearchBar(BuildContext context) {
+    // 🔧 修复：在方法开始时获取 SettingBloc 状态，避免嵌套 BlocBuilder 导致的 Provider 错误
+    final settingBloc = context.read<SettingBloc>();
+    final settingState = settingBloc.state;
+    
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
       decoration: BoxDecoration(
@@ -584,28 +983,31 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
           ),
         ),
       ),
-      child: Row(
+      child: Column(
         children: [
-          // 搜索框
-          Expanded(
-            child: AppSearchField(
-              controller: _searchController,
-              hintText: '搜索设定...',
-              height: 34,
-              fillColor: WebTheme.getBackgroundColor(context),
-              onChanged: (value) {
-                if (value.isEmpty) {
-                  _searchItems('');
-                }
-              },
-              onSubmitted: _searchItems,
-              onClear: () {
-                _searchController.clear();
-                _searchItems('');
-              },
-            ),
-          ),
-          const SizedBox(width: 4),
+          // 第一行：搜索框和基本操作按钮
+          Row(
+            children: [
+              // 搜索框
+              Expanded(
+                child: AppSearchField(
+                  controller: _searchController,
+                  hintText: '搜索设定...',
+                  height: 34,
+                  fillColor: WebTheme.getBackgroundColor(context),
+                  onChanged: (value) {
+                    if (value.isEmpty) {
+                      _searchItems('');
+                    }
+                  },
+                  onSubmitted: _searchItems,
+                  onClear: () {
+                    _searchController.clear();
+                    _searchItems('');
+                  },
+                ),
+              ),
+              const SizedBox(width: 4),
           // 🔧 新增：设定数量指示器
           BlocBuilder<SettingBloc, SettingState>(
             buildWhen: (previous, current) => previous.items.length != current.items.length,
@@ -711,6 +1113,54 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
               ),
             ),
           ),
+          const SizedBox(width: 4),
+          // 添加知识库设定按钮
+          SizedBox(
+            height: 34,
+            child: OutlinedButton.icon(
+              onPressed: _showAddKnowledgeBaseDialog,
+              icon: const Icon(Icons.library_books, size: 14),
+              label: const Text('知识库'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: WebTheme.getPrimaryColor(context),
+                backgroundColor: WebTheme.getBackgroundColor(context),
+                side: BorderSide(
+                  color: WebTheme.getPrimaryColor(context),
+                  width: 1.0,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 0,
+                ),
+                textStyle: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 2),
+          // 🚀 新增：多选模式切换按钮
+          IconButton(
+            onPressed: _toggleMultiSelectMode,
+            icon: Icon(
+              _isMultiSelectMode ? Icons.check_box : Icons.check_box_outline_blank,
+              size: 16,
+              color: _isMultiSelectMode 
+                  ? WebTheme.getPrimaryColor(context)
+                  : WebTheme.getSecondaryTextColor(context),
+            ),
+            tooltip: _isMultiSelectMode ? '退出多选' : '多选模式',
+            splashRadius: 16,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(
+              minWidth: 28,
+              minHeight: 28,
+            ),
+          ),
           const SizedBox(width: 2),
           // 设置按钮
           IconButton(
@@ -730,6 +1180,115 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
               minHeight: 28,
             ),
           ),
+            ],
+          ),
+          
+          // 🚀 新增：第二行 - 多选模式操作栏（仅在多选模式下显示）
+          if (_isMultiSelectMode) ...[
+            const SizedBox(height: 8),
+            Builder(
+              builder: (context) {
+                // 🔧 修复：使用外层获取的 settingState
+                final allVisibleItems = settingState.items;
+                final isAllSelected = _selectedItemIds.length == allVisibleItems.length && allVisibleItems.isNotEmpty;
+                
+                return Container(
+                  height: 36,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: BoxDecoration(
+                    color: WebTheme.getPrimaryColor(context).withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      // 全选/取消全选按钮
+                      Expanded(
+                        child: TextButton.icon(
+                          onPressed: () => _toggleSelectAll(allVisibleItems),
+                          icon: Icon(
+                            isAllSelected ? Icons.deselect : Icons.select_all,
+                            size: 16,
+                            color: WebTheme.getPrimaryColor(context),
+                          ),
+                          label: Text(
+                            isAllSelected ? '取消全选' : '全选',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: WebTheme.getPrimaryColor(context),
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: const Size(0, 32),
+                          ),
+                        ),
+                      ),
+                      
+                      // 分隔线
+                      Container(
+                        width: 1,
+                        height: 24,
+                        color: WebTheme.getBorderColor(context),
+                      ),
+                      
+                      // 已选数量显示
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          '已选 ${_selectedItemIds.length} 项',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: WebTheme.getTextColor(context),
+                          ),
+                        ),
+                      ),
+                      
+                      // 分隔线
+                      Container(
+                        width: 1,
+                        height: 24,
+                        color: WebTheme.getBorderColor(context),
+                      ),
+                      
+                      // 批量删除按钮
+                      Expanded(
+                        child: TextButton.icon(
+                          onPressed: _selectedItemIds.isEmpty ? null : _deleteSelectedItems,
+                          icon: Icon(
+                            Icons.delete_outline,
+                            size: 16,
+                            color: _selectedItemIds.isEmpty 
+                                ? WebTheme.getSecondaryTextColor(context).withOpacity(0.4)
+                                : WebTheme.error,
+                          ),
+                          label: Text(
+                            '删除',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _selectedItemIds.isEmpty 
+                                  ? WebTheme.getSecondaryTextColor(context).withOpacity(0.4)
+                                  : WebTheme.error,
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: const Size(0, 32),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
         ],
       ),
     );
@@ -917,6 +1476,9 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
   Widget _buildSettingTypeItem(BuildContext context, SettingType type, List<NovelSettingItem> items) {
     final isExpanded = _expandedTypeIds.contains(type.value);
     
+    // 🎯 准备拖放数据：提取该类型下所有设定项的ID
+    final settingIds = items.where((item) => item.id != null && item.id!.isNotEmpty).map((item) => item.id!).toList();
+    
     return Container(
       decoration: BoxDecoration(
         border: Border(
@@ -928,25 +1490,29 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
       ),
       child: Column(
         children: [
-          // 设定类型标题行
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey100 : WebTheme.grey50,
-              border: Border(
-                top: BorderSide(
-                  color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200,
-                  width: 1.0,
-                ),
-                bottom: BorderSide(
-                  color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200,
-                  width: 1.0,
+          // 🎯 包装为可拖动的设定类型标题行
+          _wrapTypeHeaderAsDraggable(
+            type: type,
+            items: items,
+            settingIds: settingIds,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey100 : WebTheme.grey50,
+                border: Border(
+                  top: BorderSide(
+                    color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200,
+                    width: 1.0,
+                  ),
+                  bottom: BorderSide(
+                    color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200,
+                    width: 1.0,
+                  ),
                 ),
               ),
-            ),
-            child: InkWell(
-              onTap: () => _toggleTypeExpansion(type.value),
-              child: Row(
+              child: InkWell(
+                onTap: () => _toggleTypeExpansion(type.value),
+                child: Row(
                 children: [
                   // 类型图标
                   (items.isNotEmpty && items.first.imageUrl != null && items.first.imageUrl!.isNotEmpty)
@@ -1037,6 +1603,7 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
                 ],
               ),
             ),
+            ),
           ),
           
           // 如果展开，显示该类型的设定条目
@@ -1044,6 +1611,40 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
             ..._buildTypeSettingItems(context, items),
         ],
       ),
+    );
+  }
+  
+  /// 🎯 包装设定类型标题为可拖动的
+  Widget _wrapTypeHeaderAsDraggable({
+    required SettingType type,
+    required List<NovelSettingItem> items,
+    required List<String> settingIds,
+    required Widget child,
+  }) {
+    // 如果在多选模式或没有设定项，则不可拖动
+    if (_isMultiSelectMode || settingIds.isEmpty) {
+      return child;
+    }
+    
+    // 🎯 使用上下文选择器中的ID格式：type_${settingType}
+    final dragData = ContextDragData(
+      id: 'type_${type.value}',
+      type: ContextSelectionType.settingsByType,
+      title: '${type.displayName}（${settingIds.length}项）',
+      subtitle: '添加该分类的所有设定',
+      metadata: {
+        'settingType': type.value,
+        'itemCount': settingIds.length,
+      },
+    );
+    
+    return DraggableContextItem(
+      data: dragData,
+      enableDrag: true,
+      onDragStarted: () {
+        AppLogger.d('NovelSettingSidebar', '🎯 开始拖动设定类型: ${type.displayName}，包含${settingIds.length}个设定项');
+      },
+      child: child,
     );
   }
   
@@ -1139,6 +1740,9 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
       }
     }
     
+    // 🎯 准备拖放数据：提取该组内所有设定项的ID
+    final settingIds = groupItems.where((item) => item.id != null && item.id!.isNotEmpty).map((item) => item.id!).toList();
+    
     return Container(
       decoration: BoxDecoration(
         border: Border(
@@ -1150,29 +1754,33 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
       ),
       child: Column(
         children: [
-          // 设定组标题行 - 重新设计样式
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey100 : WebTheme.grey50,
-              border: Border(
-                top: BorderSide(
-                  color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200,
-                  width: 1.0,
-                ),
-                bottom: BorderSide(
-                  color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200,
-                  width: 1.0,
+          // 🎯 包装为可拖动的设定组标题行
+          _wrapGroupHeaderAsDraggable(
+            group: group,
+            groupItems: groupItems,
+            settingIds: settingIds,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey100 : WebTheme.grey50,
+                border: Border(
+                  top: BorderSide(
+                    color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200,
+                    width: 1.0,
+                  ),
+                  bottom: BorderSide(
+                    color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200,
+                    width: 1.0,
+                  ),
                 ),
               ),
-            ),
-            child: InkWell(
-              onTap: () {
-                if (group.id != null) {
-                  _toggleGroupExpansion(group.id!);
-                }
-              },
-              child: Row(
+              child: InkWell(
+                onTap: () {
+                  if (group.id != null) {
+                    _toggleGroupExpansion(group.id!);
+                  }
+                },
+                child: Row(
                 children: [
                   // 设定组名称
                   Expanded(
@@ -1235,6 +1843,7 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
                 ],
               ),
             ),
+            ),
           ),
           
           // 如果展开，显示该组的设定条目
@@ -1242,6 +1851,40 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
             ..._buildSettingItems(context, groupItems, group.id!),
         ],
       ),
+    );
+  }
+  
+  /// 🎯 包装设定组标题为可拖动的
+  Widget _wrapGroupHeaderAsDraggable({
+    required SettingGroup group,
+    required List<NovelSettingItem> groupItems,
+    required List<String> settingIds,
+    required Widget child,
+  }) {
+    // 如果在多选模式或没有设定项或没有组ID，则不可拖动
+    if (_isMultiSelectMode || settingIds.isEmpty || group.id == null) {
+      return child;
+    }
+    
+    // 🎯 使用上下文选择器中的ID格式：setting_group_${group.id}
+    final dragData = ContextDragData(
+      id: 'setting_group_${group.id}',
+      type: ContextSelectionType.settingGroups,
+      title: '${group.name}（${settingIds.length}项）',
+      subtitle: '添加该组的所有设定',
+      metadata: {
+        'settingGroupId': group.id,
+        'itemCount': settingIds.length,
+      },
+    );
+    
+    return DraggableContextItem(
+      data: dragData,
+      enableDrag: true,
+      onDragStarted: () {
+        AppLogger.d('NovelSettingSidebar', '🎯 开始拖动设定组: ${group.name}，包含${settingIds.length}个设定项');
+      },
+      child: child,
     );
   }
 
@@ -1268,8 +1911,14 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
   
   // 构建设定条目项 - 重新设计为更简洁的样式
   Widget _buildSettingItemTile(BuildContext context, NovelSettingItem item, String? groupId) {
-    return Container(
+    final isSelected = _selectedItemIds.contains(item.id);
+    
+    // 🎯 构建设定项UI
+    final itemWidget = Container(
       decoration: BoxDecoration(
+        color: isSelected 
+            ? WebTheme.getPrimaryColor(context).withOpacity(0.08)
+            : Colors.transparent,
         border: Border(
           top: BorderSide(
             color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey100,
@@ -1277,17 +1926,37 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
           ),
         ),
       ),
-      child: InkWell(
-        onTap: () {
-          if (item.id != null) {
-            _viewSettingItem(item.id!, groupId: groupId);
-          }
-        },
-        child: Container(
-          padding: const EdgeInsets.all(8),
-          child: Row(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            if (_isMultiSelectMode && item.id != null) {
+              // 多选模式下点击切换选中状态
+              _toggleItemSelection(item.id!);
+            } else if (item.id != null) {
+              // 普通模式下点击查看详情
+              _viewSettingItem(item.id!, groupId: groupId);
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              // 🚀 新增：多选模式复选框
+              if (_isMultiSelectMode) ...[
+                Checkbox(
+                  value: isSelected,
+                  onChanged: item.id != null 
+                      ? (value) => _toggleItemSelection(item.id!)
+                      : null,
+                  activeColor: WebTheme.getPrimaryColor(context),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                const SizedBox(width: 8),
+              ],
+              
               // 设定类型图标
               Container(
                 width: 48,
@@ -1296,7 +1965,9 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
                   color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey100 : WebTheme.grey100,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.white,
+                    color: isSelected 
+                        ? WebTheme.getPrimaryColor(context).withOpacity(0.3)
+                        : WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.white,
                     width: 2,
                   ),
                 ),
@@ -1400,11 +2071,59 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
                   ],
                 ),
               ),
+              
+              // 🚀 新增：非多选模式下显示删除按钮
+              if (!_isMultiSelectMode && item.id != null) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: () => _deleteSettingItem(item.id!),
+                  icon: Icon(
+                    Icons.delete_outline,
+                    size: 18,
+                    color: WebTheme.error.withOpacity(0.7),
+                  ),
+                  tooltip: '删除',
+                  splashRadius: 20,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
       ),
+      ),
     );
+    
+    // 🎯 如果item有ID，包装为可拖动的上下文项（在InkWell外层）
+    if (item.id != null && item.id!.isNotEmpty && !_isMultiSelectMode) {
+      // 创建拖放数据
+      final dragData = ContextDragData(
+        id: item.id!, // ✅ 直接使用原始ID，与flatItems中的key一致
+        type: ContextSelectionType.settings,
+        title: item.name.isNotEmpty ? item.name : 'Unnamed Entry',
+        subtitle: item.description,
+        metadata: {
+          'settingId': item.id!,
+          'settingType': item.type ?? 'OTHER',
+          if (groupId != null) 'groupId': groupId,
+        },
+      );
+      
+      return DraggableContextItem(
+        data: dragData,
+        enableDrag: true,
+        onDragStarted: () {
+          AppLogger.d('NovelSettingSidebar', '🎯 开始拖动设定: ${item.name}');
+        },
+        child: itemWidget,
+      );
+    }
+    
+    return itemWidget;
   }
 
   // 获取类型图标
@@ -1586,4 +2305,177 @@ class _NovelSettingSidebarState extends State<NovelSettingSidebar>
   //       return WebTheme.getSecondaryTextColor(context);
   //   }
   // }
+}
+
+/// 📚 知识库导入对话框
+class _KnowledgeBaseImportDialog extends StatefulWidget {
+  final String novelId;
+  final Function(List<SelectedKnowledgeBaseItem>) onImport;
+  
+  const _KnowledgeBaseImportDialog({
+    Key? key,
+    required this.novelId,
+    required this.onImport,
+  }) : super(key: key);
+  
+  @override
+  State<_KnowledgeBaseImportDialog> createState() => _KnowledgeBaseImportDialogState();
+}
+
+class _KnowledgeBaseImportDialogState extends State<_KnowledgeBaseImportDialog> {
+  List<SelectedKnowledgeBaseItem> _selectedItems = [];
+  
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: WebTheme.getCardColor(context),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Container(
+        width: 600,
+        constraints: const BoxConstraints(maxHeight: 700),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 标题栏
+            Row(
+              children: [
+                Icon(
+                  Icons.library_books,
+                  color: WebTheme.getPrimaryColor(context),
+                  size: 24,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '从知识库导入设定',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                      color: WebTheme.getTextColor(context),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: Icon(
+                    Icons.close,
+                    color: WebTheme.getSecondaryTextColor(context),
+                  ),
+                  splashRadius: 20,
+                ),
+              ],
+            ),
+            
+            const SizedBox(height: 16),
+            
+            // 说明文字
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: WebTheme.getPrimaryColor(context).withOpacity(0.05),
+                border: Border.all(
+                  color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
+                ),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: WebTheme.getPrimaryColor(context),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '选择知识库和分类，系统将自动将对应内容导入为设定条目。支持多选。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: WebTheme.getTextColor(context),
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 20),
+            
+            // 知识库选择器
+            Expanded(
+              child: SingleChildScrollView(
+                child: KnowledgeBaseSettingSelector(
+                  selectedItems: _selectedItems,
+                  onSelectionChanged: (items) {
+                    setState(() {
+                      _selectedItems = items;
+                    });
+                  },
+                  multipleSelection: true,
+                  hintText: '搜索知识库小说...',
+                ),
+              ),
+            ),
+            
+            const SizedBox(height: 20),
+            
+            // 按钮栏
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // 取消按钮
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(
+                    '取消',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: WebTheme.getSecondaryTextColor(context),
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(width: 12),
+                
+                // 导入按钮
+                ElevatedButton.icon(
+                  onPressed: _selectedItems.isEmpty
+                      ? null
+                      : () {
+                          Navigator.of(context).pop();
+                          widget.onImport(_selectedItems);
+                        },
+                  icon: const Icon(Icons.download, size: 18),
+                  label: Text(
+                    '导入 ${_selectedItems.isEmpty ? '' : '(${_selectedItems.length})'}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: WebTheme.getPrimaryColor(context),
+                    foregroundColor: WebTheme.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 } 

@@ -16,9 +16,11 @@ class NovelAIRepositoryImpl implements NovelAIRepository {
     required List<String> settingTypes,
     required int maxSettingsPerType,
     required String additionalInstructions,
+    required String modelConfigId,
   }) async {
-    AppLogger.i('NovelAIRepoImpl', 'Generating settings for novel $novelId');
+    AppLogger.i('NovelAIRepoImpl', 'Generating settings for novel $novelId with modelConfigId $modelConfigId');
     try {
+      // 后端会自己查询novelId对应的已有设定，前端不需要传递
       final response = await apiClient.post(
         // Make sure the path matches your backend routing exactly
         '/novels/$novelId/ai/generate-settings', 
@@ -28,6 +30,7 @@ class NovelAIRepositoryImpl implements NovelAIRepository {
           'settingTypes': settingTypes,
           'maxSettingsPerType': maxSettingsPerType,
           'additionalInstructions': additionalInstructions,
+          'modelConfigId': modelConfigId, // 模型配置ID
         },
       );
 

@@ -13,6 +13,11 @@ public final class BillingKeys {
     public static final String CORRELATION_ID = "correlationId";
     public static final String REQUEST_IDEMPOTENCY_KEY = "idempotencyKey";
     public static final String REQUEST_TYPE = "requestType";
+    /**
+     * 工具编排链路的特殊标记：当为 true 时，表示该请求属于设定生成等工具调用编排，
+     * 不进行计费标记注入，也不触发后扣费或对账流程。
+     */
+    public static final String SKIP_BILLING_FOR_TOOL_ORCHESTRATION = "skipBillingForToolOrchestration";
 
     private BillingKeys() {}
 }

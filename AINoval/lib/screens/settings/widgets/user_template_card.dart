@@ -383,6 +383,8 @@ class UserTemplateCard extends StatelessWidget {
         return scheme.secondary;
       case AIFeatureType.settingTreeGeneration:
         return scheme.tertiary;
+      case AIFeatureType.storyPlotContinuation:
+        return scheme.primary;
     }
   }
 
@@ -410,6 +412,8 @@ class UserTemplateCard extends StatelessWidget {
         return '场景节拍';
       case AIFeatureType.settingTreeGeneration:
         return '设定树生成';
+      case AIFeatureType.storyPlotContinuation:
+        return '剧情续写';
     }
   }
 

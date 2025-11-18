@@ -5,11 +5,16 @@ import 'package:ainoval/blocs/prompt_new/prompt_new_bloc.dart';
 import 'package:ainoval/blocs/prompt_new/prompt_new_state.dart';
 import 'package:ainoval/blocs/prompt_new/prompt_new_event.dart';
 import 'package:ainoval/models/prompt_models.dart';
+import 'package:ainoval/models/admin/review_models.dart';
 // removed duplicate import
 import 'package:ainoval/utils/logger.dart';
 import 'package:ainoval/screens/prompt/widgets/prompt_content_editor.dart';
 import 'package:ainoval/screens/prompt/widgets/prompt_properties_editor.dart';
 import 'package:ainoval/widgets/common/top_toast.dart';
+import 'package:ainoval/screens/setting_generation/widgets/create_custom_strategy_dialog.dart';
+import 'package:ainoval/widgets/common/share_template_dialog.dart';
+import 'package:ainoval/services/api_service/repositories/prompt_market_repository.dart';
+import 'package:ainoval/services/api_service/base/api_client.dart';
 
 /// 提示词详情视图
 class PromptDetailView extends StatefulWidget {
@@ -160,25 +165,136 @@ class _PromptDetailViewState extends State<PromptDetailView>
           
           // 模板标题
           Expanded(
-            child: TextField(
-              controller: _nameController,
-              style: WebTheme.titleMedium.copyWith(
-                fontWeight: FontWeight.w600,
-                color: WebTheme.getTextColor(context),
-                height: 1.2,
-              ),
-              decoration: WebTheme.getBorderlessInputDecoration(
-                hintText: '输入模板名称...',
-                context: context,
-              ),
-              cursorColor: WebTheme.getTextColor(context),
-              maxLines: 1,
-              readOnly: isReadOnly,
-              onChanged: (value) {
-                setState(() {
-                  _isEdited = true;
-                });
-              },
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _nameController,
+                    style: WebTheme.titleMedium.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: WebTheme.getTextColor(context),
+                      height: 1.2,
+                    ),
+                    decoration: WebTheme.getBorderlessInputDecoration(
+                      hintText: '输入模板名称...',
+                      context: context,
+                    ),
+                    cursorColor: WebTheme.getTextColor(context),
+                    maxLines: 1,
+                    readOnly: isReadOnly,
+                    onChanged: (value) {
+                      setState(() {
+                        _isEdited = true;
+                      });
+                    },
+                  ),
+                ),
+                
+                // 🆕 审核状态标签
+                if (prompt.reviewStatus == ReviewStatusConstants.pending) ...[
+                  const SizedBox(width: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF9500).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: const Color(0xFFFF9500).withOpacity(0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.schedule_rounded,
+                          size: 14,
+                          color: const Color(0xFFFF9500),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '待审核',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFFFF9500),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                
+                // 🆕 已通过标签
+                if (prompt.reviewStatus == ReviewStatusConstants.approved) ...[
+                  const SizedBox(width: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF34C759).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: const Color(0xFF34C759).withOpacity(0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.check_circle_rounded,
+                          size: 14,
+                          color: const Color(0xFF34C759),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '已公开',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF34C759),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                
+                // 🆕 未通过标签
+                if (prompt.reviewStatus == ReviewStatusConstants.rejected) ...[
+                  const SizedBox(width: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF3B30).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                        color: const Color(0xFFFF3B30).withOpacity(0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.cancel_rounded,
+                          size: 14,
+                          color: const Color(0xFFFF3B30),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '审核未通过',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFFFF3B30),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
           
@@ -193,31 +309,80 @@ class _PromptDetailViewState extends State<PromptDetailView>
 
   /// 构建操作按钮
   Widget _buildActionButtons(BuildContext context, UserPromptInfo prompt, PromptNewState state) {
-    // final isDark = WebTheme.isDarkMode(context); // unused
+    final isDark = WebTheme.isDarkMode(context);
     final isSystemDefault = prompt.id.startsWith('system_default_');
     final isPublicTemplate = prompt.id.startsWith('public_');
     final canSetDefault = !isSystemDefault && !isPublicTemplate;
     final canEdit = !isSystemDefault && !isPublicTemplate;
+    
+    // 🆕 优化分享按钮逻辑：
+    // 1. 系统/公共模板不能分享
+    // 2. 已经提交审核（PENDING）或已通过（APPROVED）的模板不能再分享
+    // 3. 只有草稿（DRAFT/null）或被拒绝（REJECTED）的私有模板可以分享
+    final canShare = canEdit && 
+        !prompt.isPublic && 
+        (prompt.reviewStatus == null || 
+         prompt.reviewStatus == ReviewStatusConstants.draft || 
+         prompt.reviewStatus == ReviewStatusConstants.rejected);
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // 🆕 分享按钮（最左侧）
+        if (canShare) ...[
+          _buildTextButton(
+            icon: Icons.share_rounded,
+            label: '分享我的模版',
+            tooltip: '分享我的模版，他人引用一次，你将获得积分奖励',
+            onPressed: () => _showShareDialog(context, prompt),
+            backgroundColor: const Color(0xFF007AFF),
+            textColor: Colors.white,
+            showRewardBadge: true,
+          ),
+          const SizedBox(width: 8),
+        ],
+        
         // 复制按钮
-        _buildIconButton(
+        _buildTextButton(
           icon: Icons.copy_outlined,
+          label: '复制',
           tooltip: '复制模板',
-          onPressed: () {
-            context.read<PromptNewBloc>().add(CopyPromptTemplate(
-              templateId: prompt.id,
-            ));
+          onPressed: () async {
+            // 设定树提示词：走策略复制表单（创建新策略，写入SettingGenerationConfig）
+            if (prompt.featureType == AIFeatureType.settingTreeGeneration) {
+              final init = <String, dynamic>{
+                'baseStrategyId': prompt.id, // 作为来源，避免走更新
+                'name': prompt.name,
+                'description': prompt.description,
+                'systemPrompt': prompt.systemPrompt,
+                'userPrompt': prompt.userPrompt,
+                'nodeTemplates': prompt.settingGenerationConfig?.nodeTemplates ?? [],
+                'expectedRootNodes': prompt.settingGenerationConfig?.expectedRootNodes ?? 8,
+                'maxDepth': prompt.settingGenerationConfig?.maxDepth ?? 3,
+                'hidePrompts': prompt.hidePrompts,
+              };
+              await showDialog<bool>(
+                context: context,
+                builder: (context) => CreateCustomStrategyDialog(
+                  strategy: init,
+                  isPromptMode: false,
+                ),
+              );
+            } else {
+              // 普通提示词：沿用增强模板复制
+              context.read<PromptNewBloc>().add(CopyPromptTemplate(
+                templateId: prompt.id,
+              ));
+            }
           },
         ),
         
         const SizedBox(width: 8),
         
         // 收藏按钮
-        _buildIconButton(
+        _buildTextButton(
           icon: prompt.isFavorite ? Icons.star : Icons.star_outline,
+          label: '收藏',
           tooltip: prompt.isFavorite ? '取消收藏' : '收藏',
           onPressed: () {
             context.read<PromptNewBloc>().add(ToggleFavoriteStatus(
@@ -230,8 +395,9 @@ class _PromptDetailViewState extends State<PromptDetailView>
         if (canSetDefault) ...[
           const SizedBox(width: 8),
           // 设为默认按钮
-          _buildIconButton(
+          _buildTextButton(
             icon: prompt.isDefault ? Icons.bookmark : Icons.bookmark_outline,
+            label: '默认',
             tooltip: prompt.isDefault ? '已是默认' : '设为默认',
             onPressed: prompt.isDefault
                 ? null
@@ -250,81 +416,54 @@ class _PromptDetailViewState extends State<PromptDetailView>
         if (!isSystemDefault && !isPublicTemplate) ...[
           const SizedBox(width: 8),
           // 删除按钮
-          _buildIconButton(
+          _buildTextButton(
             icon: Icons.delete_outline,
+            label: '删除',
             tooltip: '删除',
             onPressed: () => _showDeleteConfirmDialog(context, prompt),
+            textColor: isDark ? Colors.red[300] : Colors.red[700],
           ),
         ],
         
         // 保存按钮（系统/公共模板不显示）
         if (canEdit && (_isEdited || state.isUpdating)) ...[
           const SizedBox(width: 8),
-          Container(
-            height: 32,
-            decoration: BoxDecoration(
-              color: WebTheme.grey900,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: state.isUpdating ? null : () => _saveChanges(context, prompt),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (state.isUpdating)
-                        const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: WebTheme.white,
-                          ),
-                        )
-                      else
-                        const Icon(
-                          Icons.save,
-                          size: 14,
-                          color: WebTheme.white,
-                        ),
-                      const SizedBox(width: 4),
-                      Text(
-                        state.isUpdating ? '保存中...' : '保存',
-                        style: WebTheme.labelSmall.copyWith(
-                          color: WebTheme.white,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          _buildTextButton(
+            icon: state.isUpdating ? Icons.hourglass_empty : Icons.save,
+            label: state.isUpdating ? '保存中...' : '保存',
+            tooltip: '保存修改',
+            onPressed: state.isUpdating ? null : () => _saveChanges(context, prompt),
+            backgroundColor: WebTheme.grey900,
+            textColor: Colors.white,
           ),
         ],
       ],
     );
   }
   
-  /// 构建统一的图标按钮
-  Widget _buildIconButton({
+  /// 构建统一的文本按钮（图标+文字）
+  Widget _buildTextButton({
     required IconData icon,
+    required String label,
     required String tooltip,
     required VoidCallback? onPressed,
+    Color? backgroundColor,
+    Color? textColor,
+    bool showRewardBadge = false,
   }) {
     final isDark = WebTheme.isDarkMode(context);
+    final defaultBackgroundColor = isDark ? WebTheme.darkGrey200 : WebTheme.grey100;
+    final defaultTextColor = onPressed != null 
+        ? (isDark ? WebTheme.darkGrey600 : WebTheme.grey700)
+        : (isDark ? WebTheme.darkGrey400 : WebTheme.grey400);
     
     return Tooltip(
       message: tooltip,
+      preferBelow: false,
       child: Container(
-        width: 32,
         height: 32,
         decoration: BoxDecoration(
-          color: isDark ? WebTheme.darkGrey200 : WebTheme.grey100,
+          color: backgroundColor ?? defaultBackgroundColor,
           borderRadius: BorderRadius.circular(6),
         ),
         child: Material(
@@ -332,17 +471,92 @@ class _PromptDetailViewState extends State<PromptDetailView>
           child: InkWell(
             borderRadius: BorderRadius.circular(6),
             onTap: onPressed,
-            child: Icon(
-              icon,
-              size: 16,
-              color: onPressed != null 
-                  ? (isDark ? WebTheme.darkGrey600 : WebTheme.grey700)
-                  : (isDark ? WebTheme.darkGrey400 : WebTheme.grey400),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    icon,
+                    size: 16,
+                    color: textColor ?? defaultTextColor,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    label,
+                    style: WebTheme.labelSmall.copyWith(
+                      color: textColor ?? defaultTextColor,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
       ),
     );
+  }
+  
+  /// 显示分享对话框
+  Future<void> _showShareDialog(BuildContext context, UserPromptInfo prompt) async {
+    // 🚀 获取积分奖励信息
+    int? rewardPoints;
+    try {
+      final marketRepo = PromptMarketRepository(ApiClient());
+      final allPoints = await marketRepo.getAllRewardPoints();
+      final featureTypeKey = prompt.featureType.toApiString();
+      rewardPoints = allPoints[featureTypeKey];
+    } catch (e) {
+      AppLogger.error(_tag, '获取积分奖励信息失败: $e');
+      rewardPoints = 1; // 默认1积分
+    }
+    
+    if (!mounted) return;
+    
+    await showDialog(
+      context: context,
+      builder: (context) => ShareTemplateDialog(
+        templateId: prompt.id,
+        templateName: prompt.name,
+        description: prompt.description,
+        featureType: prompt.featureType,
+        isPublic: prompt.isPublic,
+        reviewStatus: prompt.reviewStatus,
+        usageCount: prompt.usageCount,
+        rewardPoints: rewardPoints,
+        hidePrompts: prompt.hidePrompts, // 🔥 使用模板当前的隐藏状态
+        hasSettingGenerationConfig: prompt.settingGenerationConfig != null, // 🆕 是否包含设定生成配置
+        onSubmitReview: (hidePrompts) async {
+          Navigator.of(context).pop();
+          await _submitForReview(prompt, hidePrompts);
+        },
+      ),
+    );
+  }
+  
+  /// 提交审核
+  Future<void> _submitForReview(UserPromptInfo prompt, bool hidePrompts) async {
+    try {
+      AppLogger.info(_tag, '🎬 UI层收到提交请求: promptId=${prompt.id}, hidePrompts=$hidePrompts');
+      
+      // 🎯 使用 Bloc 事件来处理提交审核，实现乐观更新
+      context.read<PromptNewBloc>().add(SubmitForReview(
+        promptId: prompt.id,
+        hidePrompts: hidePrompts,
+      ));
+      
+      if (mounted) {
+        final hideTip = hidePrompts ? '（已隐藏提示词）' : '';
+        TopToast.success(context, '已提交审核$hideTip，审核通过后将在提示词市场公开分享');
+        AppLogger.info(_tag, '✅ UI层提交审核完成');
+      }
+    } catch (e) {
+      AppLogger.error(_tag, '❌ UI层提交审核失败: $e');
+      if (mounted) {
+        TopToast.error(context, '提交失败: $e');
+      }
+    }
   }
 
   /// 构建标签栏

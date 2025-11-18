@@ -126,7 +126,7 @@ class _ModelDisplaySelectorState extends State<ModelDisplaySelector> {
           if (unifiedModel.isPublic) {
             final publicModel = (unifiedModel as PublicAIModel).publicConfig;
             compatModel = UserAIModelConfigModel.fromJson({
-              'id': 'public_${publicModel.id}',
+              'id': publicModel.id, // 直接使用公共模型ID，不拼接前缀
               'userId': AppConfig.userId ?? 'unknown',
               'alias': publicModel.displayName,
               'modelName': publicModel.modelId,

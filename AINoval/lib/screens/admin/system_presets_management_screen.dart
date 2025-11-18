@@ -300,7 +300,7 @@ class _SystemPresetsManagementBodyState extends State<SystemPresetsManagementBod
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
             child: ChoiceChip(
-              label: Text('$featureType ($count)'),
+              label: Text('${_getFeatureTypeDisplayName(featureType)} ($count)'),
               selected: isSelected,
               onSelected: (selected) {
                 if (selected) {
@@ -315,6 +315,46 @@ class _SystemPresetsManagementBodyState extends State<SystemPresetsManagementBod
         },
       ),
     );
+  }
+
+  /// 获取功能类型的中文显示名称
+  String _getFeatureTypeDisplayName(String featureType) {
+    switch (featureType) {
+      case 'ALL':
+        return '全部';
+      case 'AI_CHAT':
+        return 'AI聊天';
+      case 'TEXT_EXPANSION':
+        return '文本扩写';
+      case 'TEXT_REFACTOR':
+        return '文本重构';
+      case 'TEXT_SUMMARY':
+        return '文本总结';
+      case 'SCENE_TO_SUMMARY':
+        return '场景摘要';
+      case 'SUMMARY_TO_SCENE':
+        return '摘要扩写';
+      case 'NOVEL_GENERATION':
+        return '小说生成';
+      case 'PROFESSIONAL_FICTION_CONTINUATION':
+        return '专业续写';
+      case 'SCENE_BEAT_GENERATION':
+        return '场景节拍生成';
+      case 'NOVEL_COMPOSE':
+        return '设定编排';
+      case 'SETTING_TREE_GENERATION':
+        return '设定树生成';
+      case 'SETTING_GENERATION_TOOL':
+        return '设定生成工具调用';
+      case 'STORY_PLOT_CONTINUATION':
+        return '剧情续写';
+      case 'KNOWLEDGE_EXTRACTION_SETTING':
+        return '知识库拆书-设定';
+      case 'KNOWLEDGE_EXTRACTION_OUTLINE':
+        return '知识库拆书-大纲';
+      default:
+        return featureType; // 未知类型直接返回原值
+    }
   }
 
   Widget _buildPresetsList() {

@@ -477,6 +477,14 @@ class PublicTemplateCard extends StatelessWidget {
         return 'SCENE_BEAT_GENERATION';
       case AIFeatureType.settingTreeGeneration:
         return 'SETTING_TREE_GENERATION';
+      case AIFeatureType.settingGenerationTool:
+        return 'SETTING_GENERATION_TOOL';
+      case AIFeatureType.storyPlotContinuation:
+        return 'STORY_PLOT_CONTINUATION';
+      case AIFeatureType.knowledgeExtractionSetting:
+        return 'KNOWLEDGE_EXTRACTION_SETTING';
+      case AIFeatureType.knowledgeExtractionOutline:
+        return 'KNOWLEDGE_EXTRACTION_OUTLINE';
     }
   }
 }

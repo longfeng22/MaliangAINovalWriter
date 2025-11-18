@@ -10,6 +10,10 @@ import 'package:ainoval/widgets/common/empty_state_placeholder.dart';
 import 'package:ainoval/widgets/common/search_action_bar.dart';
 import 'package:ainoval/utils/event_bus.dart';
 import 'dart:async';
+// 🎯 拖放功能
+import 'package:ainoval/models/context_drag_data.dart';
+import 'package:ainoval/models/context_selection_models.dart';
+import 'package:ainoval/widgets/common/draggable_context_item.dart';
 
 /// 片段列表标签页
 class SnippetListTab extends StatefulWidget {
@@ -301,7 +305,8 @@ class _SnippetListTabState extends State<SnippetListTab>
   Widget _buildSnippetItem(NovelSnippet snippet) {
     final isDark = WebTheme.isDarkMode(context);
     
-    return Container(
+    // 构建片段卡片UI
+    final snippetCard = Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: WebTheme.getSurfaceColor(context), // 🚀 修复：使用动态表面色
@@ -412,6 +417,34 @@ class _SnippetListTabState extends State<SnippetListTab>
         ),
       ),
     );
+    
+    // 🎯 包装为可拖动的上下文项
+    if (snippet.id.isNotEmpty) {
+      final dragData = ContextDragData(
+        id: 'snippet_${snippet.id}',
+        type: ContextSelectionType.snippets,
+        title: snippet.title.isNotEmpty ? snippet.title : 'Unnamed Snippet',
+        subtitle: snippet.content.length > 50 
+            ? '${snippet.content.substring(0, 50)}...' 
+            : snippet.content,
+        metadata: {
+          'snippetId': snippet.id,
+          'wordCount': snippet.metadata.wordCount,
+          'isFavorite': snippet.isFavorite,
+        },
+      );
+      
+      return DraggableContextItem(
+        data: dragData,
+        enableDrag: true,
+        onDragStarted: () {
+          AppLogger.d('SnippetListTab', '🎯 开始拖动片段: ${snippet.title}');
+        },
+        child: snippetCard,
+      );
+    }
+    
+    return snippetCard;
   }
 
   String _formatDate(DateTime date) {

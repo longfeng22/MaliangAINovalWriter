@@ -20,6 +20,12 @@ class SidebarLoaded extends SidebarState {
   List<Object?> get props => [novelStructure];
 }
 
+extension SidebarLoadedCopy on SidebarLoaded {
+  SidebarLoaded copyWith({Novel? novelStructure}) {
+    return SidebarLoaded(novelStructure: novelStructure ?? this.novelStructure);
+  }
+}
+
 class SidebarError extends SidebarState {
   final String message;
 

@@ -14,7 +14,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import com.ainovel.server.domain.model.AIFeatureType;
 import com.ainovel.server.domain.model.EnhancedUserPromptTemplate;
 import com.ainovel.server.service.impl.content.ContentProviderFactory;
-import com.ainovel.server.service.prompt.ContentPlaceholderResolver;
 import com.ainovel.server.repository.EnhancedUserPromptTemplateRepository;
 
 import java.time.LocalDateTime;
@@ -202,7 +201,11 @@ public abstract class BasePromptProvider implements AIFeaturePromptProvider {
         });
 
         Mono<String> templateMono = explicitTemplateMono
+                // 其次：当前用户自定义系统模板
                 .switchIfEmpty(loadCustomSystemPrompt(userId))
+                // 然后：数据库 system 账户系统模板
+                .switchIfEmpty(loadSystemAccountSystemPrompt())
+                // 最后：内置默认模板
                 .switchIfEmpty(Mono.fromCallable(this::getDefaultSystemPrompt));
 
         return templateMono
@@ -290,6 +293,43 @@ public abstract class BasePromptProvider implements AIFeaturePromptProvider {
                 )
                 .onErrorResume(error -> {
                     log.debug("未找到用户自定义系统提示词: {}", error.getMessage());
+                    return Mono.empty();
+                });
+    }
+
+    /**
+     * 从数据库加载 system 账号下的系统提示词模板
+     * 优先用于系统级默认模板回退。
+     */
+    protected Mono<String> loadSystemAccountSystemPrompt() {
+        log.debug("🔍 查找 system 账户系统提示词 - featureType: {}", featureType);
+        // 优先尝试使用已缓存的系统模板ID
+        String sysId = getSystemTemplateId();
+        if (sysId != null && !sysId.isEmpty()) {
+            return enhancedUserPromptTemplateRepository.findById(sysId)
+                    .filter(this::isAllowedPublicOrSystem)
+                    .map(t -> t.getSystemPrompt())
+                    .filter(sp -> sp != null && !sp.trim().isEmpty())
+                    .switchIfEmpty(
+                        // 回退到按 featureType 检索 system 账户模板
+                        enhancedUserPromptTemplateRepository.findByUserIdAndFeatureType("system", featureType)
+                                .filter(t -> t.getSystemPrompt() != null && !t.getSystemPrompt().trim().isEmpty())
+                                .map(t -> t.getSystemPrompt())
+                                .next()
+                    )
+                    .onErrorResume(error -> {
+                        log.debug("未找到缓存的 system 模板: {}", error.getMessage());
+                        return Mono.empty();
+                    });
+        }
+
+        // 直接按 featureType 检索 system 账户模板
+        return enhancedUserPromptTemplateRepository.findByUserIdAndFeatureType("system", featureType)
+                .filter(t -> t.getSystemPrompt() != null && !t.getSystemPrompt().trim().isEmpty())
+                .map(t -> t.getSystemPrompt())
+                .next()
+                .onErrorResume(error -> {
+                    log.debug("未找到 system 账户系统提示词: {}", error.getMessage());
                     return Mono.empty();
                 });
     }

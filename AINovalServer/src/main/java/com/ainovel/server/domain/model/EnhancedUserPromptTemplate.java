@@ -75,11 +75,30 @@ public class EnhancedUserPromptTemplate {
      */
     @Builder.Default
     private Boolean isPublic = false;
+    
+    /**
+     * 是否隐藏提示词（隐私保护）
+     * true: 只显示描述和效果，不显示具体的 system/user prompt
+     */
+    @Builder.Default
+    private Boolean hidePrompts = false;
 
     /**
      * 分享码（用于快速分享）
      */
     private String shareCode;
+    
+    /**
+     * 点赞次数
+     */
+    @Builder.Default
+    private Long likeCount = 0L;
+    
+    /**
+     * 是否被当前用户点赞
+     */
+    @Builder.Default
+    private Boolean isLiked = false;
 
     /**
      * 评分（1-5星）
@@ -128,6 +147,18 @@ public class EnhancedUserPromptTemplate {
     private String authorId;
 
     /**
+     * 作者名称（运行时填充，不存储）
+     */
+    @org.springframework.data.annotation.Transient
+    private String authorName;
+
+    /**
+     * 作者头像（运行时填充，不存储）
+     */
+    @org.springframework.data.annotation.Transient
+    private String authorAvatar;
+
+    /**
      * 源模板ID（如果是复制的）
      */
     private String sourceTemplateId;
@@ -168,6 +199,52 @@ public class EnhancedUserPromptTemplate {
      * 扩展属性（JSON格式）
      */
     private String extendedProperties;
+    
+    /**
+     * 审核状态（用于模板分享审核）
+     * DRAFT - 草稿（未提交审核）
+     * PENDING - 待审核
+     * APPROVED - 已通过
+     * REJECTED - 已拒绝
+     */
+    private String reviewStatus;
+    
+    /**
+     * 审核员ID
+     */
+    private String reviewerId;
+    
+    /**
+     * 审核意见
+     */
+    private String reviewComment;
+    
+    /**
+     * 审核时间
+     */
+    private LocalDateTime reviewedAt;
+    
+    /**
+     * 提交审核时间
+     */
+    private LocalDateTime submittedAt;
+    
+    /**
+     * 拒绝原因列表（用于详细审核反馈）
+     */
+    @Builder.Default
+    private List<String> rejectionReasons = new ArrayList<>();
+    
+    /**
+     * 改进建议列表（用于审核指导）
+     */
+    @Builder.Default
+    private List<String> improvementSuggestions = new ArrayList<>();
+    
+    /**
+     * 审核优先级：LOW, NORMAL, HIGH, URGENT
+     */
+    private String reviewPriority;
     
     /**
      * 设定生成配置
@@ -219,6 +296,20 @@ public class EnhancedUserPromptTemplate {
      */
     public void decrementFavoriteCount() {
         this.favoriteCount = Math.max(0L, (this.favoriteCount == null ? 0L : this.favoriteCount) - 1);
+    }
+    
+    /**
+     * 增加点赞次数
+     */
+    public void incrementLikeCount() {
+        this.likeCount = (this.likeCount == null ? 0L : this.likeCount) + 1;
+    }
+    
+    /**
+     * 减少点赞次数
+     */
+    public void decrementLikeCount() {
+        this.likeCount = Math.max(0L, (this.likeCount == null ? 0L : this.likeCount) - 1);
     }
 
     /**

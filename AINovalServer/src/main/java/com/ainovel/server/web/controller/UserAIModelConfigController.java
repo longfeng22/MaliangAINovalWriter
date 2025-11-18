@@ -1,5 +1,6 @@
 package com.ainovel.server.web.controller;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -496,13 +497,32 @@ public class UserAIModelConfigController {
 
     @PostMapping("/users/{userId}/validate/{configId}")
     @Operation(summary = "手动触发指定配置的API Key验证")
-    public Mono<ResponseEntity<UserAIModelConfigResponse>> validateConfiguration(
+    public Mono<ResponseEntity<Object>> validateConfiguration(
             @Parameter(description = "用户ID", required = true) @PathVariable String userId,
             @Parameter(description = "配置ID", required = true) @PathVariable String configId) {
         log.debug("Request to validate config for user {}: configId={}", userId, configId);
         return configService.validateConfiguration(userId, configId)
-                .map(UserAIModelConfigResponse::fromEntity)
-                .map(ResponseEntity::ok)
+                .map(config -> {
+                    UserAIModelConfigResponse response = UserAIModelConfigResponse.fromEntity(config);
+                    if (config.getIsValidated()) {
+                        // 验证成功
+                        return ResponseEntity.ok((Object) response);
+                    } else {
+                        // 验证失败，返回带错误信息的响应
+                        Map<String, Object> errorResponse = new HashMap<>();
+                        errorResponse.put("success", false);
+                        errorResponse.put("error", config.getValidationError() != null ? config.getValidationError() : "API Key验证失败");
+                        errorResponse.put("config", response);
+                        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body((Object) errorResponse);
+                    }
+                })
+                .onErrorResume(e -> {
+                    log.error("验证配置失败: userId={}, configId={}, error={}", userId, configId, e.getMessage(), e);
+                    Map<String, Object> errorResponse = new HashMap<>();
+                    errorResponse.put("success", false);
+                    errorResponse.put("error", e.getMessage());
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body((Object) errorResponse));
+                })
                 .defaultIfEmpty(ResponseEntity.notFound().build());
     }
 

@@ -35,7 +35,23 @@ public class InMemorySessionManager {
      */
     public Mono<SettingGenerationSession> createSession(String userId, String novelId, 
                                                        String initialPrompt, String strategy, String promptTemplateId) {
-        String sessionId = UUID.randomUUID().toString();
+        return createSession(null, userId, novelId, initialPrompt, strategy, promptTemplateId);
+    }
+    
+    /**
+     * 创建新会话（支持前端传入sessionId）
+     * @param sessionId 前端生成的sessionId（可选，如果为null则后端自动生成UUID）
+     */
+    public Mono<SettingGenerationSession> createSession(String sessionId, String userId, String novelId, 
+                                                       String initialPrompt, String strategy, String promptTemplateId) {
+        // 如果前端没有提供sessionId，则后端生成
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = UUID.randomUUID().toString();
+            log.info("前端未提供sessionId，后端生成: {}", sessionId);
+        } else {
+            log.info("使用前端提供的sessionId: {}", sessionId);
+        }
+        
         LocalDateTime now = LocalDateTime.now();
         
         SettingGenerationSession session = SettingGenerationSession.builder()
@@ -118,7 +134,7 @@ public class InMemorySessionManager {
             log.info("Session expired and removed: {}", sessionId);
             return Mono.empty();
         }
-        log.info("Session found: {}", sessionId);
+        log.debug("Session found: {}", sessionId); // 降级为DEBUG，避免频繁日志
         
         return Mono.just(session);
     }

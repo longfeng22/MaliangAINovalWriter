@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:ainoval/utils/web_theme.dart';
 import 'package:ainoval/widgets/common/app_sidebar.dart';
 import 'package:ainoval/widgets/common/user_avatar_menu.dart';
@@ -10,6 +9,7 @@ import 'package:ainoval/models/editor_settings.dart';
 import 'package:ainoval/services/api_service/repositories/subscription_repository.dart';
 import 'package:ainoval/services/api_service/repositories/payment_repository.dart';
 import 'package:ainoval/models/admin/subscription_models.dart';
+import 'package:ainoval/screens/subscription/widgets/payment_dialog.dart';
 
 class SubscriptionScreen extends StatefulWidget {
   const SubscriptionScreen({super.key});
@@ -330,7 +330,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: () => _buyPlan(p, PayChannel.wechat),
+              onPressed: () => _buyPlan(p, PayChannel.alipay),  // 使用支付宝支付
               style: ElevatedButton.styleFrom(
                 backgroundColor: WebTheme.getTextColor(context),
                 foregroundColor: WebTheme.getBackgroundColor(context),
@@ -341,7 +341,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                 elevation: 0,
               ),
               child: const Text(
-                '立即选择',
+                '立即购买（支付宝）',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -838,17 +838,33 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   }
 
   Future<void> _buyPlan(SubscriptionPlan p, PayChannel channel) async {
-    try {
-      final order = await _payRepo.createPayment(planId: p.id!, channel: channel);
-      if (order.paymentUrl.isNotEmpty) {
-        final uri = Uri.parse(order.paymentUrl);
-        if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      if (!mounted) return; 
+    if (!mounted) return;
+    
+    // 打开支付对话框
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false, // 不允许点击外部关闭
+      builder: (context) => PaymentDialog(
+        plan: p,
+        channel: channel,
+        paymentRepo: _payRepo,
+      ),
+    );
+
+    // 如果支付成功，刷新用户信息和页面
+    if (result == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('创建订单失败: $e')),
+        const SnackBar(
+          content: Text('🎉 订阅成功！'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 3),
+        ),
       );
+      
+      // 刷新订阅状态
+      setState(() {
+        _loadData();
+      });
     }
   }
 }

@@ -446,8 +446,8 @@ public class TaskConsumer {
                         return Mono.error(new IllegalArgumentException("找不到任务类型为 " + finalTaskType + " 的执行器"));
                     }))
                     .flatMap(executable -> {
-                        // 发布任务开始事件
-                        eventPublisher.publishEvent(new TaskStartedEvent(this, finalTaskId, finalTaskType, null, nodeId)); // 添加 nodeId
+                        // 发布任务开始事件（此处尚未获取 task 详情，无法安全获取 parentTaskId）
+                        eventPublisher.publishEvent(new TaskStartedEvent(this, finalTaskId, finalTaskType, null, nodeId));
                         log.info("已发布任务开始事件: taskId={}, taskType={}", finalTaskId, finalTaskType);
                         
                         // 查询最新的任务信息 (可能包含刚更新的 RUNNING 状态)
@@ -531,10 +531,10 @@ public class TaskConsumer {
                                             .doOnError(error -> log.error("任务执行失败: taskId={}, taskType={}, 错误: {}", 
                                                      finalTaskId, finalTaskType, error.getMessage(), error))
                                             .flatMap(result -> {
-                                                // 处理执行结果
+                        // 处理执行结果
                                                 if (result.isSuccess()) {
                                                     // 成功完成
-                                                    return handleSuccessResult(task, result.getResult());
+                            return handleSuccessResult(task, result.getResult());
                                                 } else if (result.isRetryable() && finalRetryCount < maxRetryAttempts) {
                                                     // 可重试且未达到最大重试次数
                                                     return handleRetryableFailure(task, result.getError(), finalRetryCount);
@@ -633,7 +633,7 @@ public class TaskConsumer {
         return taskStateService.recordCompletion(task.getId(), result)
                 .doOnSuccess(v -> {
                     try {
-                        eventPublisher.publishEvent(new TaskCompletedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), result));
+                        eventPublisher.publishEvent(new TaskCompletedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), task.getParentTaskId(), result));
                     } catch (Throwable ex) {
                         log.warn("发布 TaskCompletedEvent 失败: taskId={} error={}", task.getId(), ex.toString());
                     }
@@ -687,7 +687,7 @@ public class TaskConsumer {
         
         // 发布任务失败事件
         eventPublisher.publishEvent(new TaskFailedEvent(
-                this, task.getId(), task.getTaskType(), task.getUserId(), errorInfo, false));
+                this, task.getId(), task.getTaskType(), task.getUserId(), task.getParentTaskId(), errorInfo, false));
         
         // 更新数据库状态
         return taskStateService.recordFailure(task.getId(), errorInfo, false);
@@ -711,7 +711,7 @@ public class TaskConsumer {
         
         // 发布任务失败事件（标记为死信）
         eventPublisher.publishEvent(new TaskFailedEvent(
-                this, task.getId(), task.getTaskType(), task.getUserId(), errorInfo, true));
+                this, task.getId(), task.getTaskType(), task.getUserId(), task.getParentTaskId(), errorInfo, true));
         
         // 更新数据库状态
         return taskStateService.recordFailure(task.getId(), errorInfo, true);
@@ -728,7 +728,7 @@ public class TaskConsumer {
         
         // 发布任务取消事件
         eventPublisher.publishEvent(new TaskCancelledEvent(
-                this, task.getId(), task.getTaskType(), task.getUserId()));
+                this, task.getId(), task.getTaskType(), task.getUserId(), task.getParentTaskId()));
         
         // 更新数据库状态
         return taskStateService.recordCancellation(task.getId());

@@ -17,6 +17,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import org.springframework.data.mongodb.core.aggregation.*;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -62,15 +63,23 @@ public class LLMTraceService {
                     // 根据操作类型记录不同的日志
                     boolean isUpdate = saved.getId() != null && !saved.getId().equals(trace.getId());
                     if (isUpdate) {
-                        log.debug("LLM追踪记录已更新(upsert): traceId={}, objectId={}, provider={}, model={}",
+                        log.info("🔄 LLM追踪记录已更新(upsert): traceId={}, objectId={}, provider={}, model={}",
                                 saved.getTraceId(), saved.getId(), saved.getProvider(), saved.getModel());
                     } else {
-                        log.debug("LLM追踪记录已新建(upsert): traceId={}, objectId={}, provider={}, model={}",
+                        log.info("✨ LLM追踪记录已新建(upsert): traceId={}, objectId={}, provider={}, model={}",
                                 saved.getTraceId(), saved.getId(), saved.getProvider(), saved.getModel());
                     }
                 })
-                .doOnError(error -> log.error("保存LLM追踪记录失败(upsert): traceId={}, provider={}, model={}", 
-                        trace.getTraceId(), trace.getProvider(), trace.getModel(), error));
+                .doOnError(error -> {
+                    // 检查是否是因为唯一索引冲突导致的错误
+                    if (error.getMessage() != null && error.getMessage().contains("duplicate key")) {
+                        log.warn("⚠️ 检测到traceId重复，这可能是正常的并发访问: traceId={}, error={}", 
+                                trace.getTraceId(), error.getMessage());
+                    } else {
+                        log.error("❌ 保存LLM追踪记录失败(upsert): traceId={}, provider={}, model={}", 
+                                trace.getTraceId(), trace.getProvider(), trace.getModel(), error);
+                    }
+                });
     }
 
     /**
@@ -559,9 +568,78 @@ public class LLMTraceService {
     }
 
     /**
-     * 获取统计概览
+     * 获取统计概览 - 使用MongoDB聚合查询（高性能）
+     * 过滤掉知识库拆书和章节大纲提取类型
      */
     public Mono<Map<String, Object>> getOverviewStatistics(LocalDateTime startTime, LocalDateTime endTime) {
+        if (mongoTemplate == null) {
+            log.warn("ReactiveMongoTemplate未配置，回退到传统查询方式");
+            return getOverviewStatisticsLegacy(startTime, endTime);
+        }
+
+        try {
+            List<AggregationOperation> operations = new ArrayList<>();
+            
+            // 构建匹配条件
+            List<Criteria> criteriaList = new ArrayList<>();
+            
+            // 时间范围过滤
+            if (startTime != null && endTime != null) {
+                Instant start = startTime.atZone(java.time.ZoneId.systemDefault()).toInstant();
+                Instant end = endTime.atZone(java.time.ZoneId.systemDefault()).toInstant();
+                criteriaList.add(Criteria.where("createdAt").gte(start).lte(end));
+            }
+            
+            // ✅ 过滤掉知识库拆书和章节大纲提取
+            criteriaList.add(Criteria.where("businessType")
+                    .nin("KNOWLEDGE_EXTRACTION", "OUTLINE_EXTRACTION", 
+                         "KNOWLEDGE_EXTRACTION_FANQIE", "KNOWLEDGE_EXTRACTION_TEXT"));
+            
+            if (!criteriaList.isEmpty()) {
+                operations.add(Aggregation.match(new Criteria().andOperator(
+                        criteriaList.toArray(new Criteria[0]))));
+            }
+            
+            // 聚合统计
+            operations.add(Aggregation.group()
+                    .count().as("totalCalls")
+                    .sum(ConditionalOperators.when(Criteria.where("error").is(null)).then(1).otherwise(0)).as("successfulCalls")
+                    .sum(ConditionalOperators.when(Criteria.where("error").ne(null)).then(1).otherwise(0)).as("failedCalls")
+                    .avg("performance.requestLatencyMs").as("averageLatency")
+                    .sum("response.metadata.tokenUsage.totalTokenCount").as("totalTokens"));
+            
+            Aggregation aggregation = Aggregation.newAggregation(operations);
+            
+            return mongoTemplate.aggregate(aggregation, "llm_traces", Map.class)
+                    .next()
+                    .map(result -> {
+                        Map<String, Object> stats = new HashMap<>();
+                        long totalCalls = ((Number) result.getOrDefault("totalCalls", 0)).longValue();
+                        long successfulCalls = ((Number) result.getOrDefault("successfulCalls", 0)).longValue();
+                        long failedCalls = ((Number) result.getOrDefault("failedCalls", 0)).longValue();
+                        
+                        stats.put("totalCalls", totalCalls);
+                        stats.put("successfulCalls", successfulCalls);
+                        stats.put("failedCalls", failedCalls);
+                        stats.put("successRate", totalCalls == 0 ? 0.0 : (double) successfulCalls / totalCalls * 100);
+                        stats.put("averageLatency", result.getOrDefault("averageLatency", 0.0));
+                        stats.put("totalTokens", ((Number) result.getOrDefault("totalTokens", 0)).intValue());
+                        
+                        log.info("✅ 聚合统计完成: totalCalls={}, successfulCalls={}, failedCalls={}", 
+                                totalCalls, successfulCalls, failedCalls);
+                        return stats;
+                    })
+                    .defaultIfEmpty(createEmptyStats());
+        } catch (Exception e) {
+            log.error("聚合查询失败，回退到传统方式", e);
+            return getOverviewStatisticsLegacy(startTime, endTime);
+        }
+    }
+    
+    /**
+     * 传统方式的统计概览（回退方案）
+     */
+    private Mono<Map<String, Object>> getOverviewStatisticsLegacy(LocalDateTime startTime, LocalDateTime endTime) {
         Flux<LLMTrace> traces;
         if (startTime != null && endTime != null) {
             traces = findTracesByTimeRange(startTime, endTime, Pageable.unpaged());
@@ -569,7 +647,16 @@ public class LLMTraceService {
             traces = repository.findAll();
         }
 
-        return traces.collectList()
+        return traces
+                // ✅ 过滤掉知识库相关类型
+                .filter(t -> {
+                    String bt = t.getBusinessType();
+                    return bt == null || (!bt.equals("KNOWLEDGE_EXTRACTION") && 
+                            !bt.equals("OUTLINE_EXTRACTION") &&
+                            !bt.equals("KNOWLEDGE_EXTRACTION_FANQIE") &&
+                            !bt.equals("KNOWLEDGE_EXTRACTION_TEXT"));
+                })
+                .collectList()
                 .map(traceList -> {
                     Map<String, Object> stats = new HashMap<>();
                     stats.put("totalCalls", traceList.size());
@@ -598,6 +685,17 @@ public class LLMTraceService {
                     
                     return stats;
                 });
+    }
+    
+    private Map<String, Object> createEmptyStats() {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("totalCalls", 0);
+        stats.put("successfulCalls", 0);
+        stats.put("failedCalls", 0);
+        stats.put("successRate", 0.0);
+        stats.put("averageLatency", 0.0);
+        stats.put("totalTokens", 0);
+        return stats;
     }
 
     /**
@@ -648,9 +746,80 @@ public class LLMTraceService {
     }
 
     /**
-     * 获取模型统计
+     * 获取模型统计 - 使用MongoDB聚合查询（高性能）
+     * 过滤掉知识库拆书和章节大纲提取类型
      */
     public Mono<Map<String, Object>> getModelStatistics(LocalDateTime startTime, LocalDateTime endTime) {
+        if (mongoTemplate == null) {
+            log.warn("ReactiveMongoTemplate未配置，回退到传统查询方式");
+            return getModelStatisticsLegacy(startTime, endTime);
+        }
+
+        try {
+            List<AggregationOperation> operations = new ArrayList<>();
+            
+            // 构建匹配条件
+            List<Criteria> criteriaList = new ArrayList<>();
+            
+            // 时间范围过滤
+            if (startTime != null && endTime != null) {
+                Instant start = startTime.atZone(java.time.ZoneId.systemDefault()).toInstant();
+                Instant end = endTime.atZone(java.time.ZoneId.systemDefault()).toInstant();
+                criteriaList.add(Criteria.where("createdAt").gte(start).lte(end));
+            }
+            
+            // ✅ 过滤掉知识库拆书和章节大纲提取
+            criteriaList.add(Criteria.where("businessType")
+                    .nin("KNOWLEDGE_EXTRACTION", "OUTLINE_EXTRACTION", 
+                         "KNOWLEDGE_EXTRACTION_FANQIE", "KNOWLEDGE_EXTRACTION_TEXT"));
+            
+            if (!criteriaList.isEmpty()) {
+                operations.add(Aggregation.match(new Criteria().andOperator(
+                        criteriaList.toArray(new Criteria[0]))));
+            }
+            
+            // 按模型分组统计
+            operations.add(Aggregation.group("model")
+                    .count().as("calls")
+                    .sum(ConditionalOperators.when(Criteria.where("error").ne(null)).then(1).otherwise(0)).as("errors")
+                    .sum("response.metadata.tokenUsage.totalTokenCount").as("tokens"));
+            
+            Aggregation aggregation = Aggregation.newAggregation(operations);
+            
+            return mongoTemplate.aggregate(aggregation, "llm_traces", Map.class)
+                    .collectList()
+                    .map(results -> {
+                        Map<String, Object> modelStats = new HashMap<>();
+                        Map<String, Long> callsByModel = new HashMap<>();
+                        Map<String, Long> errorsByModel = new HashMap<>();
+                        Map<String, Integer> tokensByModel = new HashMap<>();
+                        
+                        for (Map<String, Object> result : results) {
+                            String model = (String) result.get("_id");
+                            if (model != null) {
+                                callsByModel.put(model, ((Number) result.getOrDefault("calls", 0L)).longValue());
+                                errorsByModel.put(model, ((Number) result.getOrDefault("errors", 0L)).longValue());
+                                tokensByModel.put(model, ((Number) result.getOrDefault("tokens", 0)).intValue());
+                            }
+                        }
+                        
+                        modelStats.put("callsByModel", callsByModel);
+                        modelStats.put("errorsByModel", errorsByModel);
+                        modelStats.put("tokensByModel", tokensByModel);
+                        
+                        log.info("✅ 模型聚合统计完成: 模型数量={}", callsByModel.size());
+                        return modelStats;
+                    });
+        } catch (Exception e) {
+            log.error("模型聚合查询失败，回退到传统方式", e);
+            return getModelStatisticsLegacy(startTime, endTime);
+        }
+    }
+    
+    /**
+     * 传统方式的模型统计（回退方案）
+     */
+    private Mono<Map<String, Object>> getModelStatisticsLegacy(LocalDateTime startTime, LocalDateTime endTime) {
         Flux<LLMTrace> traces;
         if (startTime != null && endTime != null) {
             traces = findTracesByTimeRange(startTime, endTime, Pageable.unpaged());
@@ -658,7 +827,16 @@ public class LLMTraceService {
             traces = repository.findAll();
         }
 
-        return traces.collectList()
+        return traces
+                // ✅ 过滤掉知识库相关类型
+                .filter(t -> {
+                    String bt = t.getBusinessType();
+                    return bt == null || (!bt.equals("KNOWLEDGE_EXTRACTION") && 
+                            !bt.equals("OUTLINE_EXTRACTION") &&
+                            !bt.equals("KNOWLEDGE_EXTRACTION_FANQIE") &&
+                            !bt.equals("KNOWLEDGE_EXTRACTION_TEXT"));
+                })
+                .collectList()
                 .map(traceList -> {
                     Map<String, Object> modelStats = new HashMap<>();
                     Map<String, Long> callsByModel = new HashMap<>();

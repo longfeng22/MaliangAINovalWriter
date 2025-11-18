@@ -1,6 +1,8 @@
 package com.ainovel.server.task;
 
 import reactor.core.publisher.Mono;
+import java.util.List;
+import java.util.Collections;
 
 /**
  * 后台任务执行器接口，所有具体任务类型的执行器都应实现此接口
@@ -14,6 +16,15 @@ public interface BackgroundTaskExecutable<P, R> {
      * @return 任务类型的唯一标识
      */
     String getTaskType();
+    
+    /**
+     * 获取所有支持的任务类型列表
+     * 默认返回单个任务类型，子类可以覆盖以支持多个任务类型
+     * @return 支持的任务类型列表
+     */
+    default List<String> getSupportedTaskTypes() {
+        return Collections.singletonList(getTaskType());
+    }
     
     /**
      * 执行任务

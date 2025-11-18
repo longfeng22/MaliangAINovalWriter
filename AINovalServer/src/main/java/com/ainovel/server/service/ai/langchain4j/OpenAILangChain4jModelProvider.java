@@ -60,6 +60,9 @@ public class OpenAILangChain4jModelProvider extends AbstractUnifiedModelProvider
                 baseUrl = DEFAULT_API_ENDPOINT;
             }
 
+            // OpenAI Provider 特殊处理：去除用户端点中的重复路径，避免 LangChain4j 自动拼接导致路径重复
+            baseUrl = normalizeOpenAIEndpoint(baseUrl);
+
             // 配置系统代理
             configureSystemProxy();
 
@@ -218,6 +221,43 @@ public class OpenAILangChain4jModelProvider extends AbstractUnifiedModelProvider
                     }
                 })
                 .onErrorResume(e -> Flux.<ModelInfo>empty());
+    }
+
+    /**
+     * 规范化 OpenAI 端点 URL，避免 LangChain4j 自动拼接导致路径重复
+     * 
+     * @param endpoint 原始端点
+     * @return 规范化后的端点
+     */
+    private String normalizeOpenAIEndpoint(String endpoint) {
+        if (endpoint == null || endpoint.trim().isEmpty()) {
+            return endpoint;
+        }
+        
+        String normalized = endpoint.trim();
+        
+        // 移除末尾的斜杠
+        if (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        
+        // 检查并移除常见的 OpenAI API 路径，因为 LangChain4j 会自动拼接
+        String[] pathsToRemove = {
+            "/chat/completions",
+            "/v1/chat/completions",
+            "/completions"
+        };
+        
+        for (String path : pathsToRemove) {
+            if (normalized.endsWith(path)) {
+                normalized = normalized.substring(0, normalized.length() - path.length());
+                log.info("OpenAI端点规范化: 移除了重复路径 '{}', 原URL: {}, 规范化后: {}", 
+                        path, endpoint, normalized);
+                break;
+            }
+        }
+        
+        return normalized;
     }
 
 }

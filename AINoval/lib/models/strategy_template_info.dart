@@ -44,15 +44,36 @@ class StrategyTemplateInfo {
   });
 
   factory StrategyTemplateInfo.fromJson(Map<String, dynamic> json) {
+    // 安全解析：兼容后端返回的可空/不同命名/不同类型（string/number）
+    final dynamic idRaw = json['promptTemplateId'] ?? json['templateId'] ?? json['id'];
+    final String id = (idRaw == null) ? '' : idRaw.toString();
+
+    final String name = (json['name'] ?? json['strategyName'] ?? '未命名').toString();
+    final String description = (json['description'] ?? '').toString();
+
+    List<String> _toStringList(dynamic v) {
+      if (v is List) {
+        return v.map((e) => e?.toString() ?? '').where((s) => s.isNotEmpty).toList();
+      }
+      return const [];
+    }
+
+    int? _toInt(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+
     return StrategyTemplateInfo(
-      promptTemplateId: json['promptTemplateId'] as String,
-      name: json['name'] as String,
-      description: json['description'] as String,
-      categories: (json['categories'] as List<dynamic>?)?.cast<String>() ?? [],
-      tags: (json['tags'] as List<dynamic>?)?.cast<String>() ?? [],
-      expectedRootNodes: json['expectedRootNodes'] as int?,
-      maxDepth: json['maxDepth'] as int?,
-      difficultyLevel: json['difficultyLevel'] as int?,
+      promptTemplateId: id,
+      name: name,
+      description: description,
+      categories: _toStringList(json['categories']),
+      tags: _toStringList(json['tags']),
+      expectedRootNodes: _toInt(json['expectedRootNodes']),
+      maxDepth: _toInt(json['maxDepth']),
+      difficultyLevel: _toInt(json['difficultyLevel']),
       enabled: json['enabled'] as bool? ?? true,
     );
   }

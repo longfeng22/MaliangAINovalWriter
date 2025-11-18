@@ -95,6 +95,13 @@ class _PromptPropertiesEditorState extends State<PromptPropertiesEditor> {
             
             const SizedBox(height: 24),
             
+            // 🆕 设定生成配置（仅对SETTING_TREE_GENERATION类型显示）
+            if (widget.prompt.featureType == AIFeatureType.settingTreeGeneration &&
+                widget.prompt.settingGenerationConfig != null) ...[
+              _buildSettingGenerationConfigSection(),
+              const SizedBox(height: 24),
+            ],
+            
             // 保存按钮（系统/公共模板不显示）
             if (!_isReadOnlyTemplate && _isEdited) _buildSaveButton(),
             
@@ -598,6 +605,279 @@ class _PromptPropertiesEditorState extends State<PromptPropertiesEditor> {
         color: textColor ?? (isDark ? WebTheme.white : WebTheme.getTextColor(context)),
       ),
       onDeleted: onDeleted,
+    );
+  }
+
+  /// 🆕 构建设定生成配置区域
+  Widget _buildSettingGenerationConfigSection() {
+    final config = widget.prompt.settingGenerationConfig!;
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.settings_suggest_outlined,
+              size: 16,
+              color: WebTheme.getTextColor(context),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '设定生成策略配置',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: WebTheme.getTextColor(context),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: WebTheme.isDarkMode(context) 
+                ? WebTheme.darkGrey100.withOpacity(0.3)
+                : WebTheme.grey50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: WebTheme.isDarkMode(context) 
+                  ? WebTheme.darkGrey200
+                  : WebTheme.grey200,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 策略名称
+              if (config.strategyName != null) ...[
+                _buildConfigRow('策略名称', config.strategyName!, Icons.label),
+                const Divider(height: 16),
+              ],
+              
+              // 策略描述
+              if (config.description != null && config.description!.isNotEmpty) ...[
+                _buildConfigRow('策略描述', config.description!, Icons.description),
+                const Divider(height: 16),
+              ],
+              
+              // 期望根节点数
+              _buildConfigRow(
+                '期望根节点数', 
+                config.expectedRootNodes == -1 ? '不限制' : '${config.expectedRootNodes}',
+                Icons.account_tree,
+              ),
+              const Divider(height: 16),
+              
+              // 最大深度
+              _buildConfigRow('最大深度', '${config.maxDepth}', Icons.layers),
+              
+              // 节点模板配置
+              if (config.nodeTemplates.isNotEmpty) ...[
+                const Divider(height: 16),
+                _buildConfigRow(
+                  '节点模板数量', 
+                  '${config.nodeTemplates.length} 个类型',
+                  Icons.category,
+                ),
+              ],
+              
+              // 生成规则
+              if (config.rules != null) ...[
+                const Divider(height: 16),
+                _buildConfigRow(
+                  '批量生成数量', 
+                  '${config.rules!.preferredBatchSize} (最多${config.rules!.maxBatchSize})',
+                  Icons.batch_prediction,
+                ),
+                const Divider(height: 16),
+                _buildConfigRow(
+                  '描述长度范围', 
+                  '${config.rules!.minDescriptionLength}-${config.rules!.maxDescriptionLength} 字符',
+                  Icons.text_fields,
+                ),
+              ],
+              
+              // 系统策略标识
+              if (config.isSystemStrategy) ...[
+                const Divider(height: 16),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.verified,
+                      size: 16,
+                      color: const Color(0xFF34C759),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '系统预设策略',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF34C759),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+        
+        // 详细节点模板列表（可折叠）
+        if (config.nodeTemplates.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _buildNodeTemplatesExpansionPanel(config.nodeTemplates),
+        ],
+      ],
+    );
+  }
+  
+  /// 构建配置行
+  Widget _buildConfigRow(String label, String value, [IconData? icon]) {
+    return Row(
+      children: [
+        if (icon != null) ...[
+          Icon(
+            icon,
+            size: 16,
+            color: WebTheme.getSecondaryTextColor(context),
+          ),
+          const SizedBox(width: 8),
+        ],
+        Expanded(
+          flex: 2,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              color: WebTheme.getSecondaryTextColor(context),
+            ),
+          ),
+        ),
+        Expanded(
+          flex: 3,
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: WebTheme.getTextColor(context),
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ),
+      ],
+    );
+  }
+  
+  /// 构建节点模板可折叠面板
+  Widget _buildNodeTemplatesExpansionPanel(List<NodeTemplateConfig> templates) {
+    return ExpansionTile(
+      tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      childrenPadding: const EdgeInsets.only(left: 12, right: 12, bottom: 12),
+      backgroundColor: WebTheme.isDarkMode(context) 
+          ? WebTheme.darkGrey100.withOpacity(0.3)
+          : WebTheme.grey50,
+      collapsedBackgroundColor: WebTheme.isDarkMode(context) 
+          ? WebTheme.darkGrey100.withOpacity(0.3)
+          : WebTheme.grey50,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(
+          color: WebTheme.isDarkMode(context) 
+              ? WebTheme.darkGrey200
+              : WebTheme.grey200,
+        ),
+      ),
+      collapsedShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(
+          color: WebTheme.isDarkMode(context) 
+              ? WebTheme.darkGrey200
+              : WebTheme.grey200,
+        ),
+      ),
+      leading: Icon(
+        Icons.category_outlined,
+        size: 20,
+        color: WebTheme.getTextColor(context),
+      ),
+      title: Text(
+        '节点模板详情 (${templates.length})',
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          color: WebTheme.getTextColor(context),
+        ),
+      ),
+      children: templates.map((template) {
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: WebTheme.isDarkMode(context) 
+                ? WebTheme.darkGrey200.withOpacity(0.3)
+                : Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: WebTheme.isDarkMode(context) 
+                  ? WebTheme.darkGrey300
+                  : WebTheme.grey300,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 节点类型标题
+              Row(
+                children: [
+                  Icon(
+                    Icons.label_outlined,
+                    size: 14,
+                    color: const Color(0xFF007AFF),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    template.displayName ?? template.nodeType,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: WebTheme.getTextColor(context),
+                    ),
+                  ),
+                ],
+              ),
+              
+              // 描述
+              if (template.description != null && template.description!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  template.description!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: WebTheme.getSecondaryTextColor(context),
+                  ),
+                ),
+              ],
+              
+              // 数量范围
+              if (template.minCount > 0 || template.maxCount != -1) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '数量范围: ${template.minCount} - ${template.maxCount == -1 ? "不限" : template.maxCount}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: WebTheme.getSecondaryTextColor(context),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 

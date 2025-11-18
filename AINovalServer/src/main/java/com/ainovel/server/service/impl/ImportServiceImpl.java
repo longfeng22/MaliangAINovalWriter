@@ -14,14 +14,11 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Value;
 
 import com.ainovel.server.domain.dto.ParsedNovelData;
 import com.ainovel.server.domain.dto.ParsedSceneData;
@@ -42,6 +39,7 @@ import com.ainovel.server.web.dto.ImportPreviewResponse;
 import com.ainovel.server.web.dto.ImportConfirmRequest;
 import com.ainovel.server.web.dto.ImportSessionInfo;
 import com.ainovel.server.web.dto.ChapterPreview;
+import com.ainovel.server.web.dto.ChapterDetailDto;
 import com.ainovel.server.service.UserAIModelConfigService;
 import com.ainovel.server.common.util.PromptUtil;
 
@@ -796,13 +794,18 @@ public class ImportServiceImpl implements ImportService {
                         scenes.size()
                 );
 
+                // ✅ 计算全本字数（所有章节）
                 int totalWordCount = 0;
+                for (ParsedSceneData scene : scenes) {
+                    totalWordCount += scene.getSceneContent().length();
+                }
+                
+                // 创建章节预览（只预览前N章）
                 for (int i = 0; i < previewCount; i++) {
                     ParsedSceneData scene = scenes.get(i);
                     String content = scene.getSceneContent();
                     
                     int wordCount = content.length(); // 简单字数统计
-                    totalWordCount += wordCount;
                     
                     ChapterPreview preview = new ChapterPreview();
                     preview.setChapterIndex(i);
@@ -987,6 +990,171 @@ public class ImportServiceImpl implements ImportService {
         })
         .subscribeOn(Schedulers.boundedElastic())
         .then();
+    }
+    
+    @Override
+    public Mono<String> getFullContentFromPreviewSession(String previewSessionId, Integer chapterLimit) {
+        return Mono.fromCallable(() -> {
+            log.info("从预览会话获取完整内容: sessionId={}, chapterLimit={}", previewSessionId, chapterLimit);
+            
+            ImportSessionInfo sessionInfo = previewSessions.get(previewSessionId);
+            if (sessionInfo == null || sessionInfo.getCleaned()) {
+                throw new RuntimeException("预览会话不存在或已过期");
+            }
+            
+            // 先尝试从缓存获取
+            ParsedNovelData parsedData = parsedDataCache.get(previewSessionId);
+            
+            if (parsedData == null) {
+                // 如果缓存中没有，重新解析文件
+                Path tempFilePath = Paths.get(sessionInfo.getTempFilePath());
+                if (!Files.exists(tempFilePath)) {
+                    throw new RuntimeException("临时文件不存在");
+                }
+                
+                NovelParser parser = getParserForFile(sessionInfo.getOriginalFileName());
+                List<String> fileLines = readFileLinesWithAutoCharset(tempFilePath);
+                fileLines = preprocessLines(fileLines);
+                
+                parsedData = parser.parseStream(fileLines.stream());
+                
+                // 设置标题
+                String title = extractTitleFromFilename(sessionInfo.getOriginalFileName());
+                parsedData.setNovelTitle(title);
+                
+                // 缓存起来
+                parsedDataCache.put(previewSessionId, parsedData);
+            }
+            
+            // 拼接章节内容
+            StringBuilder fullContent = new StringBuilder();
+            List<ParsedSceneData> scenes = parsedData.getScenes();
+            
+            // 确定实际使用的章节数
+            int totalChapters = scenes.size();
+            int effectiveChapters = (chapterLimit != null && chapterLimit > 0) 
+                    ? Math.min(chapterLimit, totalChapters) 
+                    : totalChapters;
+            
+            for (int i = 0; i < effectiveChapters; i++) {
+                ParsedSceneData scene = scenes.get(i);
+                if (i > 0) {
+                    fullContent.append("\n\n");
+                }
+                fullContent.append("【第").append(i + 1).append("章 ").append(scene.getSceneTitle()).append("】\n");
+                fullContent.append(scene.getSceneContent());
+            }
+            
+            String content = fullContent.toString();
+            log.info("获取完整内容成功: sessionId={}, 总章节数={}, 使用章节数={}, 总字数={}", 
+                    previewSessionId, totalChapters, effectiveChapters, content.length());
+            
+            return content;
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+    
+    @Override
+    public Mono<Integer> getTotalChapterCountFromPreviewSession(String previewSessionId) {
+        return Mono.fromCallable(() -> {
+            log.info("从预览会话获取章节数量: sessionId={}", previewSessionId);
+            
+            ImportSessionInfo sessionInfo = previewSessions.get(previewSessionId);
+            if (sessionInfo == null || sessionInfo.getCleaned()) {
+                throw new RuntimeException("预览会话不存在或已过期");
+            }
+            
+            // 先尝试从缓存获取
+            ParsedNovelData parsedData = parsedDataCache.get(previewSessionId);
+            
+            if (parsedData == null) {
+                // 如果缓存中没有，重新解析文件
+                Path tempFilePath = Paths.get(sessionInfo.getTempFilePath());
+                if (!Files.exists(tempFilePath)) {
+                    throw new RuntimeException("临时文件不存在");
+                }
+                
+                NovelParser parser = getParserForFile(sessionInfo.getOriginalFileName());
+                List<String> fileLines = readFileLinesWithAutoCharset(tempFilePath);
+                fileLines = preprocessLines(fileLines);
+                
+                parsedData = parser.parseStream(fileLines.stream());
+                
+                // 设置标题
+                String title = extractTitleFromFilename(sessionInfo.getOriginalFileName());
+                parsedData.setNovelTitle(title);
+                
+                // 缓存起来
+                parsedDataCache.put(previewSessionId, parsedData);
+            }
+            
+            int totalChapters = parsedData.getScenes().size();
+            log.info("获取章节数量成功: sessionId={}, totalChapters={}", previewSessionId, totalChapters);
+            
+            return totalChapters;
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+    
+    @Override
+    public Mono<List<ChapterDetailDto>> getChapterDetailsFromPreviewSession(
+            String previewSessionId, Integer chapterLimit) {
+        return Mono.fromCallable(() -> {
+            log.info("从预览会话获取章节详情: sessionId={}, chapterLimit={}", previewSessionId, chapterLimit);
+            
+            ImportSessionInfo sessionInfo = previewSessions.get(previewSessionId);
+            if (sessionInfo == null || sessionInfo.getCleaned()) {
+                throw new RuntimeException("预览会话不存在或已过期");
+            }
+            
+            // 先尝试从缓存获取
+            ParsedNovelData parsedData = parsedDataCache.get(previewSessionId);
+            
+            if (parsedData == null) {
+                // 如果缓存中没有，重新解析文件
+                Path tempFilePath = Paths.get(sessionInfo.getTempFilePath());
+                if (!Files.exists(tempFilePath)) {
+                    throw new RuntimeException("临时文件不存在");
+                }
+                
+                NovelParser parser = getParserForFile(sessionInfo.getOriginalFileName());
+                List<String> fileLines = readFileLinesWithAutoCharset(tempFilePath);
+                fileLines = preprocessLines(fileLines);
+                
+                parsedData = parser.parseStream(fileLines.stream());
+                
+                // 设置标题
+                String title = extractTitleFromFilename(sessionInfo.getOriginalFileName());
+                parsedData.setNovelTitle(title);
+                
+                // 缓存起来
+                parsedDataCache.put(previewSessionId, parsedData);
+            }
+            
+            // 获取章节列表
+            List<ParsedSceneData> scenes = parsedData.getScenes();
+            int totalChapters = scenes.size();
+            int effectiveChapters = (chapterLimit != null && chapterLimit > 0) 
+                    ? Math.min(chapterLimit, totalChapters) 
+                    : totalChapters;
+            
+            // 转换为ChapterDetailDto
+            List<ChapterDetailDto> chapterDetails = new ArrayList<>();
+            for (int i = 0; i < effectiveChapters; i++) {
+                ParsedSceneData scene = scenes.get(i);
+                ChapterDetailDto detail = ChapterDetailDto.builder()
+                        .index(i + 1)
+                        .chapterId("user_imported_ch_" + (i + 1)) // 虚拟ID，标记为用户导入
+                        .title(scene.getSceneTitle())
+                        .content(scene.getSceneContent())
+                        .wordCount(scene.getSceneContent().length())
+                        .build();
+                chapterDetails.add(detail);
+            }
+            
+            log.info("获取章节详情成功: sessionId={}, 总章节数={}, 使用章节数={}", 
+                    previewSessionId, totalChapters, chapterDetails.size());
+            
+            return chapterDetails;
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     /**

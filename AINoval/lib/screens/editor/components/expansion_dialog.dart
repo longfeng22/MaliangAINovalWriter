@@ -912,7 +912,7 @@ class _ExpansionDialogState extends State<ExpansionDialog> with AIDialogCommonLo
         final publicModel = (_selectedUnifiedModel as PublicAIModel).publicConfig;
         debugPrint('🚀 启动公共模型流式生成 - 显示名: ${publicModel.displayName}, 模型ID: ${publicModel.modelId}, 公共模型ID: ${publicModel.id}');
         modelConfig = UserAIModelConfigModel.fromJson({
-          'id': 'public_${publicModel.id}', // 🚀 使用前缀区分公共模型ID
+          'id': publicModel.id, // 直接使用公共模型ID，不拼接前缀
           'userId': AppConfig.userId ?? 'unknown',
           'alias': publicModel.displayName,
           'modelName': publicModel.modelId,

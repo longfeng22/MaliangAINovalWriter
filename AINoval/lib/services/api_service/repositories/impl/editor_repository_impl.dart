@@ -1090,15 +1090,33 @@ class EditorRepositoryImpl implements EditorRepository {
   /// 原子化添加章节和场景 - 在一个事务中同时创建章节和场景，避免数据不一致
   @override
   Future<Map<String, dynamic>> addChapterWithScene(String novelId, String actId, 
-      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent}) async {
+      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent, String? insertAfterChapterId}) async {
     try {
       final response = await _apiClient.addChapterWithScene(
         novelId, actId, chapterTitle, sceneTitle,
-        sceneSummary: sceneSummary, sceneContent: sceneContent);
+        sceneSummary: sceneSummary, sceneContent: sceneContent, insertAfterChapterId: insertAfterChapterId);
       
-      // 发布结构更新事件
-      _publishNovelStructureUpdate(novelId, 'CHAPTER_ADDED', chapterId: response['chapterId']?.toString());
-      _publishNovelStructureUpdate(novelId, 'SCENE_ADDED', sceneId: response['sceneId']?.toString());
+      // 发布结构更新事件（合并为一次，附带必要数据，供前端本地增量合并）
+      final String? chapterId = response['chapterId']?.toString();
+      final String? sceneId = response['sceneId']?.toString();
+      final String? actIdResolved = await _getActIdForChapter(novelId, chapterId ?? '');
+      if (chapterId != null) {
+        _publishNovelStructureUpdate(
+          novelId,
+          'CHAPTER_ADDED',
+          actId: actIdResolved,
+          chapterId: chapterId,
+        );
+      }
+      if (chapterId != null && sceneId != null) {
+        _publishNovelStructureUpdate(
+          novelId,
+          'SCENE_ADDED',
+          actId: actIdResolved,
+          chapterId: chapterId,
+          sceneId: sceneId,
+        );
+      }
       
       AppLogger.i('EditorRepository/addChapterWithScene', 
           '原子化创建章节和场景成功: chapterId=${response['chapterId']}, sceneId=${response['sceneId']}');

@@ -66,6 +66,16 @@ public interface TaskStateService {
     Mono<Void> recordCompletion(String taskId, Object result);
     
     /**
+     * 更新任务结果（无论任务当前状态如何）
+     * 用于父任务需要更新已完成子任务的result的场景
+     * 
+     * @param taskId 任务ID
+     * @param result 结果对象
+     * @return 完成信号
+     */
+    Mono<Void> updateTaskResult(String taskId, Object result);
+    
+    /**
      * 记录任务重试状态
      * @param taskId 任务ID
      * @param retryCount 重试次数

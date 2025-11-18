@@ -71,6 +71,11 @@ class StopTaskEventsListening extends AppEvent {
   const StopTaskEventsListening();
 }
 
+// 导航到“提示词与预设”页面事件（保持左侧布局）
+class NavigateToUnifiedManagement extends AppEvent {
+  const NavigateToUnifiedManagement();
+}
+
 // 事件总线单例
 class EventBus {
   // 单例实例

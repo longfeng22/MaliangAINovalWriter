@@ -16,6 +16,11 @@ import 'package:ainoval/blocs/setting_generation/setting_generation_bloc.dart';
 import 'package:ainoval/blocs/setting_generation/setting_generation_event.dart';
 import 'package:ainoval/blocs/setting_generation/setting_generation_state.dart';
 import '../../setting_generation/novel_settings_generator_screen.dart';
+// 📚 知识库集成
+import 'package:ainoval/models/knowledge_base_integration_mode.dart';
+import 'package:ainoval/screens/setting_generation/widgets/knowledge_base_setting_selector.dart';
+// 🏪 策略市场
+import 'enhanced_strategy_selector.dart';
 
 class NovelInputNew extends StatefulWidget {
   final String prompt;
@@ -43,6 +48,11 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
   late Animation<double> _pulseAnimation;
   String _selectedStrategy = ''; // 默认为空，将从后端获取策略列表后设置
   bool _suppressControllerListener = false; // 避免程序化同步时反向通知父组件
+  
+  // 📚 知识库集成状态
+  KnowledgeBaseIntegrationMode _knowledgeBaseMode = KnowledgeBaseIntegrationMode.none;
+  List<SelectedKnowledgeBaseItem> _selectedKnowledgeBases = []; // 用于复用/仿写模式
+  List<SelectedKnowledgeBaseItem> _selectedReferenceKnowledgeBases = []; // 用于混合模式的参考
 
   @override
   void initState() {
@@ -153,20 +163,37 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
   // }
 
   Future<void> _handleGenerateSettings() async {
-    if (_controller.text.trim().isEmpty || widget.selectedModel == null) return;
+    
+    // 📚 复用模式允许空提示词，其他模式需要提示词
+    final needsPrompt = _knowledgeBaseMode != KnowledgeBaseIntegrationMode.reuse;
+    if (needsPrompt && _controller.text.trim().isEmpty) {
+      print('🔥 [DEBUG] 被拦截：需要提示词但提示词为空');
+      return;
+    }
+    
+    if (widget.selectedModel == null) {
+      print('🔥 [DEBUG] 被拦截：未选择模型');
+      return;
+    }
 
     // 检查登录状态
     final String? userId = AppConfig.userId;
     if (userId == null || userId.isEmpty) {
+      print('🔥 [DEBUG] 被拦截：未登录');
       // 未登录，提示用户登录
       _showLoginRequiredDialog();
       return;
     }
 
+    print('🔥 [DEBUG] 执行工具模型检查');
     final ok = await _precheckToolModelAndMaybePrompt();
-    if (!ok) return;
+    if (!ok) {
+      print('🔥 [DEBUG] 被拦截：工具模型检查未通过');
+      return;
+    }
 
-    // 打开设定生成器对话框，并传递选择的策略
+    print('🔥 [DEBUG] 打开设定生成器对话框');
+    // 打开设定生成器对话框，并传递选择的策略和知识库参数
     _showSettingGeneratorDialog(context);
   }
 
@@ -265,6 +292,10 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
   }
 
   void _showSettingGeneratorDialog(BuildContext context) {
+    print('🔥 [DEBUG] 模式: ${_knowledgeBaseMode.displayName}');
+    print('🔥 [DEBUG] 复用列表数量: ${_selectedKnowledgeBases.length}');
+    print('🔥 [DEBUG] 参考列表数量: ${_selectedReferenceKnowledgeBases.length}');
+    
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -272,6 +303,10 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
         initialPrompt: _controller.text.trim(),
         selectedModel: widget.selectedModel,
         selectedStrategy: _selectedStrategy,
+        // 📚 传递知识库参数
+        knowledgeBaseMode: _knowledgeBaseMode,
+        selectedKnowledgeBases: _selectedKnowledgeBases,
+        selectedReferenceKnowledgeBases: _selectedReferenceKnowledgeBases,
       ),
     );
   }
@@ -440,14 +475,24 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
                     children: [
                       TextField(
                         controller: _controller,
+                        // 📚 复用模式下不可输入
+                        enabled: _knowledgeBaseMode != KnowledgeBaseIntegrationMode.reuse,
+                        readOnly: _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse,
                         maxLines: 8,
                         style: TextStyle(
                           fontSize: 18,
                           height: 1.6,
-                          color: WebTheme.getTextColor(context),
+                          color: _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse
+                              ? WebTheme.getSecondaryTextColor(context)
+                              : WebTheme.getTextColor(context),
                         ),
                         decoration: InputDecoration(
-                          hintText: '请输入您的小说创意想法，例如：一个现代都市的年轻程序员意外获得了穿越时空的能力...',
+                          hintText: _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse
+                              ? '复用模式下无需输入提示词，请在下方选择知识库小说'
+                              : (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.imitation ||
+                                 _knowledgeBaseMode == KnowledgeBaseIntegrationMode.hybrid)
+                                  ? '请详细描述生成需求，选中的知识库设定将作为参考加入提示词...'
+                                  : '请输入您的小说创意想法，例如：一个现代都市的年轻程序员意外获得了穿越时空的能力...',
                           hintStyle: TextStyle(
                             color: WebTheme.getSecondaryTextColor(context).withOpacity(0.6),
                           ),
@@ -455,7 +500,7 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
                           contentPadding: const EdgeInsets.all(24),
                         ),
                       ),
-                      // Bottom Actions
+                      // Bottom Actions - 🎨 优化为两行布局
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
@@ -465,64 +510,138 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
                             bottomRight: Radius.circular(16),
                           ),
                         ),
-                        child: Row(
+                        child: Column(
                           children: [
-                            // 左侧区域：模型选择器 + 策略选择器 (占4份)
-                            Expanded(
-                              flex: 4,
-                              child: Row(
-                                children: [
-                                  // Model Selection Button
-                                  Expanded(
-                                    flex: 2,
-                                    child: ModelDisplaySelector(
-                                      selectedModel: widget.selectedModel,
-                                      onModelSelected: widget.onModelSelected,
-                                      size: ModelDisplaySize.small,
-                                      height: 48, // 增加一半高度保持一致
-                                      showIcon: true,
-                                      showTags: true,
-                                      showSettingsButton: true,
-                                      placeholder: '选择AI模型',
-                                    ),
+                            // 🎨 第一行：核心配置（模型 + 策略 + 生成按钮）
+                            Row(
+                              children: [
+                                // 模型选择器
+                                Expanded(
+                                  flex: 3,
+                                  child: ModelDisplaySelector(
+                                    selectedModel: widget.selectedModel,
+                                    onModelSelected: widget.onModelSelected,
+                                    size: ModelDisplaySize.small,
+                                    height: 48,
+                                    showIcon: true,
+                                    showTags: true,
+                                    showSettingsButton: true,
+                                    placeholder: '选择AI模型',
                                   ),
-                                  const SizedBox(width: 8),
-                                  // Strategy Selection Dropdown
-                                  Expanded(
-                                    flex: 1,
-                                    child: _buildStrategySelector(),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            // 中间留空区域 (占3份)
-                            const Expanded(
-                              flex: 3,
-                              child: SizedBox(),
-                            ),
-                            // 右侧区域：生成设定按钮 (占2份)
-                            Expanded(
-                              flex: 2,
-                              child: SizedBox(
-                                height: 48, // 确保按钮高度与其他组件一致
-                                child: OutlinedButton.icon(
-                                  onPressed: _controller.text.trim().isEmpty || 
-                                           widget.selectedModel == null || 
-                                           _isGenerating || 
-                                           _isPolishing
-                                    ? null
-                                    : () async { await _handleGenerateSettings(); },
-                                  icon: const Icon(Icons.psychology, size: 18),
-                                  label: const Text('生成设定'),
-                                  style: OutlinedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                    side: BorderSide(
-                                      color: Theme.of(context).colorScheme.secondary.withOpacity(0.3),
-                                      width: 1.5,
+                                ),
+                                const SizedBox(width: 8),
+                                
+                                // 策略选择器（带市场按钮）
+                                Expanded(
+                                  flex: 3,
+                                  child: _buildStrategySelector(),
+                                ),
+                                
+                                // 中间留空
+                                const Expanded(
+                                  flex: 2,
+                                  child: SizedBox(),
+                                ),
+                                
+                                // 生成设定按钮
+                                Expanded(
+                                  flex: 2,
+                                  child: SizedBox(
+                                    height: 48,
+                                    child: OutlinedButton.icon(
+                                      onPressed: _shouldEnableGenerateButton()
+                                        ? () async { await _handleGenerateSettings(); }
+                                        : null,
+                                      icon: Icon(
+                                        _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse
+                                            ? Icons.file_copy
+                                            : Icons.psychology,
+                                        size: 18,
+                                      ),
+                                      label: Text(
+                                        _knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse
+                                            ? '开始设定复用'
+                                            : '生成设定',
+                                      ),
+                                      style: OutlinedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                        side: BorderSide(
+                                          color: Theme.of(context).colorScheme.secondary.withOpacity(0.3),
+                                          width: 1.5,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
+                              ],
+                            ),
+                            
+                            const SizedBox(height: 12),
+                            
+                            // 🎨 第二行：知识库配置
+                            Row(
+                              children: [
+                                // 知识库模式选择器
+                                Expanded(
+                                  flex: 3,
+                                  child: _buildKnowledgeBaseModeSelector(),
+                                ),
+                                
+                                const SizedBox(width: 12),
+                                
+                                // 知识库引用提示（精简版，只显示图标+文字）
+                                Tooltip(
+                                  message: '💡 使用知识库功能\n可以复用或参考已有小说的设定\n提升生成质量和一致性',
+                                  preferBelow: false,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: WebTheme.getPrimaryColor(context),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  textStyle: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    height: 1.5,
+                                  ),
+                                  child: Container(
+                                    height: 40,
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    decoration: BoxDecoration(
+                                      color: WebTheme.getPrimaryColor(context).withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: WebTheme.getPrimaryColor(context).withOpacity(0.3),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.info_outline,
+                                          size: 16,
+                                          color: WebTheme.getPrimaryColor(context),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          '知识库说明',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: WebTheme.getPrimaryColor(context),
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                
+                                // 右侧留空保持对齐
+                                const Expanded(
+                                  flex: 5,
+                                  child: SizedBox(),
+                                ),
+                              ],
                             ),
                             // // Polish Button
                             // Flexible(
@@ -591,9 +710,300 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
               ],
             ),
           ),
+          // 📚 知识库选择器区域 - 根据模式显示
+          if (_knowledgeBaseMode != KnowledgeBaseIntegrationMode.none) ...[
+            const SizedBox(height: 24),
+            Container(
+              constraints: const BoxConstraints(maxWidth: 1000),
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: WebTheme.getSurfaceColor(context).withOpacity(0.8),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: WebTheme.getBorderColor(context),
+                  width: 1,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 📚 混合模式显示两个选择器
+                  if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.hybrid) ...[
+                    Text(
+                      '复用知识库设定',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: WebTheme.getTextColor(context),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: WebTheme.getPrimaryColor(context).withOpacity(0.05),
+                        border: Border.all(
+                          color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 14,
+                            color: WebTheme.getPrimaryColor(context),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '这些设定将被直接复用（不经过AI）',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: WebTheme.getTextColor(context),
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    KnowledgeBaseSettingSelector(
+                      selectedItems: _selectedKnowledgeBases,
+                      onSelectionChanged: (items) {
+                        setState(() {
+                          _selectedKnowledgeBases = items;
+                        });
+                      },
+                      multipleSelection: true,
+                      hintText: '搜索要复用的知识库小说（支持多选）...',
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      '参考知识库设定',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: WebTheme.getTextColor(context),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: WebTheme.getSecondaryColor(context).withOpacity(0.05),
+                        border: Border.all(
+                          color: WebTheme.getSecondaryColor(context).withOpacity(0.2),
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 14,
+                            color: WebTheme.getSecondaryColor(context),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '这些设定将加入提示词，作为AI参考',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: WebTheme.getTextColor(context),
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    KnowledgeBaseSettingSelector(
+                      selectedItems: _selectedReferenceKnowledgeBases,
+                      onSelectionChanged: (items) {
+                        setState(() {
+                          _selectedReferenceKnowledgeBases = items;
+                        });
+                      },
+                      multipleSelection: true,
+                      hintText: '搜索参考的知识库小说（支持多选）...',
+                    ),
+                  ] else ...[
+                    // 📚 其他模式显示单个选择器
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: WebTheme.getPrimaryColor(context).withOpacity(0.05),
+                        border: Border.all(
+                          color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 14,
+                            color: WebTheme.getPrimaryColor(context),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _knowledgeBaseMode.description,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: WebTheme.getTextColor(context),
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    KnowledgeBaseSettingSelector(
+                      selectedItems: _selectedKnowledgeBases,
+                      onSelectionChanged: (items) {
+                        setState(() {
+                          _selectedKnowledgeBases = items;
+                        });
+                      },
+                      multipleSelection: true,
+                      hintText: '搜索知识库小说（支持多选）...',
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// 📚 构建知识库模式选择器（下拉框）
+  Widget _buildKnowledgeBaseModeSelector() {
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: WebTheme.getSurfaceColor(context).withOpacity(0.9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: WebTheme.getBorderColor(context).withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<KnowledgeBaseIntegrationMode>(
+          value: _knowledgeBaseMode,
+          isExpanded: true,
+          style: TextStyle(
+            fontSize: 12,
+            color: WebTheme.getTextColor(context),
+          ),
+          dropdownColor: WebTheme.getSurfaceColor(context),
+          icon: Icon(
+            Icons.arrow_drop_down,
+            size: 16,
+            color: WebTheme.getSecondaryTextColor(context),
+          ),
+          items: KnowledgeBaseIntegrationMode.values.map((mode) {
+            return DropdownMenuItem(
+              value: mode,
+              child: Tooltip(
+                message: mode.description,
+                child: Text(
+                  mode.displayName,
+                  style: const TextStyle(fontSize: 12),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            );
+          }).toList(),
+          onChanged: (value) {
+            if (value != null) {
+              setState(() {
+                _knowledgeBaseMode = value;
+                // 清空所有选择
+                _selectedKnowledgeBases = [];
+                _selectedReferenceKnowledgeBases = [];
+              });
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  /// 📚 判断生成按钮是否应该启用
+  bool _shouldEnableGenerateButton() {
+    final result = _calculateShouldEnable();
+    print('🔥 [DEBUG] _shouldEnableGenerateButton() = $result');
+    print('🔥 [DEBUG] - _isGenerating: $_isGenerating');
+    print('🔥 [DEBUG] - _isPolishing: $_isPolishing');
+    print('🔥 [DEBUG] - selectedModel: ${widget.selectedModel != null}');
+    print('🔥 [DEBUG] - knowledgeBaseMode: ${_knowledgeBaseMode.displayName}');
+    print('🔥 [DEBUG] - selectedKnowledgeBases: ${_selectedKnowledgeBases.length}');
+    print('🔥 [DEBUG] - prompt: "${_controller.text}"');
+    return result;
+  }
+  
+  bool _calculateShouldEnable() {
+    print('🔥 [DEBUG] ========== 检查按钮启用条件 ==========');
+    print('🔥 [DEBUG] _isGenerating: $_isGenerating');
+    print('🔥 [DEBUG] _isPolishing: $_isPolishing');
+    print('🔥 [DEBUG] widget.selectedModel: ${widget.selectedModel != null}');
+    
+    if (_isGenerating || _isPolishing || widget.selectedModel == null) {
+      print('🔥 [DEBUG] ❌ 基础条件不满足');
+      return false;
+    }
+
+    // 复用模式：只需要选择知识库
+    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse) {
+      final result = _selectedKnowledgeBases.isNotEmpty;
+      print('🔥 [DEBUG] 复用模式: _selectedKnowledgeBases.length = ${_selectedKnowledgeBases.length}');
+      print('🔥 [DEBUG] 复用模式结果: $result');
+      return result;
+    }
+
+    // 无知识库模式：需要输入提示词
+    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.none) {
+      final result = _controller.text.trim().isNotEmpty;
+      print('🔥 [DEBUG] 无知识库模式: prompt.length = ${_controller.text.trim().length}');
+      print('🔥 [DEBUG] 无知识库模式结果: $result');
+      return result;
+    }
+
+    // 仿写模式：需要提示词和知识库
+    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.imitation) {
+      final hasPrompt = _controller.text.trim().isNotEmpty;
+      final hasKB = _selectedKnowledgeBases.isNotEmpty;
+      print('🔥 [DEBUG] 仿写模式: hasPrompt = $hasPrompt, prompt.length = ${_controller.text.trim().length}');
+      print('🔥 [DEBUG] 仿写模式: hasKB = $hasKB, _selectedKnowledgeBases.length = ${_selectedKnowledgeBases.length}');
+      final result = hasPrompt && hasKB;
+      print('🔥 [DEBUG] 仿写模式结果: $result');
+      return result;
+    }
+
+    // 混合模式：需要提示词，至少一个知识库列表有内容
+    if (_knowledgeBaseMode == KnowledgeBaseIntegrationMode.hybrid) {
+      final hasPrompt = _controller.text.trim().isNotEmpty;
+      final hasReuseKB = _selectedKnowledgeBases.isNotEmpty;
+      final hasRefKB = _selectedReferenceKnowledgeBases.isNotEmpty;
+      print('🔥 [DEBUG] 混合模式: hasPrompt = $hasPrompt, prompt.length = ${_controller.text.trim().length}');
+      print('🔥 [DEBUG] 混合模式: hasReuseKB = $hasReuseKB, _selectedKnowledgeBases.length = ${_selectedKnowledgeBases.length}');
+      print('🔥 [DEBUG] 混合模式: hasRefKB = $hasRefKB, _selectedReferenceKnowledgeBases.length = ${_selectedReferenceKnowledgeBases.length}');
+      final result = hasPrompt && (hasReuseKB || hasRefKB);
+      print('🔥 [DEBUG] 混合模式结果: $result');
+      return result;
+    }
+
+    print('🔥 [DEBUG] ❌ 未知模式');
+    return false;
   }
 
   /// 构建策略选择器
@@ -618,7 +1028,7 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
           isLoading = true;
         }
         
-        // 智能选择当前策略：优先选择“番茄小说/网文/tomato”，否则回退到“九线法”，再否则选第一个
+        // 智能选择当前策略：优先选择"番茄小说/网文/tomato"，否则回退到"九线法"，再否则选第一个
         if (strategies.isNotEmpty && (_selectedStrategy.isEmpty || !strategies.any((s) => s.promptTemplateId == _selectedStrategy))) {
           // 1) 优先匹配番茄网文策略
           final tomatoStrategy = strategies.where((s) =>
@@ -646,79 +1056,20 @@ class _NovelInputNewState extends State<NovelInputNew> with TickerProviderStateM
           }
         }
 
-        return Container(
-          height: 48, // 增加一半高度 (32 * 1.5)
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: WebTheme.getSurfaceColor(context).withOpacity(0.9),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: WebTheme.getBorderColor(context).withOpacity(0.3),
-              width: 1,
-            ),
-          ),
-          child: isLoading
-            ? Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.5,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        WebTheme.getPrimaryColor(context),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '加载中...',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: WebTheme.getSecondaryTextColor(context),
-                    ),
-                  ),
-                ],
-              )
-            : DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedStrategy.isEmpty ? null : _selectedStrategy,
-                  isExpanded: true,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: WebTheme.getTextColor(context),
-                  ),
-                  dropdownColor: WebTheme.getSurfaceColor(context),
-                  icon: Icon(
-                    Icons.arrow_drop_down,
-                    size: 16,
-                    color: WebTheme.getSecondaryTextColor(context),
-                  ),
-                  items: strategies.map((strategy) {
-                    return DropdownMenuItem(
-                      value: strategy.promptTemplateId,
-                      child: Tooltip(
-                        message: strategy.description,
-                        child: Text(
-                          strategy.name,
-                          style: const TextStyle(fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() {
-                        _selectedStrategy = value;
-                      });
-                      // 记录用户的选择以便调试
-                      print('用户选择策略: $value');
-                    }
-                  },
-                ),
-              ),
+        // 🆕 使用增强的策略选择器（包含市场入口）
+        return EnhancedStrategySelector(
+          strategies: strategies,
+          selectedStrategy: _selectedStrategy,
+          isLoading: isLoading,
+          onChanged: (value) {
+            if (value != null) {
+              setState(() {
+                _selectedStrategy = value;
+              });
+              // 记录用户的选择以便调试
+              print('用户选择策略: $value');
+            }
+          },
         );
       },
     );
@@ -730,11 +1081,18 @@ class _SettingGeneratorDialog extends StatelessWidget {
   final String initialPrompt;
   final UnifiedAIModel? selectedModel;
   final String selectedStrategy;
+  // 📚 知识库集成参数
+  final KnowledgeBaseIntegrationMode knowledgeBaseMode;
+  final List<SelectedKnowledgeBaseItem> selectedKnowledgeBases;
+  final List<SelectedKnowledgeBaseItem> selectedReferenceKnowledgeBases;
 
   const _SettingGeneratorDialog({
     required this.initialPrompt,
     this.selectedModel,
     required this.selectedStrategy,
+    this.knowledgeBaseMode = KnowledgeBaseIntegrationMode.none,
+    this.selectedKnowledgeBases = const [],
+    this.selectedReferenceKnowledgeBases = const [],
   });
 
   @override
@@ -752,6 +1110,10 @@ class _SettingGeneratorDialog extends StatelessWidget {
                 selectedModel: selectedModel,
                 selectedStrategy: selectedStrategy,
                 autoStart: true, // 自动开始生成
+                // 📚 传递知识库参数
+                initialKnowledgeBaseMode: knowledgeBaseMode,
+                initialSelectedKnowledgeBases: selectedKnowledgeBases,
+                initialReferenceKnowledgeBases: selectedReferenceKnowledgeBases,
               ),
             ),
           ],

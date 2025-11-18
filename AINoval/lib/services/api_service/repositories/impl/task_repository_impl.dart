@@ -37,7 +37,7 @@ class TaskRepositoryImpl implements TaskRepository {
   Future<List<Map<String, dynamic>>> getUserHistoryTasks({
     String? status,
     int page = 0,
-    int size = 50,
+    int size = 5,
   }) async {
     try {
       AppLogger.d('TaskRepository', '🔍 获取用户历史任务: status=$status, page=$page, size=$size');
@@ -75,7 +75,7 @@ class TaskRepositoryImpl implements TaskRepository {
   Future<TaskListResult> getUserHistoryTasksPaged({
     String? status,
     int page = 0,
-    int size = 20,
+    int size = 5,
   }) async {
     try {
       AppLogger.d('TaskRepository', '🔍 获取用户历史任务分页: status=$status, page=$page, size=$size');
@@ -98,8 +98,10 @@ class TaskRepositoryImpl implements TaskRepository {
           }
         }
         
-        // 判断是否还有更多数据：如果返回的任务数量等于请求的size，可能还有更多
-        final bool hasMore = tasks.length == size;
+        // 仅按父任务计算 hasMore：后端按父任务分页，但返回扁平（父+子）
+        // 这里通过 parentTaskId 为空的条目数 来判断是否满额
+        final int parentCount = tasks.where((t) => (t['parentTaskId'] == null || (t['parentTaskId'] as String?)?.isEmpty == true)).length;
+        final bool hasMore = parentCount == size;
         
         AppLogger.d('TaskRepository', '✅ 获取用户历史任务分页成功: ${tasks.length}条, hasMore=$hasMore');
         return TaskListResult(

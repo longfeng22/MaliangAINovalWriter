@@ -12,6 +12,7 @@ import com.ainovel.server.service.impl.content.ContentProviderFactory;
 import com.ainovel.server.service.impl.content.ContentProvider;
 import com.ainovel.server.web.dto.request.UniversalAIRequestDto;
 import com.ainovel.server.domain.model.AIFeatureType;
+import com.ainovel.server.domain.model.AIRequest;
 import com.ainovel.server.domain.model.PublicModelConfig;
 import com.ainovel.server.domain.model.UserAIModelConfig;
 
@@ -93,6 +94,101 @@ public class CostEstimationServiceImpl implements CostEstimationService {
         }
     }
 
+    @Override
+    public Mono<CostEstimationResponse> estimateCostForAIRequest(AIRequest aiRequest, PublicModelConfig publicModel, AIFeatureType featureType) {
+        log.info("基于AIRequest预估积分成本 - 用户: {}, 模型: {}:{}, 功能: {}", 
+                aiRequest.getUserId(), publicModel.getProvider(), publicModel.getModelId(), featureType);
+
+        // 检查模型是否启用
+        if (!publicModel.getEnabled()) {
+            return Mono.just(new CostEstimationResponse(0L, false, "该公共模型当前不可用"));
+        }
+
+        // 检查模型是否支持该功能
+        if (!publicModel.isEnabledForFeature(featureType)) {
+            return Mono.just(new CostEstimationResponse(0L, false, "该公共模型不支持当前功能: " + featureType));
+        }
+
+        // 直接基于AIRequest估算内容长度
+        return estimateContentLengthFromAIRequest(aiRequest)
+                .flatMap(totalLength -> {
+                    log.info("估算的总内容长度: {} 字符", totalLength);
+
+                    // 估算token数量
+                    return tokenEstimationService.estimateTokensByWordCount(totalLength, publicModel.getModelId())
+                            .flatMap(inputTokens -> {
+                                // 估算输出token
+                                int outputTokens = estimateOutputTokens(inputTokens.intValue(), featureType);
+                                
+                                log.info("估算tokens - 输入: {}, 输出: {}", inputTokens, outputTokens);
+
+                                // 计算积分成本
+                                return creditService.calculateCreditCost(publicModel.getProvider(), publicModel.getModelId(), 
+                                        featureType, inputTokens.intValue(), outputTokens)
+                                        .map(cost -> {
+                                            log.info("公共模型 {}:{} 预估积分成本: {}", 
+                                                    publicModel.getProvider(), publicModel.getModelId(), cost);
+                                            
+                                            CostEstimationResponse response = new CostEstimationResponse(cost, true);
+                                            response.setEstimatedInputTokens(inputTokens.intValue());
+                                            response.setEstimatedOutputTokens(outputTokens);
+                                            response.setModelProvider(publicModel.getProvider());
+                                            response.setModelId(publicModel.getModelId());
+                                            response.setCreditMultiplier(publicModel.getCreditRateMultiplier());
+                                            
+                                            return response;
+                                        })
+                                        .onErrorResume(error -> {
+                                            log.warn("积分计算失败: {}，使用默认值", error.getMessage());
+                                            return Mono.just(new CostEstimationResponse(1L, true));
+                                        });
+                            })
+                            .onErrorResume(error -> {
+                                log.warn("Token估算失败: {}，使用默认值", error.getMessage());
+                                return Mono.just(new CostEstimationResponse(1L, true));
+                            });
+                })
+                .onErrorResume(error -> {
+                    log.warn("内容长度估算失败: {}，返回失败结果", error.getMessage());
+                    return Mono.just(new CostEstimationResponse(0L, false, error.getMessage()));
+                });
+    }
+
+    /**
+     * 基于AIRequest估算内容长度
+     */
+    private Mono<Integer> estimateContentLengthFromAIRequest(AIRequest aiRequest) {
+        int baseLength = 0;
+        
+        // 计算提示词长度
+        if (aiRequest.getPrompt() != null) {
+            baseLength += aiRequest.getPrompt().length();
+        }
+        
+        // 计算消息历史长度
+        if (aiRequest.getMessages() != null) {
+            for (AIRequest.Message message : aiRequest.getMessages()) {
+                if (message.getContent() != null) {
+                    baseLength += message.getContent().length();
+                }
+            }
+        }
+        
+        // 如果有上下文相关的ID，估算额外的上下文长度
+        String novelId = aiRequest.getNovelId();
+        
+        // 基础内容已有的长度
+        int finalBaseLength = baseLength;
+        
+        // 如果启用了上下文，则需要估算上下文内容
+        if (Boolean.TRUE.equals(aiRequest.getEnableContext()) && novelId != null) {
+            // 估算小说相关上下文长度（简化估算）
+            return Mono.just(finalBaseLength + 2000); // 假设平均上下文长度为2000字符
+        }
+        
+        return Mono.just(Math.max(finalBaseLength, 100)); // 最小100字符
+    }
+
     /**
      * 为公共模型预估积分成本
      */
@@ -113,6 +209,57 @@ public class CostEstimationServiceImpl implements CostEstimationService {
                     // 映射AI功能类型
                     AIFeatureType featureType = mapRequestTypeToFeatureType(request.getRequestType());
 
+                    // ✅ 优先使用前端传递的token预估值
+                    Integer providedInputTokens = extractEstimatedInputTokens(request);
+                    Integer providedOutputTokens = extractEstimatedOutputTokens(request);
+                    
+                    if (providedInputTokens != null && providedInputTokens > 0) {
+                        // 使用前端提供的token值
+                        int inputTokens = providedInputTokens;
+                        int outputTokens = providedOutputTokens != null && providedOutputTokens > 0 
+                                ? providedOutputTokens 
+                                : estimateOutputTokens(inputTokens, featureType);
+                        
+                        log.info("使用前端提供的tokens - 输入: {}, 输出: {}", inputTokens, outputTokens);
+
+                        // 计算积分成本
+                        return creditService.calculateCreditCost(provider, modelId, featureType, inputTokens, outputTokens)
+                                .map(cost -> {
+                                    log.info("公共模型 {}:{} 预估积分成本: {}", provider, modelId, cost);
+                                    
+                                    CostEstimationResponse response = new CostEstimationResponse(cost, true);
+                                    response.setEstimatedInputTokens(inputTokens);
+                                    response.setEstimatedOutputTokens(outputTokens);
+                                    response.setModelProvider(provider);
+                                    response.setModelId(modelId);
+                                    response.setCreditMultiplier(publicModel.getCreditRateMultiplier());
+                                    
+                                    return response;
+                                })
+                                // 🚀 如果没有定价信息，检查是否为免费模型
+                                .onErrorResume(error -> {
+                                    log.warn("公共模型 {}:{} 积分计算失败: {}，检查是否为免费模型", provider, modelId, error.getMessage());
+                                    
+                                    // 检查模型标签是否包含"免费"
+                                    if (isFreeTierModel(publicModel)) {
+                                        log.info("公共模型 {}:{} 标记为免费，使用默认1积分", provider, modelId);
+                                        
+                                        CostEstimationResponse response = new CostEstimationResponse(1L, true);
+                                        response.setEstimatedInputTokens(inputTokens);
+                                        response.setEstimatedOutputTokens(outputTokens);
+                                        response.setModelProvider(provider);
+                                        response.setModelId(modelId);
+                                        response.setCreditMultiplier(1.0);
+                                        
+                                        return Mono.just(response);
+                                    } else {
+                                        // 不是免费模型，返回原错误
+                                        return Mono.error(error);
+                                    }
+                                });
+                    }
+
+                    // ✅ 后端自己估算token
                     // 快速估算内容长度
                     return estimateContentLength(request)
                             .flatMap(totalLength -> {
@@ -126,42 +273,41 @@ public class CostEstimationServiceImpl implements CostEstimationService {
                                             
                                             log.info("估算tokens - 输入: {}, 输出: {}", inputTokens, outputTokens);
 
-                                                                        // 计算积分成本
-                            return creditService.calculateCreditCost(provider, modelId, featureType, inputTokens.intValue(), outputTokens)
-                                    .map(cost -> {
-                                        log.info("公共模型 {}:{} 预估积分成本: {}", provider, modelId, cost);
-                                        
-                                        CostEstimationResponse response = new CostEstimationResponse(cost, true);
-                                        response.setEstimatedInputTokens(inputTokens.intValue());
-                                        response.setEstimatedOutputTokens(outputTokens);
-                                        response.setModelProvider(provider);
-                                        response.setModelId(modelId);
-                                        response.setCreditMultiplier(publicModel.getCreditRateMultiplier());
-                                        
-                                        return response;
-                                    })
-                                    // 🚀 新增：如果没有定价信息，检查是否为免费模型
-                                    .onErrorResume(error -> {
-                                        log.warn("公共模型 {}:{} 积分计算失败: {}，检查是否为免费模型", provider, modelId, error.getMessage());
-                                        
-                                        // 检查模型标签是否包含"免费"
-                                        if (isFreeTierModel(publicModel)) {
-                                            log.info("公共模型 {}:{} 标记为免费，使用默认1积分", provider, modelId);
-                                            
-                                            CostEstimationResponse response = new CostEstimationResponse(1L, true);
-                                            response.setEstimatedInputTokens(inputTokens.intValue());
-                                            response.setEstimatedOutputTokens(outputTokens);
-                                            response.setModelProvider(provider);
-                                            response.setModelId(modelId);
-                                            response.setCreditMultiplier(1.0);
-                                            
-                                            
-                                            return Mono.just(response);
-                                        } else {
-                                            // 不是免费模型，返回原错误
-                                            return Mono.error(error);
-                                        }
-                                    });
+                                            // 计算积分成本
+                                            return creditService.calculateCreditCost(provider, modelId, featureType, inputTokens.intValue(), outputTokens)
+                                                    .map(cost -> {
+                                                        log.info("公共模型 {}:{} 预估积分成本: {}", provider, modelId, cost);
+                                                        
+                                                        CostEstimationResponse response = new CostEstimationResponse(cost, true);
+                                                        response.setEstimatedInputTokens(inputTokens.intValue());
+                                                        response.setEstimatedOutputTokens(outputTokens);
+                                                        response.setModelProvider(provider);
+                                                        response.setModelId(modelId);
+                                                        response.setCreditMultiplier(publicModel.getCreditRateMultiplier());
+                                                        
+                                                        return response;
+                                                    })
+                                                    // 🚀 如果没有定价信息，检查是否为免费模型
+                                                    .onErrorResume(error -> {
+                                                        log.warn("公共模型 {}:{} 积分计算失败: {}，检查是否为免费模型", provider, modelId, error.getMessage());
+                                                        
+                                                        // 检查模型标签是否包含"免费"
+                                                        if (isFreeTierModel(publicModel)) {
+                                                            log.info("公共模型 {}:{} 标记为免费，使用默认1积分", provider, modelId);
+                                                            
+                                                            CostEstimationResponse response = new CostEstimationResponse(1L, true);
+                                                            response.setEstimatedInputTokens(inputTokens.intValue());
+                                                            response.setEstimatedOutputTokens(outputTokens);
+                                                            response.setModelProvider(provider);
+                                                            response.setModelId(modelId);
+                                                            response.setCreditMultiplier(1.0);
+                                                            
+                                                            return Mono.just(response);
+                                                        } else {
+                                                            // 不是免费模型，返回原错误
+                                                            return Mono.error(error);
+                                                        }
+                                                    });
                                         });
                             });
                 })
@@ -318,10 +464,10 @@ public class CostEstimationServiceImpl implements CostEstimationService {
             case TEXT_EXPANSION, TEXT_REFACTOR ->
                 // 重构输出长度通常与输入相近，但略有增加
                     Math.min(inputTokens + 1000, 5000);
-            case TEXT_SUMMARY, SCENE_TO_SUMMARY ->
+            case TEXT_SUMMARY, SCENE_TO_SUMMARY->
                 // 总结通常输出200-800字，按500字估算 ≈ 650 tokens
                     650;
-            case NOVEL_GENERATION ->
+            case NOVEL_GENERATION, SUMMARY_TO_SCENE->
                 // 小说生成通常输出2000-4000字，按3000字估算 ≈ 3900 tokens
                     3900;
             case AI_CHAT ->
@@ -348,6 +494,11 @@ public class CostEstimationServiceImpl implements CostEstimationService {
      * 从请求中提取Provider
      */
     private String extractProvider(UniversalAIRequestDto request) {
+        // ✅ 优先从DTO顶层字段读取
+        if (request.getModelProvider() != null && !request.getModelProvider().isBlank()) {
+            return request.getModelProvider();
+        }
+        // 兼容：从metadata中读取
         if (request.getMetadata() != null) {
             Object provider = request.getMetadata().get("modelProvider");
             if (provider instanceof String) {
@@ -361,10 +512,45 @@ public class CostEstimationServiceImpl implements CostEstimationService {
      * 从请求中提取ModelId
      */
     private String extractModelId(UniversalAIRequestDto request) {
+        // ✅ 优先从DTO顶层字段读取
+        if (request.getModelName() != null && !request.getModelName().isBlank()) {
+            return request.getModelName();
+        }
+        // 兼容：从metadata中读取
         if (request.getMetadata() != null) {
             Object modelId = request.getMetadata().get("modelName");
             if (modelId instanceof String) {
                 return (String) modelId;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从请求中提取前端预估的输入token数
+     */
+    private Integer extractEstimatedInputTokens(UniversalAIRequestDto request) {
+        if (request.getParameters() != null) {
+            Object value = request.getParameters().get("estimatedInputTokens");
+            if (value instanceof Integer) {
+                return (Integer) value;
+            } else if (value instanceof Number) {
+                return ((Number) value).intValue();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从请求中提取前端预估的输出token数
+     */
+    private Integer extractEstimatedOutputTokens(UniversalAIRequestDto request) {
+        if (request.getParameters() != null) {
+            Object value = request.getParameters().get("estimatedOutputTokens");
+            if (value instanceof Integer) {
+                return (Integer) value;
+            } else if (value instanceof Number) {
+                return ((Number) value).intValue();
             }
         }
         return null;

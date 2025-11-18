@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ainoval/models/prompt_models.dart';
 import 'package:ainoval/services/api_service/repositories/prompt_repository.dart';
+import 'package:ainoval/services/api_service/repositories/prompt_market_repository.dart';
+import 'package:ainoval/services/api_service/base/api_client.dart';
 import 'package:ainoval/utils/logger.dart';
 import 'prompt_new_event.dart';
 import 'prompt_new_state.dart';
@@ -19,6 +21,7 @@ class PromptNewBloc extends Bloc<PromptNewEvent, PromptNewState> {
     on<UpdatePromptDetails>(_onUpdatePromptDetails);
     on<CopyPromptTemplate>(_onCopyPromptTemplate);
     on<ToggleFavoriteStatus>(_onToggleFavoriteStatus);
+    on<SubmitForReview>(_onSubmitForReview);
     on<SetDefaultTemplate>(_onSetDefaultTemplate);
     on<DeletePrompt>(_onDeletePrompt);
     on<SearchPrompts>(_onSearchPrompts);
@@ -28,6 +31,7 @@ class PromptNewBloc extends Bloc<PromptNewEvent, PromptNewState> {
   }
 
   final PromptRepository _promptRepository;
+  PromptRepository get promptRepository => _promptRepository;
   static const String _tag = 'PromptNewBloc';
 
   /// 将EnhancedUserPromptTemplate转换为UserPromptInfo的辅助函数
@@ -45,12 +49,17 @@ class PromptNewBloc extends Bloc<PromptNewEvent, PromptNewState> {
       isDefault: template.isDefault,
       isPublic: template.isPublic,
       shareCode: template.shareCode,
+      isVerified: template.isVerified,
       usageCount: template.usageCount,
+      favoriteCount: template.favoriteCount ?? 0,
       rating: template.rating,
       authorId: template.userId, // 使用userId作为authorId
       createdAt: template.createdAt,
       lastUsedAt: template.lastUsedAt,
       updatedAt: template.updatedAt,
+      reviewStatus: template.reviewStatus, // 🆕 添加审核状态字段
+      hidePrompts: template.hidePrompts, // 🆕 添加隐藏提示词字段
+      settingGenerationConfig: template.settingGenerationConfig, // 🆕 添加设定生成配置字段
     );
   }
 
@@ -360,6 +369,72 @@ class PromptNewBloc extends Bloc<PromptNewEvent, PromptNewState> {
       emit(state.copyWith(
         errorMessage: '切换收藏状态失败: ${error.toString()}',
       ));
+    }
+  }
+
+  /// 提交审核
+  Future<void> _onSubmitForReview(
+    SubmitForReview event,
+    Emitter<PromptNewState> emit,
+  ) async {
+    try {
+      AppLogger.i(_tag, '📤 收到提交审核事件: promptId=${event.promptId}, hidePrompts=${event.hidePrompts}');
+
+      // 调用市场服务提交审核，传递 hidePrompts 参数
+      final marketRepo = PromptMarketRepository(ApiClient());
+      AppLogger.i(_tag, '📞 调用 shareTemplate API: promptId=${event.promptId}, hidePrompts=${event.hidePrompts}');
+      await marketRepo.shareTemplate(event.promptId, hidePrompts: event.hidePrompts);
+
+      // 🎯 直接在本地状态更新审核状态为 PENDING，无需重新请求所有数据
+      final updatedPackages = Map<AIFeatureType, PromptPackage>.from(state.promptPackages);
+      bool updated = false;
+
+      for (final entry in updatedPackages.entries) {
+        final package = entry.value;
+        final updatedUserPrompts = package.userPrompts.map((prompt) {
+          if (prompt.id == event.promptId) {
+            updated = true;
+            return prompt.copyWith(
+              reviewStatus: 'PENDING',  // 🔥 立即更新为审核中
+              hidePrompts: event.hidePrompts,  // 🔥 更新隐藏提示词状态
+              updatedAt: DateTime.now(),
+            );
+          }
+          return prompt;
+        }).toList();
+
+        if (updated) {
+          updatedPackages[entry.key] = PromptPackage(
+            featureType: package.featureType,
+            systemPrompt: package.systemPrompt,
+            userPrompts: updatedUserPrompts,
+            publicPrompts: package.publicPrompts,
+            recentlyUsed: package.recentlyUsed,
+            supportedPlaceholders: package.supportedPlaceholders,
+            placeholderDescriptions: package.placeholderDescriptions,
+            lastUpdated: DateTime.now(),
+          );
+          break;
+        }
+      }
+
+      if (updated) {
+        emit(state.copyWith(
+          promptPackages: updatedPackages,
+          errorMessage: null,
+        ));
+        AppLogger.i(_tag, '✅ 本地状态已更新，审核状态已设为 PENDING');
+      } else {
+        AppLogger.w(_tag, '未找到需要更新的提示词: ${event.promptId}');
+        // 如果找不到对应的提示词，则fallback到刷新数据
+        add(const RefreshPromptData());
+      }
+    } catch (error) {
+      AppLogger.e(_tag, '提交审核失败', error);
+      emit(state.copyWith(
+        errorMessage: '提交审核失败: ${error.toString()}',
+      ));
+      rethrow; // 重新抛出以便UI层显示错误
     }
   }
 

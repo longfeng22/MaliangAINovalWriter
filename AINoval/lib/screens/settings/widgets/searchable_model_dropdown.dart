@@ -8,11 +8,21 @@ class SearchableModelDropdown extends StatefulWidget {
     required this.models,
     required this.onModelSelected,
     this.hintText = '搜索模型',
+    this.onCreateCustom,
+    this.onSearchChanged,
+    this.value,
   });
 
   final List<String> models;
   final ValueChanged<String> onModelSelected;
   final String hintText;
+  // 当输入的关键字没有匹配时，允许创建自定义模型
+  // 回调返回要创建的模型名称
+  final ValueChanged<String>? onCreateCustom;
+  // 搜索关键字变更回调，用于外部联动过滤下方列表
+  final ValueChanged<String>? onSearchChanged;
+  // 外部受控文本值，用于回填所选模型ID
+  final String? value;
 
   @override
   State<SearchableModelDropdown> createState() => _SearchableModelDropdownState();
@@ -32,6 +42,9 @@ class _SearchableModelDropdownState extends State<SearchableModelDropdown> {
     super.initState();
     _searchController.addListener(_onSearchChanged);
     _focusNode.addListener(_onFocusChanged);
+    if (widget.value != null && widget.value!.isNotEmpty) {
+      _searchController.text = widget.value!;
+    }
   }
 
   @override
@@ -44,6 +57,23 @@ class _SearchableModelDropdownState extends State<SearchableModelDropdown> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant SearchableModelDropdown oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.value != oldWidget.value) {
+      final next = widget.value ?? '';
+      if (_searchController.text != next) {
+        _searchController.text = next;
+        // 触发一次外部搜索回调，保持一致
+        if (widget.onSearchChanged != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            widget.onSearchChanged!.call(next);
+          });
+        }
+      }
+    }
+  }
+
   void _onSearchChanged() {
     setState(() {
       _searchText = _searchController.text;
@@ -53,6 +83,8 @@ class _SearchableModelDropdownState extends State<SearchableModelDropdown> {
         _showOverlay();
       }
     });
+    // 对外通知搜索关键字变化
+    widget.onSearchChanged?.call(_searchText);
   }
 
   void _onFocusChanged() {
@@ -130,13 +162,32 @@ class _SearchableModelDropdownState extends State<SearchableModelDropdown> {
         .toList();
 
     if (filteredModels.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(12.0),
-        child: Center(
-          child: Text(
-            '没有找到匹配的模型',
-            style: TextStyle(fontSize: 13),
-          ),
+      // 无匹配时，显示创建自定义模型入口（若提供回调）
+      return Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Center(
+              child: Text('没有找到匹配的模型', style: TextStyle(fontSize: 13)),
+            ),
+            if (widget.onCreateCustom != null && _searchText.trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: () {
+                  final name = _searchText.trim();
+                  if (name.isEmpty) return;
+                  widget.onCreateCustom!(name);
+                  // 不清空输入，保留用户输入；仅关闭下拉
+                  _removeOverlay();
+                },
+                icon: const Icon(Icons.add, size: 16),
+                label: Text('添加自定义模型 “$_searchText”', overflow: TextOverflow.ellipsis),
+                style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
+              ),
+            ],
+          ],
         ),
       );
     }
@@ -156,10 +207,14 @@ class _SearchableModelDropdownState extends State<SearchableModelDropdown> {
             overflow: TextOverflow.ellipsis,
           ),
           onTap: () {
+            // 选中后直接回填到输入框
+            _searchController.text = model;
+            // 通知上层所选模型
             widget.onModelSelected(model);
-            _searchController.clear();
+            // 同步一次搜索关键字，供下方列表过滤
+            widget.onSearchChanged?.call(_searchController.text);
+            // 关闭下拉，但保留焦点
             _removeOverlay();
-            _focusNode.unfocus();
           },
         );
       },

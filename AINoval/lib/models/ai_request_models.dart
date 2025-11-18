@@ -2,7 +2,7 @@ import 'package:ainoval/models/context_selection_models.dart';
 import 'package:ainoval/models/user_ai_model_config_model.dart';
 import 'package:ainoval/utils/date_time_parser.dart';
 
-/// AI请求类型枚举
+/// AI请求类型枚举（与后端AIFeatureType一一对应）
 enum AIRequestType {
   chat('AI_CHAT', '聊天对话'),
   expansion('TEXT_EXPANSION', '扩写文本'),
@@ -11,7 +11,12 @@ enum AIRequestType {
   refactor('TEXT_REFACTOR', '重构文本'),
   generation('NOVEL_GENERATION', '内容生成'),
   sceneBeat('SCENE_BEAT_GENERATION', '场景节拍生成'),
-  novelCompose('NOVEL_COMPOSE', '设定编排');
+  novelCompose('NOVEL_COMPOSE', '设定编排'),
+    storyPlotContinuation('STORY_PLOT_CONTINUATION', '故事剧情续写'),
+  
+  // 知识库拆书
+  knowledgeExtractionSetting('KNOWLEDGE_EXTRACTION_SETTING', '知识库拆书-设定提取'),
+  knowledgeExtractionOutline('KNOWLEDGE_EXTRACTION_OUTLINE', '知识库拆书-章节大纲');
 
   const AIRequestType(this.value, this.displayName);
   
@@ -141,30 +146,19 @@ class UniversalAIRequest {
 
     // 模型配置
     if (modelConfig != null) {
-      json['modelName'] = modelConfig!.modelName;
-      json['modelProvider'] = modelConfig!.provider;
+      // ✅ 仅以模型选择器的ID为准，后端只根据此字段选择模型
+      json['modelConfigId'] = modelConfig!.id;
 
+      // 可选标志（不用于后端选择，仅用于统计/日志）
       final bool isPublic = metadata['isPublicModel'] == true;
-
-      // 仅在私有模型时发送 modelConfigId，避免公共模型被误判为私有配置查询
-      if (!isPublic) {
-        json['modelConfigId'] = modelConfig!.id;
-      }
-      
-      // 🚀 明确标识是否为公共模型（并传递公共配置ID）
+      json['isPublicModel'] = isPublic;
       if (isPublic) {
-        json['isPublicModel'] = true;
         if (metadata.containsKey('publicModelConfigId') && metadata['publicModelConfigId'] != null) {
-          // 优先使用 publicModelConfigId（与后端期望一致）
           json['publicModelConfigId'] = metadata['publicModelConfigId'];
         }
         if (metadata.containsKey('publicModelId') && metadata['publicModelId'] != null) {
-          json['publicModelId'] = metadata['publicModelId']; // 兼容旧字段
+          json['publicModelId'] = metadata['publicModelId'];
         }
-        //print('🔧 [UniversalAIRequest.toApiJson] 公共模型请求 - 模型: ${modelConfig!.modelName}, 提供商: ${modelConfig!.provider}, 公共模型ID: ${metadata['publicModelId'] ?? metadata['publicModelConfigId']}');
-      } else {
-        json['isPublicModel'] = false;
-        //print('🔧 [UniversalAIRequest.toApiJson] 私有模型请求 - 模型: ${modelConfig!.modelName}, 提供商: ${modelConfig!.provider}, 配置ID: ${modelConfig!.id}');
       }
     }
 
@@ -182,9 +176,9 @@ class UniversalAIRequest {
       
       // 🚀 添加调试日志
       //print('🔧 [UniversalAIRequest.toApiJson] 添加上下文选择: ${contextList.length}个项目');
-      for (var item in contextList) {
-        //print('  - ${item['type']}:${item['id']} (${item['title']})');
-      }
+      // for (var item in contextList) {
+      //   print('  - ${item['type']}:${item['id']} (${item['title']})');
+      // }
     } else {
       //print('🔧 [UniversalAIRequest.toApiJson] 没有上下文选择数据');
     }

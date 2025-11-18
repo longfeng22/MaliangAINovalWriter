@@ -27,6 +27,8 @@ public final class PermissionConstants {
     public static final String FEATURE_SCENE_BEAT_GENERATION = "FEATURE_SCENE_BEAT_GENERATION";
     public static final String FEATURE_SETTING_TREE_GENERATION = "FEATURE_SETTING_TREE_GENERATION";
     public static final String FEATURE_NOVEL_COMPOSE = "FEATURE_NOVEL_COMPOSE";
+    public static final String FEATURE_STORY_PREDICTION_SUMMARY = "FEATURE_STORY_PREDICTION_SUMMARY";
+    public static final String FEATURE_STORY_PREDICTION_SCENE = "FEATURE_STORY_PREDICTION_SCENE";
     
     // 管理权限
     public static final String ADMIN_MANAGE_USERS = "ADMIN_MANAGE_USERS";

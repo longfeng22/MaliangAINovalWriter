@@ -27,6 +27,12 @@ import com.ainovel.server.service.ai.AIModelProvider;
 import com.ainovel.server.service.ai.capability.ToolCallCapable;
 import com.ainovel.server.service.ai.tools.ToolExecutionService;
 import com.ainovel.server.service.ai.factory.AIModelProviderFactory;
+import com.ainovel.server.service.UserAIModelConfigService;
+import com.ainovel.server.service.PublicModelConfigService;
+import com.ainovel.server.service.CreditService;
+import com.ainovel.server.service.ai.observability.TraceContextManager;
+import org.springframework.context.ApplicationEventPublisher;
+import org.jasypt.encryption.StringEncryptor;
 import com.ainovel.server.service.ai.capability.ProviderCapabilityService;
 import com.ainovel.server.service.ai.capability.ProviderCapabilityDetector;
 
@@ -65,6 +71,19 @@ public class AIServiceImpl implements AIService {
     private final AIProviderRegistryService providerRegistryService;
 
     private final AIModelProviderFactory providerFactory;
+    // 直接注入所需 Bean，避免在运行时从 ApplicationContext 动态查找
+    @Autowired(required = false)
+    private ApplicationEventPublisher eventPublisher;
+    @Autowired(required = false)
+    private TraceContextManager traceContextManager;
+    @Autowired
+    private UserAIModelConfigService userAIModelConfigService;
+    @Autowired
+    private PublicModelConfigService publicModelConfigService;
+    @Autowired
+    private CreditService creditService;
+    @Autowired
+    private StringEncryptor encryptor;
     private final ProviderCapabilityService capabilityService;
     private final ToolExecutionService toolExecutionService;
     private final ToolFallbackRegistry toolFallbackRegistry;
@@ -152,13 +171,8 @@ public class AIServiceImpl implements AIService {
             return Mono.error(new IllegalArgumentException("API密钥不能为空"));
         }
         String providerName = getProviderForModel(request.getModel());
-
-        AIModelProvider provider = createAIModelProvider(
-                providerName,
-                request.getModel(),
-                apiKey,
-                apiEndpoint
-        );
+        AIModelProvider provider = providerFactory.createProvider(providerName, request.getModel(), apiKey, apiEndpoint);
+        provider = wrapWithBilling(provider);
 
         if (provider == null) {
             return Mono.error(new IllegalArgumentException("无法为模型创建提供商: " + request.getModel()));
@@ -176,12 +190,8 @@ public class AIServiceImpl implements AIService {
 
         // 将Provider创建与底层调用延迟到订阅时执行，避免装配阶段的副作用
         return reactor.core.publisher.Flux.defer(() -> {
-            AIModelProvider provider = createAIModelProvider(
-                    providerName,
-                    request.getModel(),
-                    apiKey,
-                    apiEndpoint
-            );
+            AIModelProvider provider = providerFactory.createProvider(providerName, request.getModel(), apiKey, apiEndpoint);
+            provider = wrapWithBilling(provider);
 
             if (provider == null) {
                 return Flux.error(new IllegalArgumentException("无法为模型创建提供商: " + request.getModel()));
@@ -205,13 +215,8 @@ public class AIServiceImpl implements AIService {
             return Mono.error(new IllegalArgumentException("API密钥不能为空"));
         }
         String providerName = getProviderForModel(request.getModel());
-
-        AIModelProvider provider = createAIModelProvider(
-                providerName,
-                request.getModel(),
-                apiKey,
-                apiEndpoint
-        );
+        AIModelProvider provider = providerFactory.createProvider(providerName, request.getModel(), apiKey, apiEndpoint);
+        provider = wrapWithBilling(provider);
 
         if (provider == null) {
             return Mono.error(new IllegalArgumentException("无法为模型创建提供商: " + request.getModel()));
@@ -417,25 +422,69 @@ public class AIServiceImpl implements AIService {
             });
     }
 
+    // 已删除旧直连入口，请使用 createProviderByConfigId
+
     @Override
-    public AIModelProvider createAIModelProvider(String providerName, String modelName, String apiKey, String apiEndpoint) {
-        return providerFactory.createProvider(providerName, modelName, apiKey, apiEndpoint);
+    public AIModelProvider createProviderByConfigId(String userId, String configId) {
+        try {
+            // 优先用户私有配置
+            com.ainovel.server.domain.model.UserAIModelConfig userCfg = userAIModelConfigService
+                    .getConfigurationById(userId, configId)
+                    .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                    .blockOptional()
+                    .orElse(null);
+            if (userCfg != null && Boolean.TRUE.equals(userCfg.getIsValidated())) {
+                String apiKey = null;
+                try {
+                    apiKey = encryptor.decrypt(userCfg.getApiKey());
+                } catch (Exception ignore) {}
+                AIModelProvider provider = providerFactory.createProvider(userCfg.getProvider(), userCfg.getModelName(), apiKey, userCfg.getApiEndpoint());
+                return wrapWithBilling(provider);
+            }
+            log.info("尝试使用公共模型解析 :{} ", configId);
+
+            // 回退公共配置
+            com.ainovel.server.domain.model.PublicModelConfig pub = publicModelConfigService
+                    .findById(configId)
+                    .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                    .blockOptional()
+                    .orElse(null);
+            if (pub != null && Boolean.TRUE.equals(pub.getEnabled())) {
+                String apiKey = publicModelConfigService
+                        .getActiveDecryptedApiKey(pub.getProvider(), pub.getModelId())
+                        .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                        .block();
+                AIModelProvider provider = providerFactory.createProvider(pub.getProvider(), pub.getModelId(), apiKey, pub.getApiEndpoint());
+                return wrapWithBilling(provider);
+            }
+        } catch (Exception e) {
+            log.error("createProviderByConfigId failed: userId={}, configId={}, err={}", userId, configId, e.getMessage());
+        }
+        throw new IllegalArgumentException("无法根据配置ID创建Provider: " + configId);
     }
 
-    /**
-     * 工具调用专用 Provider 创建：
-     * - gemini 强制使用 LangChain4j 实现，以便函数调用链在 LangChain4j 中直连，不走 REST 适配
-     * - 其他保持原工厂逻辑
-     */
-    public AIModelProvider createToolCallAIModelProvider(String providerName, String modelName, String apiKey, String apiEndpoint) {
-        String p = providerName != null ? providerName.toLowerCase() : "";
-        if ("gemini".equals(p) || "gemini-rest".equals(p)) {
-            // 使用 LangChain4j 的 Gemini Provider（支持工具规范）
-            // 通过工厂已有的 LangChain4j 构造器创建：providerName 传 "gemini"
-            return providerFactory.createProvider("gemini", modelName, apiKey, apiEndpoint);
+    private AIModelProvider wrapWithBilling(AIModelProvider base) {
+        try {
+            // 优先构建内层（Tracing），再由外层（Billing）包裹，确保：先预扣费 -> 再创建/发布 Trace
+            AIModelProvider inner = base;
+            if (eventPublisher != null && traceContextManager != null) {
+                boolean isLangChain4j = base.getClass().getName().toLowerCase().contains("langchain4j");
+                inner = new com.ainovel.server.service.ai.TracingAIModelProviderDecorator(base, eventPublisher, traceContextManager, isLangChain4j);
+            } else {
+                if (eventPublisher == null) {
+                    log.warn("Tracing disabled: ApplicationEventPublisher not injected.");
+                }
+                if (traceContextManager == null) {
+                    log.warn("Tracing disabled: TraceContextManager not injected.");
+                }
+            }
+            return new com.ainovel.server.service.ai.BillingAIModelProviderDecorator(inner, creditService, publicModelConfigService);
+        } catch (Throwable e) {
+            log.warn("wrapWithBilling failed, fallback to base provider: {}", e.getMessage(), e);
+            return base;
         }
-        return providerFactory.createProvider(providerName, modelName, apiKey, apiEndpoint);
     }
+
 
     // ==================== LangChain4j 格式转换适配器 ====================
     
@@ -480,6 +529,23 @@ public class AIServiceImpl implements AIService {
         }
         builder.metadata(extra);
         builder.parameters(extra);
+
+        // 从配置推断 featureType 与 traceId（若存在）
+        try {
+            String reqType = config != null ? config.get("requestType") : null;
+            if (reqType != null && !reqType.isBlank()) {
+                try {
+                    builder.featureType(com.ainovel.server.domain.model.AIFeatureType.valueOf(reqType));
+                } catch (Exception ignore) {}
+            }
+            String idemKey = null;
+            if (config != null) {
+                idemKey = config.get(com.ainovel.server.service.billing.BillingKeys.REQUEST_IDEMPOTENCY_KEY);
+            }
+            if (idemKey != null && !idemKey.isBlank()) {
+                builder.traceId(idemKey);
+            }
+        } catch (Exception ignore) {}
         // 关键：从配置中透传 userId / sessionId 到 AIRequest，供 LLMTrace 正确记录
         if (config != null) {
             String uid = config.get("userId");
@@ -702,11 +768,16 @@ public class AIServiceImpl implements AIService {
             log.debug("使用提供商: {} 模型={}", provider, modelName);
             
             // 创建AI提供者（工具调用分支使用可调用工具的Provider）
+            // 优化：使用缓存键避免重复创建相同配置的提供者
+            String cacheKey = String.format("%s:%s:%s", provider, modelName, 
+                apiEndpoint != null ? apiEndpoint.hashCode() : "default");
+            
             AIModelProvider aiProvider = providerFactory.createToolCallProvider(provider, modelName, apiKey, apiEndpoint);
             if (aiProvider == null) {
                 log.error("Failed to create AI provider for model: {}, provider: {}", modelName, provider);
                 throw new IllegalArgumentException("Failed to create AI provider for model: " + modelName);
             }
+            log.debug("使用AI提供者: {} (缓存键={})", aiProvider.getClass().getSimpleName(), cacheKey);
             
             // 非强依赖LangChain4j能力：统一走AIRequest路径，适配REST实现
             // 执行工具调用循环

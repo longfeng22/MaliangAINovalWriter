@@ -1789,7 +1789,7 @@ class _SelectionToolbarState extends State<SelectionToolbar> {
       // 对于公共模型，创建临时的模型配置
       final publicModel = (model as PublicAIModel).publicConfig;
       modelConfig = UserAIModelConfigModel.fromJson({
-        'id': 'public_${publicModel.id}',
+        'id': publicModel.id, // 直接使用公共模型ID，不拼接前缀
         'userId': AppConfig.userId ?? 'current_user', // 从AppConfig获取当前用户ID
         'name': publicModel.displayName,
         'alias': publicModel.displayName,

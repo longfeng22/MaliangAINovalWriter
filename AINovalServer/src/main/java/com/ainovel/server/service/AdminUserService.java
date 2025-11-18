@@ -140,4 +140,9 @@ public interface AdminUserService {
      * @return 更新后的用户
      */
     Mono<User> resetUserPassword(String id, String rawPassword);
+
+    /**
+     * 将用户的 tokenVersion +1
+     */
+    Mono<User> bumpUserTokenVersion(String userId);
 }

@@ -26,6 +26,7 @@ class AdminBloc extends Bloc<AdminEvent, AdminState> {
     on<UpdateUserInfo>(_onUpdateUserInfo);
     on<AssignRoleToUser>(_onAssignRoleToUser);
     on<ResetUserPassword>(_onResetUserPassword);
+    on<BumpUserTokenVersion>(_onBumpUserTokenVersion);
   }
 
   Future<void> _onLoadDashboardStats(
@@ -253,6 +254,18 @@ class AdminBloc extends Bloc<AdminEvent, AdminState> {
         errorMessage = '网络连接失败，请稍后重试';
       }
       emit(AdminError('$errorMessage: ${e.toString()}'));
+    }
+  }
+
+  Future<void> _onBumpUserTokenVersion(
+    BumpUserTokenVersion event,
+    Emitter<AdminState> emit,
+  ) async {
+    try {
+      await adminRepository.bumpUserTokenVersion(event.userId);
+      add(const LoadUsers());
+    } catch (e) {
+      emit(AdminError('强制下线失败: ${e.toString()}'));
     }
   }
 }

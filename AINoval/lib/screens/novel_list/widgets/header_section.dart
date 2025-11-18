@@ -67,35 +67,26 @@ class HeaderSection extends StatelessWidget {
               const ThemeToggleButton(),
               const SizedBox(width: 12),
               // 测试按钮
-              OutlinedButton.icon(
+              ElevatedButton.icon(
                 onPressed: () {
                 },
-                icon: Icon(
-                  Icons.bug_report,
-                  color: theme.colorScheme.onSurface,
-                ),
+                icon: const Icon(Icons.bug_report),
                 label: const Text('测试'),
-                style: WebTheme.getSecondaryButtonStyle(context),
+                style: WebTheme.getPrimaryButtonStyle(context),
               ),
               const SizedBox(width: 12),
-              OutlinedButton.icon(
+              ElevatedButton.icon(
                 onPressed: onImportNovel,
-                icon: Icon(
-                  Icons.file_upload,
-                  color: theme.colorScheme.onSurface,
-                ),
+                icon: const Icon(Icons.file_upload),
                 label: const Text('导入'),
-                style: WebTheme.getSecondaryButtonStyle(context),
+                style: WebTheme.getPrimaryButtonStyle(context),
               ),
               const SizedBox(width: 12),
-              OutlinedButton.icon(
+              ElevatedButton.icon(
                 onPressed: onCreateNovel,
-                icon: Icon(
-                  Icons.add,
-                  color: theme.colorScheme.onSurface,
-                ),
+                icon: const Icon(Icons.add),
                 label: const Text('创建小说'),
-                style: WebTheme.getSecondaryButtonStyle(context),
+                style: WebTheme.getPrimaryButtonStyle(context),
               ),
             ],
           ),

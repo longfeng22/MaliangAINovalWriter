@@ -177,3 +177,13 @@ class AssignRoleToUser extends AdminEvent {
   @override
   List<Object> get props => [userId, roleId];
 }
+
+/// 将用户tokenVersion +1（强制所有旧token失效）
+class BumpUserTokenVersion extends AdminEvent {
+  final String userId;
+
+  const BumpUserTokenVersion({required this.userId});
+
+  @override
+  List<Object> get props => [userId];
+}

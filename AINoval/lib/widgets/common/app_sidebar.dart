@@ -165,6 +165,20 @@ class _AppSidebarState extends State<AppSidebar> with SingleTickerProviderStateM
                         widget.onNavigate?.call('novels');
                       },
                     ),
+                    // 提示词市场入口
+                    _buildNavItem(
+                      context,
+                      icon: Icons.storefront,
+                      label: '提示词市场',
+                      isSelected: widget.currentRoute == 'prompt_market',
+                      onTap: () {
+                        if (!widget.isAuthed) {
+                          widget.onRequireAuth?.call();
+                          return;
+                        }
+                        widget.onNavigate?.call('prompt_market');
+                      },
+                    ),
                     _buildNavItem(
                       context,
                       icon: Icons.auto_awesome,
@@ -176,6 +190,62 @@ class _AppSidebarState extends State<AppSidebar> with SingleTickerProviderStateM
                           return;
                         }
                         widget.onNavigate?.call('unified_management');
+                      },
+                    ),
+
+                    // 知识库分组
+                    if (_isExpanded) ...[
+                      const SizedBox(height: 16),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        child: Text(
+                          '知识库',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: WebTheme.getSecondaryTextColor(context),
+                          ),
+                        ),
+                      ),
+                    ],
+                    
+                    _buildNavItem(
+                      context,
+                      icon: Icons.menu_book_outlined,
+                      label: 'AI拆书',
+                      isSelected: widget.currentRoute == 'fanqie_search',
+                      onTap: () {
+                        if (!widget.isAuthed) {
+                          widget.onRequireAuth?.call();
+                          return;
+                        }
+                        widget.onNavigate?.call('fanqie_search');
+                      },
+                    ),
+                    _buildNavItem(
+                      context,
+                      icon: Icons.public,
+                      label: '公共知识库',
+                      isSelected: widget.currentRoute == 'public_knowledge_bases',
+                      onTap: () {
+                        if (!widget.isAuthed) {
+                          widget.onRequireAuth?.call();
+                          return;
+                        }
+                        widget.onNavigate?.call('public_knowledge_bases');
+                      },
+                    ),
+                    _buildNavItem(
+                      context,
+                      icon: Icons.folder,
+                      label: '我的知识库',
+                      isSelected: widget.currentRoute == 'my_knowledge_bases',
+                      onTap: () {
+                        if (!widget.isAuthed) {
+                          widget.onRequireAuth?.call();
+                          return;
+                        }
+                        widget.onNavigate?.call('my_knowledge_bases');
                       },
                     ),
 

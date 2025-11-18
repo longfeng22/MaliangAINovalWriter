@@ -1,11 +1,11 @@
 package com.ainovel.server.controller;
 
 import com.ainovel.server.common.response.ApiResponse;
-import com.ainovel.server.common.security.CurrentUser;
 import com.ainovel.server.domain.model.EnhancedUserPromptTemplate;
+import com.ainovel.server.domain.model.ReviewStatusConstants;
 import com.ainovel.server.domain.model.Novel;
-import com.ainovel.server.domain.model.User;
 import com.ainovel.server.domain.model.setting.generation.SettingGenerationEvent;
+import com.ainovel.server.domain.model.setting.generation.SettingGenerationSession;
 import com.ainovel.server.domain.model.settinggeneration.NodeTemplateConfig;
 import com.ainovel.server.service.setting.generation.ISettingGenerationService;
 import com.ainovel.server.service.setting.generation.StrategyManagementService;
@@ -23,8 +23,9 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 // import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -52,9 +53,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class SettingGenerationController {
     
     private final ISettingGenerationService settingGenerationService;
+    @SuppressWarnings("unused") // 保留用于未来功能
     private final NovelSettingHistoryService historyService;
     private final StrategyManagementService strategyManagementService;
     private final com.ainovel.server.service.setting.generation.SystemStrategyInitializationService systemStrategyInitializationService;
+    private final com.ainovel.server.repository.EnhancedUserPromptTemplateRepository templateRepository;
     private final com.ainovel.server.service.NovelService novelService;
     private final com.ainovel.server.service.setting.generation.InMemorySessionManager sessionManager;
     private final com.ainovel.server.service.setting.SettingComposeService settingComposeService;
@@ -65,10 +68,10 @@ public class SettingGenerationController {
     @GetMapping("/strategies")
     @Operation(summary = "获取可用的生成策略模板", description = "返回所有支持的设定生成策略模板列表")
     public Mono<ApiResponse<List<ISettingGenerationService.StrategyTemplateInfo>>> getAvailableStrategyTemplates(
-            @CurrentUser com.ainovel.server.domain.model.User user) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
         Mono<List<ISettingGenerationService.StrategyTemplateInfo>> mono =
-            (user != null && user.getId() != null)
-                ? ((com.ainovel.server.service.setting.generation.SettingGenerationService)settingGenerationService).getAvailableStrategyTemplatesForUser(user.getId())
+            (currentUser != null && currentUser.getId() != null)
+                ? ((com.ainovel.server.service.setting.generation.SettingGenerationService)settingGenerationService).getAvailableStrategyTemplatesForUser(currentUser.getId())
                 : settingGenerationService.getAvailableStrategyTemplates();
         return mono.map(ApiResponse::success)
             .onErrorResume(error -> {
@@ -87,8 +90,87 @@ public class SettingGenerationController {
     public Flux<ServerSentEvent<SettingGenerationEvent>> startGeneration(
             @Valid @RequestBody StartGenerationRequest request) {
         
+        // 📚 自定义验证：检查请求是否有效（复用模式可以无提示词）
+        if (!request.isValid()) {
+            boolean isReuseMode = "REUSE".equalsIgnoreCase(request.getKnowledgeBaseMode());
+            String errorMsg = isReuseMode 
+                ? "复用模式需要提供策略" 
+                : "非复用模式需要提供初始提示词和策略";
+            
+            return Flux.just(ServerSentEvent.<SettingGenerationEvent>builder()
+                .event("GenerationErrorEvent")
+                .data(new SettingGenerationEvent.GenerationErrorEvent() {{
+                    setErrorCode("INVALID_REQUEST");
+                    setErrorMessage(errorMsg);
+                    setRecoverable(false);
+                }})
+                .build());
+        }
+        
         // 使用请求中的userId，如果没有提供则使用默认值
         String userId = request.getUserId() != null ? request.getUserId() : "67d67d6833335f5166782e6f";
+        
+        // 🔧 结构化输出循环模式路由
+        if (Boolean.TRUE.equals(request.getUseStructuredOutput())) {
+            Integer iterations = request.getStructuredIterations() != null ? request.getStructuredIterations() : 3;
+            log.info("[StructuredOutput] 使用结构化输出循环模式，最大迭代次数: {}", iterations);
+            
+            // 处理promptTemplateId
+            Mono<String> promptTemplateIdMono;
+            if (request.getPromptTemplateId() != null && !request.getPromptTemplateId().trim().isEmpty()) {
+                promptTemplateIdMono = Mono.just(request.getPromptTemplateId());
+            } else if (request.getStrategy() != null && !request.getStrategy().trim().isEmpty()) {
+                promptTemplateIdMono = strategyManagementService.findTemplateIdByStrategyName(request.getStrategy());
+            } else {
+                return Flux.just(ServerSentEvent.<SettingGenerationEvent>builder()
+                    .event("GenerationErrorEvent")
+                    .data(new SettingGenerationEvent.GenerationErrorEvent() {{
+                        setErrorCode("INVALID_REQUEST");
+                        setErrorMessage("必须提供promptTemplateId或strategy");
+                        setRecoverable(false);
+                    }})
+                    .build());
+            }
+            
+            return promptTemplateIdMono
+                .flatMapMany(actualPromptTemplateId -> {
+                    // 📚 直接传递原始的知识库分组参数，不合并
+                    // 🔧 传递前端生成的sessionId（如果有的话）
+                    return settingGenerationService.startGenerationStructuredWithKnowledgeBase(
+                        request.getSessionId(),  // 前端生成的sessionId
+                        userId,
+                        request.getNovelId(),
+                        request.getInitialPrompt(),
+                        actualPromptTemplateId,
+                        request.getModelConfigId(),
+                        iterations,
+                        request.getKnowledgeBaseMode(),
+                        request.getKnowledgeBaseIds(),  // REUSE/IMITATION模式使用
+                        request.getReuseKnowledgeBaseIds(),  // HYBRID模式：用于复用
+                        request.getReferenceKnowledgeBaseIds(),  // HYBRID模式：用于参考
+                        request.getKnowledgeBaseCategories()
+                    )
+                    .flatMapMany(session -> 
+                        settingGenerationService.getGenerationEventStream(session.getSessionId())
+                    )
+                    .map(event -> ServerSentEvent.<SettingGenerationEvent>builder()
+                        .event(event.getClass().getSimpleName())
+                        .data(event)
+                        .build()
+                    )
+                    .onErrorResume(error -> {
+                        log.error("[StructuredOutput] 生成失败: {}", error.getMessage(), error);
+                        return Flux.just(ServerSentEvent.<SettingGenerationEvent>builder()
+                            .event("GenerationErrorEvent")
+                            .data(new SettingGenerationEvent.GenerationErrorEvent() {{
+                                setErrorCode("GENERATION_FAILED");
+                                setErrorMessage("结构化输出生成失败: " + error.getMessage());
+                                setRecoverable(false);
+                            }})
+                            .build());
+                    });
+                });
+        }
         
         // 兼容性处理：如果提供了strategy而没有promptTemplateId，则转换
         Mono<String> promptTemplateIdMono;
@@ -110,24 +192,84 @@ public class SettingGenerationController {
                 .build());
         }
         
-        // 创建会话并获取事件流（切换到“新流程：Hybrid”）
-        return promptTemplateIdMono.flatMapMany(promptTemplateId -> {
-            log.info("[新流程][HYBRID] 启动设定生成: 用户={}, 模板ID={}, 模型配置ID={}, 小说ID={}",
-                userId, promptTemplateId, request.getModelConfigId(), request.getNovelId());
+        // 创建会话并获取事件流（切换到"新流程：Hybrid"）
+              return promptTemplateIdMono.<ServerSentEvent<SettingGenerationEvent>>flatMapMany(promptTemplateId -> {
+            log.info("[新流程][HYBRID] 启动设定生成: 用户={}, 模板ID={}, 模型配置ID={}, 小说ID={}, 知识库模式={}",
+                userId, promptTemplateId, request.getModelConfigId(), request.getNovelId(), 
+                request.getKnowledgeBaseMode());
 
-            // 使用混合流程：文本阶段 + 工具直通（服务端自行管理 textEndSentinel）
-            return settingGenerationService.startGenerationHybrid(
-                    userId,
-                    request.getNovelId(),
-                    request.getInitialPrompt(),
-                    promptTemplateId,
-                    request.getModelConfigId(),
-                    null,
-                    request.getUsePublicTextModel()
-                )
-                .flatMapMany(session -> {
+            // 📚 根据是否有知识库参数决定调用哪个方法
+            Mono<SettingGenerationSession> sessionMono;
+            
+            if (request.getKnowledgeBaseMode() != null && 
+                !"NONE".equalsIgnoreCase(request.getKnowledgeBaseMode())) {
+                
+                String mode = request.getKnowledgeBaseMode();
+                
+                // 📚 混合模式：使用独立的复用和参考参数
+                if ("HYBRID".equalsIgnoreCase(mode) && 
+                    request.getReuseKnowledgeBaseIds() != null && 
+                    !request.getReuseKnowledgeBaseIds().isEmpty()) {
+                    
+                    log.info("[KB-Integration] 使用知识库混合流程: reuse={}, reference={}", 
+                            request.getReuseKnowledgeBaseIds(), request.getReferenceKnowledgeBaseIds());
+                    
+                    sessionMono = settingGenerationService.startGenerationWithKnowledgeBaseHybrid(
+                            userId,
+                            request.getNovelId(),
+                            request.getInitialPrompt(),
+                            promptTemplateId,
+                            request.getModelConfigId(),
+                            request.getUsePublicTextModel(),
+                            request.getReuseKnowledgeBaseIds(),
+                            request.getReferenceKnowledgeBaseIds(),
+                            request.getKnowledgeBaseCategories()
+                    );
+                }
+                // 📚 复用/仿写模式：使用通用的knowledgeBaseIds
+                else if (request.getKnowledgeBaseIds() != null && !request.getKnowledgeBaseIds().isEmpty()) {
+                    log.info("[KB-Integration] 使用知识库集成流程: mode={}, KBs={}", 
+                            request.getKnowledgeBaseMode(), request.getKnowledgeBaseIds());
+                    
+                    sessionMono = settingGenerationService.startGenerationWithKnowledgeBase(
+                            userId,
+                            request.getNovelId(),
+                            request.getInitialPrompt(),
+                            promptTemplateId,
+                            request.getModelConfigId(),
+                            request.getUsePublicTextModel(),
+                            request.getKnowledgeBaseMode(),
+                            request.getKnowledgeBaseIds(),
+                            request.getKnowledgeBaseCategories()
+                    );
+                } else {
+                    // 没有提供知识库ID，使用普通流程
+                    sessionMono = settingGenerationService.startGenerationHybrid(
+                            userId,
+                            request.getNovelId(),
+                            request.getInitialPrompt(),
+                            promptTemplateId,
+                            request.getModelConfigId(),
+                            null,
+                            request.getUsePublicTextModel()
+                    );
+                }
+            } else {
+                // 使用常规混合流程：文本阶段 + 工具直通（服务端自行管理 textEndSentinel）
+                sessionMono = settingGenerationService.startGenerationHybrid(
+                        userId,
+                        request.getNovelId(),
+                        request.getInitialPrompt(),
+                        promptTemplateId,
+                        request.getModelConfigId(),
+                        null,
+                        request.getUsePublicTextModel()
+                );
+            }
+            
+            return sessionMono.flatMapMany(session -> 
                     // 返回事件流（在完成/不可恢复错误时自动结束SSE）
-                    return settingGenerationService.getGenerationEventStream(session.getSessionId())
+                    settingGenerationService.getGenerationEventStream(session.getSessionId())
                         // 过滤掉可恢复错误，不让前端看到 GENERATION_ERROR（recoverable=true）
                         .filter(event -> {
                             if (event instanceof com.ainovel.server.domain.model.setting.generation.SettingGenerationEvent.GenerationErrorEvent err) {
@@ -144,8 +286,8 @@ public class SettingGenerationController {
                             .event(event.getClass().getSimpleName())
                             .data(event)
                             .build()
-                        );
-                });
+                        )
+            );
         })
         .onErrorResume(error -> {
             log.error("启动设定生成失败", error);
@@ -186,16 +328,16 @@ public class SettingGenerationController {
     @Operation(summary = "从小说设定创建编辑会话", 
         description = "基于小说现有设定创建编辑会话，支持用户选择创建新快照或编辑上次设定")
     public Mono<ApiResponse<EditSessionResponse>> createEditSessionFromNovel(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "小说ID") @PathVariable String novelId,
             @Valid @RequestBody CreateNovelEditSessionRequest request) {
         
         log.info("Creating edit session from novel {} for user {} with editReason: {} createNewSnapshot: {}", 
-            novelId, user.getId(), request.getEditReason(), request.isCreateNewSnapshot());
+            novelId, currentUser.getId(), request.getEditReason(), request.isCreateNewSnapshot());
         
         return settingGenerationService.startSessionFromNovel(
                 novelId, 
-                user.getId(),
+                currentUser.getId(),
                 request.getEditReason(), 
                 request.getModelConfigId(),
                 request.isCreateNewSnapshot()
@@ -221,12 +363,12 @@ public class SettingGenerationController {
     @Operation(summary = "修改设定节点", 
         description = "修改指定的设定节点及其子节点，返回SSE事件流显示修改过程")
     public Flux<ServerSentEvent<SettingGenerationEvent>> updateNode(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "会话ID") @PathVariable String sessionId,
             @Valid @RequestBody UpdateNodeRequest request) {
         
         log.info("Updating node {} in session {} for user {} with modelConfigId {}, isPublicModel={}, publicModelConfigId={}", 
-            request.getNodeId(), sessionId, user.getId(), request.getModelConfigId(), request.getPublicModel(), request.getPublicModelConfigId());
+            request.getNodeId(), sessionId, currentUser.getId(), request.getModelConfigId(), request.getPublicModel(), request.getPublicModelConfigId());
         
         // 周期性心跳，避免长时间无事件导致 HTTP/2 中间层（如 CDN/浏览器）断开连接
         @SuppressWarnings({"rawtypes","unchecked"})
@@ -323,12 +465,12 @@ public class SettingGenerationController {
     @Operation(summary = "直接更新节点内容", 
         description = "直接更新指定节点的内容，不通过AI重新生成")
     public Mono<ApiResponse<String>> updateNodeContent(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "会话ID") @PathVariable String sessionId,
             @Valid @RequestBody UpdateNodeContentRequest request) {
         
         log.info("Updating node content {} in session {} for user {}", 
-            request.getNodeId(), sessionId, user.getId());
+            request.getNodeId(), sessionId, currentUser.getId());
         
         return settingGenerationService.updateNodeContent(
                 sessionId, 
@@ -339,6 +481,34 @@ public class SettingGenerationController {
             .onErrorResume(error -> {
                 log.error("Failed to update node content", error);
                 return Mono.just(ApiResponse.error("UPDATE_CONTENT_FAILED", "更新节点内容失败: " + error.getMessage()));
+            });
+    }
+    
+    /**
+     * 删除节点（包括所有子节点）
+     */
+    @DeleteMapping("/{sessionId}/nodes/{nodeId}")
+    @Operation(summary = "删除节点", 
+        description = "删除指定节点及其所有子节点")
+    public Mono<ApiResponse<DeleteNodeResponse>> deleteNode(
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
+            @Parameter(description = "会话ID") @PathVariable String sessionId,
+            @Parameter(description = "节点ID") @PathVariable String nodeId) {
+        
+        log.info("Deleting node {} from session {} for user {}", 
+            nodeId, sessionId, currentUser.getId());
+        
+        return settingGenerationService.deleteNode(sessionId, nodeId)
+            .map(deletedIds -> {
+                DeleteNodeResponse response = new DeleteNodeResponse();
+                response.setNodeId(nodeId);
+                response.setDeletedNodeIds(deletedIds);
+                response.setMessage(String.format("成功删除节点及其 %d 个子节点", deletedIds.size()));
+                return ApiResponse.success(response);
+            })
+            .onErrorResume(error -> {
+                log.error("Failed to delete node", error);
+                return Mono.just(ApiResponse.error("DELETE_NODE_FAILED", "删除节点失败: " + error.getMessage()));
             });
     }
     
@@ -403,11 +573,11 @@ public class SettingGenerationController {
     @Operation(summary = "整体调整生成",
         description = "在不破坏现有层级与关联关系的前提下，基于当前会话进行整体调整生成，返回SSE事件流")
     public Flux<ServerSentEvent<SettingGenerationEvent>> adjustSession(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "会话ID") @PathVariable String sessionId,
             @Valid @RequestBody AdjustSessionRequest request) {
 
-        log.info("Adjusting session {} for user {} with modelConfigId {}", sessionId, user.getId(), request.getModelConfigId());
+        log.info("Adjusting session {} for user {} with modelConfigId {}", sessionId, currentUser.getId(), request.getModelConfigId());
 
         // 提示词增强：明确保持层级/关联结构，避免UUID等无意义ID
         final String enhancedPrompt =
@@ -481,7 +651,7 @@ public class SettingGenerationController {
     @PostMapping("/start-writing")
     @Operation(summary = "开始写作", description = "确保novelId存在，保存当前会话设定并关联到小说，然后返回小说ID")
     public Mono<ApiResponse<Map<String, String>>> startWriting(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
             @RequestBody Map<String, String> body
     ) {
@@ -523,7 +693,7 @@ public class SettingGenerationController {
                         return novelService.createNovel(Novel.builder()
                                 .title("未命名小说")
                                 .description("自动创建的草稿，用于写作编排")
-                                .author(Novel.Author.builder().id(user.getId()).username(user.getUsername()).build())
+                                .author(Novel.Author.builder().id(currentUser.getId()).username(currentUser.getUsername()).build())
                                 .isReady(true)
                                 .build()).map(Novel::getId);
                     }
@@ -532,7 +702,7 @@ public class SettingGenerationController {
                     return novelService.createNovel(Novel.builder()
                             .title("未命名小说")
                             .description("自动创建的草稿，用于写作编排")
-                            .author(Novel.Author.builder().id(user.getId()).username(user.getUsername()).build())
+                            .author(Novel.Author.builder().id(currentUser.getId()).username(currentUser.getUsername()).build())
                             .isReady(true)
                             .build()).map(Novel::getId);
                 }));
@@ -543,7 +713,7 @@ public class SettingGenerationController {
                 return novelService.createNovel(Novel.builder()
                         .title("未命名小说")
                         .description("自动创建的草稿，用于写作编排")
-                        .author(Novel.Author.builder().id(user.getId()).username(user.getUsername()).build())
+                        .author(Novel.Author.builder().id(currentUser.getId()).username(currentUser.getUsername()).build())
                         .isReady(true)
                         .build()).map(Novel::getId);
             }
@@ -552,15 +722,15 @@ public class SettingGenerationController {
             return novelService.createNovel(Novel.builder()
                     .title("未命名小说")
                     .description("自动创建的草稿，用于写作编排")
-                    .author(Novel.Author.builder().id(user.getId()).username(user.getUsername()).build())
+                    .author(Novel.Author.builder().id(currentUser.getId()).username(currentUser.getUsername()).build())
                     .isReady(true)
                     .build()).map(Novel::getId);
         });
 
-        String effectiveUserId = (user != null && user.getId() != null && !user.getId().isBlank())
-                ? user.getId() : (headerUserId != null ? headerUserId : null);
-        String effectiveUsername = (user != null && user.getUsername() != null && !user.getUsername().isBlank())
-                ? user.getUsername() : effectiveUserId;
+        String effectiveUserId = (currentUser != null && currentUser.getId() != null && !currentUser.getId().isBlank())
+                ? currentUser.getId() : (headerUserId != null ? headerUserId : null);
+        String effectiveUsername = (currentUser != null && currentUser.getUsername() != null && !currentUser.getUsername().isBlank())
+                ? currentUser.getUsername() : effectiveUserId;
         if (effectiveUserId == null || effectiveUserId.isBlank()) {
             return Mono.just(ApiResponse.error("UNAUTHORIZED", "START_WRITING_FAILED"));
         }
@@ -601,7 +771,7 @@ public class SettingGenerationController {
     @GetMapping("/status-lite/{id}")
     @Operation(summary = "轻量状态查询", description = "返回ID是否为有效的会话或历史记录")
     public Mono<ApiResponse<Map<String, Object>>> getStatusLite(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "会话ID或历史记录ID") @PathVariable String id) {
         return settingComposeService.getStatusLite(id).map(ApiResponse::success);
     }
@@ -612,10 +782,10 @@ public class SettingGenerationController {
         @GetMapping("/{sessionId}/status")
         @Operation(summary = "获取会话状态", description = "获取指定会话的当前状态信息")
         public Mono<ApiResponse<SessionStatusResponse>> getSessionStatus(
-                @CurrentUser User user,
+                @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
                 @Parameter(description = "会话ID") @PathVariable String sessionId) {
             
-            log.info("Getting session status {} for user {}", sessionId, user.getId());
+            log.info("Getting session status {} for user {}", sessionId, currentUser.getId());
             
             return settingGenerationService.getSessionStatus(sessionId)
                 .map(status -> {
@@ -640,10 +810,10 @@ public class SettingGenerationController {
     @PostMapping("/{sessionId}/cancel")
     @Operation(summary = "取消生成会话", description = "取消正在进行的设定生成会话")
     public Mono<ApiResponse<String>> cancelSession(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "会话ID") @PathVariable String sessionId) {
         
-        log.info("Cancelling session {} for user {}", sessionId, user.getId());
+        log.info("Cancelling session {} for user {}", sessionId, currentUser.getId());
         
         return settingGenerationService.cancelSession(sessionId)
             .then(Mono.just(ApiResponse.success("会话已取消")))
@@ -661,19 +831,43 @@ public class SettingGenerationController {
     @PostMapping("/strategies/custom")
     @Operation(summary = "创建用户自定义策略", description = "用户创建完全自定义的设定生成策略")
     public Mono<ApiResponse<StrategyResponse>> createCustomStrategy(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Valid @RequestBody CreateCustomStrategyRequest request) {
         
-        log.info("Creating custom strategy for user: {}, name: {}", user.getId(), request.getName());
+        // 中文日志
+        log.info("创建自定义策略，请求用户: {}, 名称: {}", currentUser != null ? currentUser.getId() : "匿名", request.getName());
+
+        String createdByUserId = currentUser != null ? currentUser.getId() : null;
         
-        // TODO: 实现创建自定义策略的完整逻辑
-        return Mono.just(new EnhancedUserPromptTemplate())
-            .map(template -> {
-                StrategyResponse response = mapToStrategyResponse(template);
+        // 创建模板对象直接保存
+        EnhancedUserPromptTemplate template = EnhancedUserPromptTemplate.builder()
+            .userId(createdByUserId)
+            .featureType(com.ainovel.server.domain.model.AIFeatureType.SETTING_TREE_GENERATION)
+            .name(request.getName())
+            .description(request.getDescription())
+            .systemPrompt(request.getSystemPrompt())
+            .userPrompt(request.getUserPrompt())
+            .settingGenerationConfig(buildStrategyConfig(request))
+            .isPublic(false)
+            .hidePrompts(request.getHidePrompts() != null ? request.getHidePrompts() : false)
+            .isDefault(false)
+            .authorId(createdByUserId)
+            .version(1)
+            .likeCount(0L)
+            .favoriteCount(0L)
+            .usageCount(0L)
+            .createdAt(java.time.LocalDateTime.now())
+            .updatedAt(java.time.LocalDateTime.now())
+            .build();
+        
+        return templateRepository.save(template)
+            .map(savedTemplate -> {
+                StrategyResponse response = mapToStrategyResponse(savedTemplate);
+                log.info("自定义策略创建成功: {}", savedTemplate.getId());
                 return ApiResponse.<StrategyResponse>success(response);
             })
             .onErrorResume(error -> {
-                log.error("Failed to create custom strategy", error);
+                log.error("创建自定义策略失败", error);
                 return Mono.just(ApiResponse.<StrategyResponse>error("STRATEGY_CREATE_FAILED", error.getMessage()));
             });
     }
@@ -684,16 +878,47 @@ public class SettingGenerationController {
     @PostMapping("/strategies/from-base/{baseTemplateId}")
     @Operation(summary = "基于现有策略创建新策略", description = "基于系统预设或其他用户的策略创建个性化策略")
     public Mono<ApiResponse<StrategyResponse>> createStrategyFromBase(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "基础策略模板ID") @PathVariable String baseTemplateId,
             @Valid @RequestBody CreateFromBaseStrategyRequest request) {
         
-        log.info("Creating strategy from base {} for user: {}, name: {}", baseTemplateId, user.getId(), request.getName());
+        log.info("Creating strategy from base {} for user: {}, name: {}", baseTemplateId, currentUser.getId(), request.getName());
         
-        // TODO: 实现基于现有策略创建的完整逻辑
-        return Mono.just(new EnhancedUserPromptTemplate())
+        return templateRepository.findById(baseTemplateId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Base template not found: " + baseTemplateId)))
+            .flatMap(baseTemplate -> {
+                // 检查权限
+                if (!baseTemplate.getIsPublic() && !baseTemplate.getUserId().equals(currentUser.getId())) {
+                    return Mono.error(new IllegalArgumentException("No permission to use base template"));
+                }
+                
+                if (!baseTemplate.isSettingGenerationTemplate()) {
+                    return Mono.error(new IllegalArgumentException("Base template is not for setting generation"));
+                }
+                
+                // 创建新模板
+                EnhancedUserPromptTemplate newTemplate = EnhancedUserPromptTemplate.builder()
+                    .userId(currentUser.getId())
+                    .featureType(com.ainovel.server.domain.model.AIFeatureType.SETTING_TREE_GENERATION)
+                    .name(request.getName())
+                    .description(request.getDescription())
+                    .systemPrompt(request.getSystemPrompt() != null ? request.getSystemPrompt() : baseTemplate.getSystemPrompt())
+                    .userPrompt(request.getUserPrompt() != null ? request.getUserPrompt() : baseTemplate.getUserPrompt())
+                    .settingGenerationConfig(baseTemplate.getSettingGenerationConfig()) // 直接使用基础配置
+                    .sourceTemplateId(baseTemplateId)
+                    .isPublic(false)
+                    .isDefault(false)
+                    .authorId(currentUser.getId())
+                    .version(1)
+                    .createdAt(java.time.LocalDateTime.now())
+                    .updatedAt(java.time.LocalDateTime.now())
+                    .build();
+                
+                return templateRepository.save(newTemplate);
+            })
             .map(template -> {
                 StrategyResponse response = mapToStrategyResponse(template);
+                log.info("Strategy created from base successfully: {}", template.getId());
                 return ApiResponse.<StrategyResponse>success(response);
             })
             .onErrorResume(error -> {
@@ -708,13 +933,14 @@ public class SettingGenerationController {
     @GetMapping("/strategies/my")
     @Operation(summary = "获取用户的策略列表", description = "获取当前用户创建的所有策略")
     public Flux<StrategyResponse> getUserStrategies(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "页码") @RequestParam(defaultValue = "0") int page,
             @Parameter(description = "每页大小") @RequestParam(defaultValue = "20") int size) {
         
-        log.info("Getting strategies for user: {}, page: {}, size: {}", user.getId(), page, size);
+        final String currentUserIdForList = (currentUser != null && currentUser.getId() != null) ? currentUser.getId() : "67d67d6833335f5166782e6f";
+        log.info("获取用户策略列表: 用户={}, 页码={}, 每页={}", currentUserIdForList, page, size);
         
-        return strategyManagementService.getUserStrategies(user.getId(), 
+        return strategyManagementService.getUserStrategies(currentUserIdForList, 
                 org.springframework.data.domain.PageRequest.of(page, size))
             .map(this::mapToStrategyResponse)
             .onErrorResume(error -> {
@@ -733,7 +959,7 @@ public class SettingGenerationController {
             @Parameter(description = "页码") @RequestParam(defaultValue = "0") int page,
             @Parameter(description = "每页大小") @RequestParam(defaultValue = "20") int size) {
         
-        log.info("Getting public strategies, category: {}, page: {}, size: {}", category, page, size);
+        log.info("获取公开策略列表: 分类={}, 页码={}, 每页={}", category, page, size);
         
         return strategyManagementService.getPublicStrategies(category, 
                 org.springframework.data.domain.PageRequest.of(page, size))
@@ -750,14 +976,52 @@ public class SettingGenerationController {
     @GetMapping("/strategies/{strategyId}")
     @Operation(summary = "获取策略详情", description = "获取指定策略的详细信息")
     public Mono<ApiResponse<StrategyDetailResponse>> getStrategyDetail(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "策略ID") @PathVariable String strategyId) {
         
-        log.info("Getting strategy detail: {} for user: {}", strategyId, user.getId());
+        // 中文日志 + 空安全
+        final String currentUserId = currentUser != null ? currentUser.getId() : null;
+        log.info("获取策略详情: {}, 请求用户: {}", strategyId, currentUserId != null ? currentUserId : "匿名");
         
-        // 这里需要从 templateRepository 获取详情，暂时使用简化实现
-        return Mono.just(ApiResponse.<StrategyDetailResponse>success(new StrategyDetailResponse()))
-            .doOnError(error -> log.error("Failed to get strategy detail", error));
+        return templateRepository.findById(strategyId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Strategy not found: " + strategyId)))
+            .flatMap(template -> {
+                // 兼容旧数据：优先使用 userId，其次使用 authorId
+                final String ownerUserId = template.getUserId() != null ? template.getUserId() : template.getAuthorId();
+                final boolean isOwner = ownerUserId != null && ownerUserId.equals(currentUserId);
+                
+                // 检查权限：
+                // 1. 作者本人 - 无论什么状态都可以查看
+                // 2. 已批准的公开策略 - 所有人可以查看
+                // 3. 其他情况 - 不允许查看
+                if (!isOwner) {
+                    // 不是作者本人，检查是否为公开/已批准的策略
+                    boolean isPublicOrApproved = Boolean.TRUE.equals(template.getIsPublic());
+                    
+                    // 🆕 使用顶层统一的审核状态
+                    if (template.getReviewStatus() != null) {
+                        // 审核通过的策略可以公开查看
+                        isPublicOrApproved = isPublicOrApproved || 
+                            ReviewStatusConstants.APPROVED.equals(template.getReviewStatus());
+                    }
+                    
+                    if (!isPublicOrApproved) {
+                        log.warn("用户 {} 尝试访问非公开策略 {}，所有者: {}", currentUserId, strategyId, ownerUserId);
+                        return Mono.error(new IllegalArgumentException("没有权限查看该策略"));
+                    }
+                }
+                
+                if (!template.isSettingGenerationTemplate()) {
+                    return Mono.error(new IllegalArgumentException("Template is not for setting generation"));
+                }
+                
+                StrategyDetailResponse response = mapToStrategyDetailResponse(template);
+                return Mono.just(ApiResponse.<StrategyDetailResponse>success(response));
+            })
+            .onErrorResume(error -> {
+                log.error("获取策略详情失败", error);
+                return Mono.just(ApiResponse.<StrategyDetailResponse>error("STRATEGY_NOT_FOUND", error.getMessage()));
+            });
     }
     
     /**
@@ -766,15 +1030,74 @@ public class SettingGenerationController {
     @PutMapping("/strategies/{strategyId}")
     @Operation(summary = "更新策略", description = "更新用户自己创建的策略")
     public Mono<ApiResponse<StrategyResponse>> updateStrategy(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "策略ID") @PathVariable String strategyId,
             @Valid @RequestBody UpdateStrategyRequest request) {
         
-        log.info("Updating strategy: {} for user: {}", strategyId, user.getId());
+        log.info("Updating strategy: {} for user: {}", strategyId, currentUser.getId());
         
-        // 这里需要实现策略更新逻辑，暂时返回成功响应
-        return Mono.just(ApiResponse.<StrategyResponse>success(new StrategyResponse()))
-            .doOnError(error -> log.error("Failed to update strategy", error));
+        return templateRepository.findByIdAndUserId(strategyId, currentUser.getId())
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Template not found or no permission")))
+            .flatMap(template -> {
+                if (!template.isSettingGenerationTemplate()) {
+                    return Mono.error(new IllegalArgumentException("Template is not for setting generation"));
+                }
+                
+                // 如果策略已经是公开的（审核通过），不允许修改
+                if (Boolean.TRUE.equals(template.getIsPublic())) {
+                    return Mono.error(new IllegalStateException("Cannot modify published strategy"));
+                }
+                
+                // 更新基本信息
+                if (request.getName() != null) {
+                    template.setName(request.getName());
+                }
+                if (request.getDescription() != null) {
+                    template.setDescription(request.getDescription());
+                }
+                if (request.getSystemPrompt() != null) {
+                    template.setSystemPrompt(request.getSystemPrompt());
+                }
+                if (request.getUserPrompt() != null) {
+                    template.setUserPrompt(request.getUserPrompt());
+                }
+                
+                // 更新配置
+                if (request.getNodeTemplates() != null || request.getExpectedRootNodes() != null || request.getMaxDepth() != null) {
+                    com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig config = template.getSettingGenerationConfig();
+                    if (config != null) {
+                        com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig updatedConfig = 
+                            com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig.builder()
+                                .strategyName(config.getStrategyName())
+                                .description(config.getDescription())
+                                .nodeTemplates(request.getNodeTemplates() != null ? request.getNodeTemplates() : config.getNodeTemplates())
+                                .expectedRootNodes(request.getExpectedRootNodes() != null ? request.getExpectedRootNodes() : config.getExpectedRootNodes())
+                                .maxDepth(request.getMaxDepth() != null ? request.getMaxDepth() : config.getMaxDepth())
+                                .rules(config.getRules())
+                                .metadata(config.getMetadata())
+                                .baseStrategyId(config.getBaseStrategyId())
+                                .isSystemStrategy(false)
+                                .createdAt(config.getCreatedAt())
+                                .updatedAt(java.time.LocalDateTime.now())
+                                .build();
+                        template.setSettingGenerationConfig(updatedConfig);
+                    }
+                }
+                
+                template.setUpdatedAt(java.time.LocalDateTime.now());
+                template.setVersion(template.getVersion() + 1);
+                
+                return templateRepository.save(template);
+            })
+            .map(template -> {
+                StrategyResponse response = mapToStrategyResponse(template);
+                log.info("Strategy updated successfully: {}", strategyId);
+                return ApiResponse.<StrategyResponse>success(response);
+            })
+            .onErrorResume(error -> {
+                log.error("Failed to update strategy", error);
+                return Mono.just(ApiResponse.<StrategyResponse>error("STRATEGY_UPDATE_FAILED", error.getMessage()));
+            });
     }
     
     /**
@@ -783,14 +1106,107 @@ public class SettingGenerationController {
     @DeleteMapping("/strategies/{strategyId}")
     @Operation(summary = "删除策略", description = "删除用户自己创建的策略")
     public Mono<ApiResponse<String>> deleteStrategy(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "策略ID") @PathVariable String strategyId) {
         
-        log.info("Deleting strategy: {} for user: {}", strategyId, user.getId());
+        log.info("Deleting strategy: {} for user: {}", strategyId, currentUser.getId());
         
-        // 这里需要实现策略删除逻辑，暂时返回成功响应
-        return Mono.just(ApiResponse.success("策略已删除"))
-            .doOnError(error -> log.error("Failed to delete strategy", error));
+        return templateRepository.findByIdAndUserId(strategyId, currentUser.getId())
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Template not found or no permission")))
+            .flatMap(template -> {
+                if (!template.isSettingGenerationTemplate()) {
+                    return Mono.error(new IllegalArgumentException("Template is not for setting generation"));
+                }
+                
+                // 如果策略已经是公开的（审核通过），不允许删除
+                if (Boolean.TRUE.equals(template.getIsPublic())) {
+                    return Mono.error(new IllegalStateException("Cannot delete published strategy"));
+                }
+                
+                return templateRepository.delete(template);
+            })
+            .then(Mono.just(ApiResponse.success("策略已删除")))
+            .doOnSuccess(response -> log.info("Strategy deleted successfully: {}", strategyId))
+            .onErrorResume(error -> {
+                log.error("Failed to delete strategy", error);
+                return Mono.just(ApiResponse.error("STRATEGY_DELETE_FAILED", error.getMessage()));
+            });
+    }
+    
+    /**
+     * 点赞策略
+     */
+    @PostMapping("/strategies/{strategyId}/like")
+    @Operation(summary = "点赞策略", description = "为策略点赞或取消点赞")
+    public Mono<ApiResponse<Map<String, Object>>> likeStrategy(
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
+            @Parameter(description = "策略ID") @PathVariable String strategyId) {
+        
+        log.info("Toggle like for strategy: {} by user: {}", strategyId, currentUser.getId());
+        
+        return templateRepository.findById(strategyId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Strategy not found")))
+            .flatMap(template -> {
+                boolean isLiked = Boolean.TRUE.equals(template.getIsLiked());
+                
+                if (isLiked) {
+                    template.decrementLikeCount();
+                    template.setIsLiked(false);
+                } else {
+                    template.incrementLikeCount();
+                    template.setIsLiked(true);
+                }
+                
+                return templateRepository.save(template);
+            })
+            .map(template -> {
+                Map<String, Object> result = new HashMap<>();
+                result.put("isLiked", template.getIsLiked());
+                result.put("likeCount", template.getLikeCount());
+                return ApiResponse.success(result);
+            })
+            .onErrorResume(error -> {
+                log.error("Failed to toggle like", error);
+                return Mono.just(ApiResponse.error("LIKE_FAILED", error.getMessage()));
+            });
+    }
+    
+    /**
+     * 收藏策略
+     */
+    @PostMapping("/strategies/{strategyId}/favorite")
+    @Operation(summary = "收藏策略", description = "收藏或取消收藏策略")
+    public Mono<ApiResponse<Map<String, Object>>> favoriteStrategy(
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
+            @Parameter(description = "策略ID") @PathVariable String strategyId) {
+        
+        log.info("Toggle favorite for strategy: {} by user: {}", strategyId, currentUser.getId());
+        
+        return templateRepository.findById(strategyId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Strategy not found")))
+            .flatMap(template -> {
+                boolean isFavorite = Boolean.TRUE.equals(template.getIsFavorite());
+                
+                if (isFavorite) {
+                    template.decrementFavoriteCount();
+                    template.setIsFavorite(false);
+                } else {
+                    template.incrementFavoriteCount();
+                    template.setIsFavorite(true);
+                }
+                
+                return templateRepository.save(template);
+            })
+            .map(template -> {
+                Map<String, Object> result = new HashMap<>();
+                result.put("isFavorite", template.getIsFavorite());
+                result.put("favoriteCount", template.getFavoriteCount());
+                return ApiResponse.success(result);
+            })
+            .onErrorResume(error -> {
+                log.error("Failed to toggle favorite", error);
+                return Mono.just(ApiResponse.error("FAVORITE_FAILED", error.getMessage()));
+            });
     }
     
     /**
@@ -799,15 +1215,21 @@ public class SettingGenerationController {
     @PostMapping("/strategies/{strategyId}/submit-review")
     @Operation(summary = "提交策略审核", description = "将策略提交审核以便公开分享")
     public Mono<ApiResponse<String>> submitStrategyForReview(
-            @CurrentUser User user,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "策略ID") @PathVariable String strategyId) {
         
-        log.info("Submitting strategy for review: {} by user: {}", strategyId, user.getId());
+        // 检查用户是否已登录
+        if (currentUser == null || currentUser.getId() == null) {
+            log.warn("未登录用户尝试提交策略审核: {}", strategyId);
+            return Mono.just(ApiResponse.error("UNAUTHORIZED", "请先登录"));
+        }
         
-        return strategyManagementService.submitForReview(strategyId, user.getId())
+        log.info("提交策略审核: {} by user: {}", strategyId, currentUser.getId());
+        
+        return strategyManagementService.submitForReview(strategyId, currentUser.getId())
             .then(Mono.just(ApiResponse.success("策略已提交审核")))
             .onErrorResume(error -> {
-                log.error("Failed to submit strategy for review", error);
+                log.error("提交策略审核失败", error);
                 return Mono.just(ApiResponse.error("SUBMIT_REVIEW_FAILED", error.getMessage()));
             });
     }
@@ -840,12 +1262,12 @@ public class SettingGenerationController {
     @PostMapping("/admin/strategies/{strategyId}/review")
     @Operation(summary = "审核策略", description = "管理员审核策略，决定是否通过")
     public Mono<ApiResponse<String>> reviewStrategy(
-            @CurrentUser User reviewer,
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser,
             @Parameter(description = "策略ID") @PathVariable String strategyId,
             @Valid @RequestBody ReviewStrategyRequest request) {
         
         log.info("Reviewing strategy: {} by reviewer: {}, decision: {}", 
-            strategyId, reviewer.getId(), request.getDecision());
+            strategyId, currentUser.getId(), request.getDecision());
         
         // TODO: 实现策略审核的完整逻辑
         return Mono.just(new EnhancedUserPromptTemplate())
@@ -864,25 +1286,33 @@ public class SettingGenerationController {
     private StrategyResponse mapToStrategyResponse(EnhancedUserPromptTemplate template) {
         StrategyResponse response = new StrategyResponse();
         
-        // 安全地获取各个字段，避免空指针异常
+        // 安全地获取各个字段，避免空指针异常，确保所有 String 字段都不为 null
         response.setId(template.getId() != null ? template.getId() : "");
         response.setName(template.getName() != null ? template.getName() : "");
         response.setDescription(template.getDescription() != null ? template.getDescription() : "");
         response.setAuthorId(template.getAuthorId() != null ? template.getAuthorId() : "");
         response.setIsPublic(template.getIsPublic() != null ? template.getIsPublic() : false);
+        response.setHidePrompts(template.getHidePrompts() != null ? template.getHidePrompts() : false);
         response.setCreatedAt(template.getCreatedAt());
         response.setUpdatedAt(template.getUpdatedAt());
-        response.setUsageCount(0L); // 默认值
+        response.setUsageCount(template.getUsageCount() != null ? template.getUsageCount() : 0L);
+        response.setLikeCount(template.getLikeCount() != null ? template.getLikeCount() : 0L);
+        response.setFavoriteCount(template.getFavoriteCount() != null ? template.getFavoriteCount() : 0L);
+        response.setIsLiked(template.getIsLiked() != null ? template.getIsLiked() : false);
+        response.setIsFavorite(template.getIsFavorite() != null ? template.getIsFavorite() : false);
+        response.setRating(template.getRating() != null ? template.getRating() : 0.0);
         
         if (template.getSettingGenerationConfig() != null) {
-            response.setExpectedRootNodes(template.getSettingGenerationConfig().getExpectedRootNodes());
-            response.setMaxDepth(template.getSettingGenerationConfig().getMaxDepth());
+            response.setExpectedRootNodes(template.getSettingGenerationConfig().getExpectedRootNodes() != null ? 
+                template.getSettingGenerationConfig().getExpectedRootNodes() : 8);
+            response.setMaxDepth(template.getSettingGenerationConfig().getMaxDepth() != null ? 
+                template.getSettingGenerationConfig().getMaxDepth() : 3);
             
-            if (template.getSettingGenerationConfig().getReviewStatus() != null &&
-                template.getSettingGenerationConfig().getReviewStatus().getStatus() != null) {
-                response.setReviewStatus(template.getSettingGenerationConfig().getReviewStatus().getStatus().name());
+            // 🆕 使用顶层统一的审核状态
+            if (template.getReviewStatus() != null) {
+                response.setReviewStatus(template.getReviewStatus());
             } else {
-                response.setReviewStatus("DRAFT");
+                response.setReviewStatus(ReviewStatusConstants.DRAFT);
             }
             
             if (template.getSettingGenerationConfig().getMetadata() != null) {
@@ -891,7 +1321,83 @@ public class SettingGenerationController {
                 response.setDifficultyLevel(template.getSettingGenerationConfig().getMetadata().getDifficultyLevel());
             }
         } else {
-            // 设置默认值
+            // 设置默认值，确保所有必需字段都有值
+            response.setExpectedRootNodes(8);
+            response.setMaxDepth(3);
+            response.setReviewStatus("DRAFT");
+        }
+        
+        return response;
+    }
+    
+    private com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig buildStrategyConfig(CreateCustomStrategyRequest request) {
+        return com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig.builder()
+            .strategyName(request.getName())
+            .description(request.getDescription())
+            .nodeTemplates(request.getNodeTemplates())
+            .expectedRootNodes(request.getExpectedRootNodes())
+            .maxDepth(request.getMaxDepth())
+            .baseStrategyId(request.getBaseStrategyId())
+            .isSystemStrategy(false)
+            .createdAt(java.time.LocalDateTime.now())
+            .updatedAt(java.time.LocalDateTime.now())
+            .build();
+    }
+    
+    private void applyHidePromptsFromRequest(EnhancedUserPromptTemplate template, CreateCustomStrategyRequest request) {
+        if (request.getHidePrompts() != null) {
+            template.setHidePrompts(request.getHidePrompts());
+        }
+    }
+    
+    private StrategyDetailResponse mapToStrategyDetailResponse(EnhancedUserPromptTemplate template) {
+        StrategyDetailResponse response = new StrategyDetailResponse();
+        
+        // 基本信息
+        response.setId(template.getId() != null ? template.getId() : "");
+        response.setName(template.getName() != null ? template.getName() : "");
+        response.setDescription(template.getDescription() != null ? template.getDescription() : "");
+        response.setAuthorId(template.getAuthorId() != null ? template.getAuthorId() : "");
+        response.setAuthorName(template.getAuthorId() != null ? template.getAuthorId() : ""); // TODO: 可以从User服务获取真实用户名
+        response.setIsPublic(template.getIsPublic() != null ? template.getIsPublic() : false);
+        response.setHidePrompts(template.getHidePrompts() != null ? template.getHidePrompts() : false);
+        response.setCreatedAt(template.getCreatedAt());
+        response.setUpdatedAt(template.getUpdatedAt());
+        response.setUsageCount(template.getUsageCount() != null ? template.getUsageCount() : 0L);
+        response.setLikeCount(template.getLikeCount() != null ? template.getLikeCount() : 0L);
+        response.setFavoriteCount(template.getFavoriteCount() != null ? template.getFavoriteCount() : 0L);
+        response.setIsLiked(template.getIsLiked() != null ? template.getIsLiked() : false);
+        response.setIsFavorite(template.getIsFavorite() != null ? template.getIsFavorite() : false);
+        response.setRating(template.getRating());
+        
+        // 提示词（如果隐藏提示词，则不返回）
+        if (!Boolean.TRUE.equals(template.getHidePrompts())) {
+            response.setSystemPrompt(template.getSystemPrompt());
+            response.setUserPrompt(template.getUserPrompt());
+        } else {
+            response.setSystemPrompt("***隐藏***");
+            response.setUserPrompt("***隐藏***");
+        }
+        
+        // 配置信息
+        if (template.getSettingGenerationConfig() != null) {
+            response.setExpectedRootNodes(template.getSettingGenerationConfig().getExpectedRootNodes());
+            response.setMaxDepth(template.getSettingGenerationConfig().getMaxDepth());
+            response.setNodeTemplates(template.getSettingGenerationConfig().getNodeTemplates());
+            
+            // 🆕 使用顶层统一的审核状态
+            if (template.getReviewStatus() != null) {
+                response.setReviewStatus(template.getReviewStatus());
+            } else {
+                response.setReviewStatus(ReviewStatusConstants.DRAFT);
+            }
+            
+            if (template.getSettingGenerationConfig().getMetadata() != null) {
+                response.setCategories(template.getSettingGenerationConfig().getMetadata().getCategories());
+                response.setTags(template.getSettingGenerationConfig().getMetadata().getTags());
+                response.setDifficultyLevel(template.getSettingGenerationConfig().getMetadata().getDifficultyLevel());
+            }
+        } else {
             response.setExpectedRootNodes(0);
             response.setMaxDepth(5);
             response.setReviewStatus("DRAFT");
@@ -907,7 +1413,10 @@ public class SettingGenerationController {
      */
     @Data
     public static class StartGenerationRequest {
-        @NotBlank(message = "初始提示词不能为空")
+        // 🔧 前端生成的sessionId（可选，如果为空则后端自动生成）
+        private String sessionId;
+        
+        // 📚 复用模式下可以为空，所以移除 @NotBlank 验证，在 isValid() 中进行条件验证
         private String initialPrompt;
         
         // 新的字段，与strategy二选一
@@ -928,10 +1437,43 @@ public class SettingGenerationController {
         // 文本阶段是否改用公共模型
         private Boolean usePublicTextModel;
         
+        // 📚 知识库集成模式 ('NONE', 'REUSE', 'IMITATION', 'HYBRID')
+        private String knowledgeBaseMode;
+        
+        // 📚 知识库ID列表（用于REUSE和IMITATION模式）
+        private List<String> knowledgeBaseIds;
+        
+        // 📚 知识库分类列表（每个知识库对应一个分类列表）
+        // key: knowledgeBaseId, value: list of category values
+        private Map<String, List<String>> knowledgeBaseCategories;
+        
+        // 📚 混合模式专用：用于复用的知识库ID列表
+        private List<String> reuseKnowledgeBaseIds;
+        
+        // 📚 混合模式专用：用于参考的知识库ID列表
+        private List<String> referenceKnowledgeBaseIds;
+        
+        // 🔧 结构化输出循环模式：是否使用结构化输出（直接输出JSON，不使用工具调用）
+        private Boolean useStructuredOutput;
+        
+        // 🔧 结构化输出循环模式：最大迭代次数（默认3次）
+        private Integer structuredIterations;
+        
         // 自定义验证：promptTemplateId和strategy必须提供其中一个
+        // 📚 复用模式下不需要提示词
         public boolean isValid() {
-            return (promptTemplateId != null && !promptTemplateId.trim().isEmpty()) ||
-                   (strategy != null && !strategy.trim().isEmpty());
+            boolean hasStrategy = (promptTemplateId != null && !promptTemplateId.trim().isEmpty()) ||
+                                 (strategy != null && !strategy.trim().isEmpty());
+            
+            // 复用模式只需要策略，不需要提示词
+            boolean isReuseMode = "REUSE".equalsIgnoreCase(knowledgeBaseMode);
+            if (isReuseMode) {
+                return hasStrategy;
+            }
+            
+            // 其他模式需要提示词和策略
+            boolean hasPrompt = initialPrompt != null && !initialPrompt.trim().isEmpty();
+            return hasPrompt && hasStrategy;
         }
     }
 
@@ -959,6 +1501,8 @@ public class SettingGenerationController {
         private Integer maxDepth;
         
         private String baseStrategyId; // 可选，如果指定则基于该策略
+        
+        private Boolean hidePrompts; // 是否隐藏提示词
     }
     
     /**
@@ -1026,9 +1570,15 @@ public class SettingGenerationController {
         private String description;
         private String authorId;
         private Boolean isPublic;
+        private Boolean hidePrompts;
         private java.time.LocalDateTime createdAt;
         private java.time.LocalDateTime updatedAt;
         private Long usageCount;
+        private Long likeCount;
+        private Long favoriteCount;
+        private Boolean isLiked;
+        private Boolean isFavorite;
+        private Double rating;
         private Integer expectedRootNodes;
         private Integer maxDepth;
         private String reviewStatus;
@@ -1048,9 +1598,15 @@ public class SettingGenerationController {
         private String authorId;
         private String authorName;
         private Boolean isPublic;
+        private Boolean hidePrompts;
         private java.time.LocalDateTime createdAt;
         private java.time.LocalDateTime updatedAt;
         private Long usageCount;
+        private Long likeCount;
+        private Long favoriteCount;
+        private Boolean isLiked;
+        private Boolean isFavorite;
+        private Double rating;
         private Integer expectedRootNodes;
         private Integer maxDepth;
         private String reviewStatus;
@@ -1125,6 +1681,16 @@ public class SettingGenerationController {
         
         @NotBlank(message = "新内容不能为空")
         private String newContent;
+    }
+
+    /**
+     * 删除节点响应
+     */
+    @Data
+    public static class DeleteNodeResponse {
+        private String nodeId;
+        private List<String> deletedNodeIds;
+        private String message;
     }
 
     /**

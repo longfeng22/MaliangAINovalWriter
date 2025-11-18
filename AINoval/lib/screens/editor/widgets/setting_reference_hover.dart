@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:ainoval/utils/web_theme.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:ainoval/utils/logger.dart';
@@ -45,16 +44,17 @@ mixin SettingReferenceInteractionMixin {
       if (attribute.key == SettingReferenceProcessor.settingStyleAttr && 
           attribute.value == 'reference') {
         
-        // 🎯 关键：使用TextStyle.backgroundColor实现悬停效果
+        // 🎯 关键：使用TextStyle.backgroundColor实现悬停效果（常驻浅橙，悬停加深）
         return const TextStyle(
           decoration: TextDecoration.underline,
-          decorationStyle: TextDecorationStyle.dotted,
-          decorationColor: WebTheme.grey400,
-          decorationThickness: 1.5,
-          // 🎯 核心：直接使用TextStyle的backgroundColor属性
-          backgroundColor: Color(0x00FFF3CD),
+          decorationStyle: TextDecorationStyle.wavy,
+          decorationColor: Colors.black, // 🎯 改为纯黑色，提升可读性
+          decorationThickness: 3.0,
+          // 🎯 常驻浅橙背景（~10%不透明度）
+          backgroundColor: Color.fromARGB(241, 251, 247, 0),
         ).copyWith(
-          backgroundColor: hoveredSettingId != null ? const Color(0xFFFFF3CD) : null,
+          // 🎯 悬停时加深为更明显的橙色（~20%不透明度）
+          backgroundColor: hoveredSettingId != null ? const Color.fromARGB(241, 251, 247, 0) : null,
         );
       }
       
@@ -99,9 +99,11 @@ mixin SettingReferenceInteractionMixin {
           attribute.value == 'reference') {
         return const TextStyle(
           decoration: TextDecoration.underline,
-          decorationStyle: TextDecorationStyle.dotted,
-          decorationColor: WebTheme.grey400,
-          decorationThickness: 1.5,
+          decorationStyle: TextDecorationStyle.wavy,
+          decorationColor: Colors.black, // 🎯 改为纯黑色，提升可读性
+          decorationThickness: 2.0,
+          // 🎯 常驻浅橙背景（~10%不透明度）
+          backgroundColor: Color(0x1AFFA500),
         );
       }
       

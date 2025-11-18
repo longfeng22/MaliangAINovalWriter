@@ -16,6 +16,10 @@
   <link rel="preload" href="/main.dart.js_2.part.js" as="script">
   <link rel="preload" href="/flutter.js" as="script">
   <link rel="preload" href="/flutter_bootstrap.js" as="script">
+  <!-- 预加载中文与英文字体，减少首屏字体闪烁（FOUT/FOIT） -->
+  <link rel="preload" href="assets/fonts/NotoSansSC-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="assets/fonts/NotoSansSC-Bold.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="assets/fonts/Roboto-Regular.ttf" as="font" type="font/ttf" crossorigin>
   
   <!-- 🌐 CDN 预连接 -->
   <link rel="preconnect" href="https://maliangwriter.com">
@@ -36,12 +40,34 @@
   <link rel="manifest" href="manifest.json">
   
   <style>
+    /* 字体声明：使用 font-display: swap 避免因字体加载导致的文字不可见 */
+    @font-face {
+      font-family: 'Noto Sans SC';
+      src: url('assets/fonts/NotoSansSC-Regular.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Noto Sans SC';
+      src: url('assets/fonts/NotoSansSC-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Roboto';
+      src: url('assets/fonts/Roboto-Regular.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+    }
     /* 🎨 关键CSS内联，减少渲染阻塞 */
     body {
       margin: 0;
       padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', 'Heiti SC', 'WenQuanYi Micro Hei', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans CJK SC', 'Source Han Sans SC', 'Source Han Sans CN', 'Droid Sans Fallback', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+      background: #ffffff;
       min-height: 100vh;
       overflow: hidden;
     }
@@ -58,7 +84,42 @@
       justify-content: center;
       align-items: center;
       z-index: 9999;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: #ffffff;
+    }
+    
+    /* ☯️ 阴阳太极背景图案 */
+    .background-pattern {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+      opacity: 0.015;
+      background-image: 
+        radial-gradient(circle at 20% 30%, rgba(0, 0, 0, 0.1) 0%, transparent 60%),
+        radial-gradient(circle at 80% 70%, rgba(255, 255, 255, 0.1) 0%, transparent 60%),
+        radial-gradient(circle at 60% 20%, rgba(0, 0, 0, 0.05) 0%, transparent 70%),
+        radial-gradient(circle at 40% 80%, rgba(255, 255, 255, 0.05) 0%, transparent 70%);
+      background-size: 800px 800px, 600px 600px, 900px 900px, 700px 700px;
+      background-position: 0 0, 150px 150px, 300px 80px, 80px 300px;
+      animation: taichiFloat 30s ease-in-out infinite;
+    }
+    
+    .background-dots {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -2;
+      opacity: 0.03;
+      background-image: 
+        radial-gradient(circle, rgba(0, 0, 0, 0.1) 1px, transparent 1px),
+        radial-gradient(circle, rgba(128, 128, 128, 0.05) 0.5px, transparent 0.5px);
+      background-size: 80px 80px, 40px 40px;
+      background-position: 0 0, 20px 20px;
+      animation: inkDotFloat 20s ease-in-out infinite;
     }
     
     /* 🎯 主要内容容器 */
@@ -67,75 +128,89 @@
       flex-direction: column;
       align-items: center;
       animation: fadeInUp 0.8s ease-out;
+      z-index: 10;
     }
     
-    /* 🖊️ AI写作图标 */
-    .ai-icon {
-      width: 80px;
-      height: 80px;
-      margin-bottom: 20px;
-      animation: float 3s ease-in-out infinite;
+    /* 🖋️ 神笔马良图标 */
+    .fresh-icon {
+      width: 140px;
+      height: 140px;
+      margin-bottom: 30px;
+      animation: breathe 4s ease-in-out infinite;
     }
     
-    .ai-icon svg {
+    .fresh-icon svg {
       width: 100%;
       height: 100%;
-      filter: drop-shadow(0 4px 20px rgba(255, 255, 255, 0.3));
+      filter: drop-shadow(0 8px 32px rgba(0, 0, 0, 0.2));
     }
     
     /* 📝 应用标题 */
     .app-title {
-      font-size: 28px;
-      font-weight: 600;
-      color: #ffffff;
-      margin-bottom: 8px;
-      letter-spacing: 0.5px;
-      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+      font-size: 32px;
+      font-weight: 700;
+      color: #2d3748;
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
     }
     
     /* 💭 副标题 */
     .app-subtitle {
       font-size: 16px;
-      color: rgba(255, 255, 255, 0.8);
-      margin-bottom: 40px;
+      color: #718096;
+      margin-bottom: 50px;
       font-weight: 400;
     }
     
     /* 📊 进度条容器 */
     .progress-container {
-      width: 300px;
-      height: 4px;
-      background: rgba(255, 255, 255, 0.2);
-      border-radius: 10px;
+      width: 320px;
+      height: 6px;
+      background: rgba(226, 232, 240, 0.8);
+      border-radius: 20px;
       overflow: hidden;
-      margin-bottom: 20px;
-      -webkit-backdrop-filter: blur(10px);
-      backdrop-filter: blur(10px);
+      margin-bottom: 24px;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
     }
     
     /* 📈 进度条 */
     .progress-bar {
       height: 100%;
-      background: linear-gradient(90deg, #fff, #f8f9fa);
-      border-radius: 10px;
+      background: linear-gradient(90deg, #2C2C2C, #000000, #4A4A4A);
+      border-radius: 20px;
       width: 0%;
-      animation: progressFlow 2.5s ease-in-out infinite;
-      box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+      animation: progressFlow 3s ease-in-out infinite;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+      position: relative;
+    }
+    
+    .progress-bar::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, 
+        transparent 0%, 
+        rgba(255, 255, 255, 0.6) 50%, 
+        transparent 100%);
+      animation: shine 2s ease-in-out infinite;
     }
     
     /* 💬 加载文本 */
     .loading-text {
-      color: rgba(255, 255, 255, 0.9);
+      color: #4a5568;
       font-size: 14px;
       font-weight: 500;
-      animation: pulse 2s ease-in-out infinite;
+      animation: textPulse 2s ease-in-out infinite;
     }
     
     /* 🎪 动画关键帧 */
     @keyframes fadeInUp {
       from {
         opacity: 0;
-        transform: translateY(30px);
+        transform: translateY(40px);
       }
       to {
         opacity: 1;
@@ -143,48 +218,86 @@
       }
     }
     
-    @keyframes float {
+    @keyframes breathe {
       0%, 100% {
-        transform: translateY(0px);
+        transform: scale(1);
+        filter: drop-shadow(0 8px 32px rgba(0, 0, 0, 0.2));
       }
       50% {
-        transform: translateY(-10px);
+        transform: scale(1.05);
+        filter: drop-shadow(0 12px 48px rgba(0, 0, 0, 0.4));
       }
     }
     
     @keyframes progressFlow {
       0% {
         width: 0%;
-        opacity: 0.5;
       }
       50% {
-        width: 70%;
-        opacity: 1;
+        width: 75%;
       }
       100% {
         width: 100%;
-        opacity: 0.8;
       }
     }
     
-    @keyframes pulse {
+    @keyframes shine {
+      0% {
+        transform: translateX(-100%);
+      }
+      100% {
+        transform: translateX(100%);
+      }
+    }
+    
+    @keyframes textPulse {
       0%, 100% {
-        opacity: 0.7;
+        opacity: 0.6;
       }
       50% {
         opacity: 1;
+      }
+    }
+    
+    @keyframes taichiFloat {
+      0%, 100% {
+        transform: translateY(0px) rotate(0deg);
+      }
+      25% {
+        transform: translateY(-15px) rotate(90deg);
+      }
+      50% {
+        transform: translateY(0px) rotate(180deg);
+      }
+      75% {
+        transform: translateY(15px) rotate(270deg);
+      }
+    }
+    
+    @keyframes inkDotFloat {
+      0%, 100% {
+        transform: translate(0px, 0px);
+      }
+      25% {
+        transform: translate(-10px, -5px);
+      }
+      50% {
+        transform: translate(15px, -8px);
+      }
+      75% {
+        transform: translate(-5px, 12px);
       }
     }
     
     /* 📱 响应式设计 */
     @media (max-width: 480px) {
-      .ai-icon {
-        width: 60px;
-        height: 60px;
+      .fresh-icon {
+        width: 120px;
+        height: 120px;
       }
       
       .app-title {
-        font-size: 24px;
+        font-size: 28px;
       }
       
       .app-subtitle {
@@ -192,102 +305,197 @@
       }
       
       .progress-container {
-        width: 250px;
-      }
-    }
-    
-    /* 🌟 粒子背景效果 */
-    .particles {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      z-index: -1;
-    }
-    
-    .particle {
-      position: absolute;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 50%;
-      animation: particleFloat 6s linear infinite;
-    }
-    
-    @keyframes particleFloat {
-      0% {
-        transform: translateY(100vh) rotate(0deg);
-        opacity: 0;
-      }
-      10% {
-        opacity: 1;
-      }
-      90% {
-        opacity: 1;
-      }
-      100% {
-        transform: translateY(-100px) rotate(360deg);
-        opacity: 0;
+        width: 280px;
       }
     }
   </style>
 </head>
 <body>
-  <!-- ✨ 现代化加载界面 -->
+  <!-- ✨ 清新加载界面 -->
   <div id="loading" class="loading">
-    <!-- 🌟 粒子背景 -->
-    <div class="particles" id="particles"></div>
+    <!-- 🌿 清新背景图案 -->
+    <div class="background-pattern"></div>
+    <div class="background-dots"></div>
     
     <!-- 🎯 主要内容 -->
     <div class="loading-content">
-      <!-- 🤖 AI写作图标 -->
-      <div class="ai-icon">
+      <!-- ☯️ 阴阳神笔图标 -->
+      <div class="fresh-icon">
         <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <!-- 大脑轮廓 -->
-          <path d="M25 35C25 25 35 15 45 15C50 10 60 10 65 15C75 15 85 25 85 35C85 40 80 45 75 45C80 50 85 55 85 65C85 75 75 85 65 85C60 90 50 90 45 85C35 85 25 75 25 65C25 60 30 55 35 55C30 50 25 45 25 35Z" 
-                fill="url(#brainGradient)" stroke="rgba(255,255,255,0.8)" stroke-width="2"/>
-          
-          <!-- 神经网络线条 -->
-          <g stroke="rgba(255,255,255,0.6)" stroke-width="1.5" fill="none">
-            <path d="M35 30L45 40L55 35L65 45" opacity="0.8">
-              <animate attributeName="opacity" values="0.3;0.8;0.3" dur="2s" repeatCount="indefinite"/>
-            </path>
-            <path d="M40 50L50 45L60 55L70 50" opacity="0.6">
-              <animate attributeName="opacity" values="0.3;0.8;0.3" dur="2.5s" repeatCount="indefinite"/>
-            </path>
-            <path d="M30 60L45 65L55 60L75 65" opacity="0.7">
-              <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite"/>
-            </path>
+          <!-- 太极阴阳底盘 -->
+          <g transform="translate(50, 50)">
+            <!-- 外圈太极旋转 -->
+            <g class="taichi-container">
+              <!-- 阴阳主体 -->
+              <path d="M-30,0 A30,30 0 0,1 30,0 A15,15 0 0,1 0,0 A15,15 0 0,0 -30,0Z" 
+                    fill="#000000" opacity="0.4">
+                <animateTransform attributeName="transform" type="rotate" 
+                  values="0;360" dur="20s" repeatCount="indefinite"/>
+              </path>
+              
+              <path d="M30,0 A30,30 0 0,1 -30,0 A15,15 0 0,1 0,0 A15,15 0 0,0 30,0Z" 
+                    fill="#ffffff" opacity="0.6" stroke="#000000" stroke-width="0.3">
+                <animateTransform attributeName="transform" type="rotate" 
+                  values="0;360" dur="20s" repeatCount="indefinite"/>
+              </path>
+              
+              <!-- 阴眼 -->
+              <circle cx="0" cy="-15" r="3" fill="#ffffff" opacity="0.7">
+                <animateTransform attributeName="transform" type="rotate" 
+                  values="0;360" dur="20s" repeatCount="indefinite"/>
+              </circle>
+              
+              <!-- 阳眼 -->
+              <circle cx="0" cy="15" r="3" fill="#000000" opacity="0.8">
+                <animateTransform attributeName="transform" type="rotate" 
+                  values="0;360" dur="20s" repeatCount="indefinite"/>
+              </circle>
+            </g>
+            
+            <!-- 外圈边框 -->
+            <circle cx="0" cy="0" r="32" fill="none" stroke="url(#borderGradient)" 
+                    stroke-width="1" opacity="0.3">
+              <animate attributeName="stroke-width" values="0.8;1.2;0.8" dur="4s" repeatCount="indefinite"/>
+            </circle>
           </g>
           
-          <!-- 笔尖图标 -->
-          <g transform="translate(60, 55)">
-            <path d="M0 0L8 8L4 12L-4 4Z" fill="rgba(255,255,255,0.9)">
+          <!-- 中央神笔 -->
+          <g transform="translate(50, 50)">
+            <!-- 笔杆阴影 -->
+            <rect x="-2.5" y="-24" width="5" height="35" rx="2.5" fill="rgba(0,0,0,0.3)" 
+                  transform="translate(1, 1)">
+              <animate attributeName="opacity" values="0.2;0.4;0.2" dur="6s" repeatCount="indefinite"/>
               <animateTransform attributeName="transform" type="rotate" 
-                values="0 2 6;10 2 6;0 2 6" dur="3s" repeatCount="indefinite"/>
-            </path>
-            <path d="M4 12L6 20" stroke="rgba(255,255,255,0.7)" stroke-width="2"/>
+                values="0;3;-1;0" dur="8s" repeatCount="indefinite"/>
+            </rect>
+            
+            <!-- 笔杆发光外轮廓 -->
+            <rect x="-3" y="-24.5" width="6" height="36" rx="3" fill="none" 
+                  stroke="rgba(255,255,255,0.6)" stroke-width="0.8" opacity="0.5">
+              <animate attributeName="opacity" values="0.3;0.7;0.3" dur="6s" repeatCount="indefinite"/>
+              <animate attributeName="stroke-width" values="0.6;1;0.6" dur="6s" repeatCount="indefinite"/>
+              <animateTransform attributeName="transform" type="rotate" 
+                values="0;3;-1;0" dur="8s" repeatCount="indefinite"/>
+            </rect>
+            
+            <!-- 笔杆主体 -->
+            <rect x="-2.5" y="-24" width="5" height="35" rx="2.5" fill="url(#inkBrushHandle)" 
+                  stroke="rgba(255,255,255,0.4)" stroke-width="0.8">
+              <animate attributeName="opacity" values="0.95;1;0.95" dur="6s" repeatCount="indefinite"/>
+              <animateTransform attributeName="transform" type="rotate" 
+                values="0;3;-1;0" dur="8s" repeatCount="indefinite"/>
+            </rect>
+            
+            <!-- 笔头金属环 -->
+            <rect x="-2" y="10" width="4" height="4" fill="url(#metalRingGradient)" rx="0.5">
+              <animate attributeName="opacity" values="0.8;1;0.8" dur="6s" repeatCount="indefinite"/>
+            </rect>
+            
+            <!-- 笔毛主体 -->
+            <ellipse cx="0" cy="16" rx="1.8" ry="5" fill="url(#brushTipGradient)" 
+                     stroke="rgba(255,255,255,0.2)" stroke-width="0.3">
+              <animate attributeName="opacity" values="0.9;1;0.9" dur="6s" repeatCount="indefinite"/>
+            </ellipse>
+            
+            <!-- 笔毛尖端 -->
+            <ellipse cx="0" cy="20" rx="0.8" ry="2" fill="#000000">
+              <animate attributeName="opacity" values="0.8;1;0.8" dur="6s" repeatCount="indefinite"/>
+            </ellipse>
           </g>
           
-          <!-- 发光效果 -->
+          <!-- 墨滴环绕效果 -->
+          <g>
+            <circle cx="25" cy="30" r="1" fill="#000000" opacity="0.4">
+              <animate attributeName="cy" values="25;35;25" dur="4s" repeatCount="indefinite"/>
+              <animate attributeName="opacity" values="0;0.6;0" dur="4s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="75" cy="40" r="1.2" fill="#000000" opacity="0.5">
+              <animate attributeName="cy" values="35;45;35" dur="5s" repeatCount="indefinite" begin="1s"/>
+              <animate attributeName="opacity" values="0;0.7;0" dur="5s" repeatCount="indefinite" begin="1s"/>
+            </circle>
+            <circle cx="30" cy="75" r="0.8" fill="#000000" opacity="0.3">
+              <animate attributeName="cy" values="70;80;70" dur="3.5s" repeatCount="indefinite" begin="2s"/>
+              <animate attributeName="opacity" values="0;0.5;0" dur="3.5s" repeatCount="indefinite" begin="2s"/>
+            </circle>
+          </g>
+          
+          <!-- 飘散的笔墨气韵 -->
+          <g opacity="0.6">
+            <!-- 墨迹1 -->
+            <path d="M20 25 Q15 20 22 18 Q28 22 20 25" fill="url(#inkCloudGradient)">
+              <animateTransform attributeName="transform" type="translate" 
+                values="0,0; -8,-12; -15,-20; -10,-25" dur="12s" repeatCount="indefinite"/>
+              <animate attributeName="opacity" values="0;0.6;0.3;0" dur="12s" repeatCount="indefinite"/>
+            </path>
+            
+            <!-- 墨迹2 -->
+            <path d="M80 35 Q75 30 82 28 Q88 32 80 35" fill="url(#inkCloudGradient2)">
+              <animateTransform attributeName="transform" type="translate" 
+                values="0,0; 10,-15; 18,-25; 12,-30" dur="10s" repeatCount="indefinite" begin="2s"/>
+              <animate attributeName="opacity" values="0;0.5;0.2;0" dur="10s" repeatCount="indefinite" begin="2s"/>
+            </path>
+            
+            <!-- 墨迹3 -->
+            <path d="M25 70 Q20 65 27 63 Q33 67 25 70" fill="url(#inkCloudGradient)">
+              <animateTransform attributeName="transform" type="translate" 
+                values="0,0; -6,-10; -12,-18; -8,-22" dur="14s" repeatCount="indefinite" begin="1s"/>
+              <animate attributeName="opacity" values="0;0.4;0.2;0" dur="14s" repeatCount="indefinite" begin="1s"/>
+            </path>
+          </g>
+          
+          <!-- 渐变定义 -->
           <defs>
-            <linearGradient id="brainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" style="stop-color:rgba(255,255,255,0.9)"/>
-              <stop offset="50%" style="stop-color:rgba(255,255,255,0.7)"/>
-              <stop offset="100%" style="stop-color:rgba(255,255,255,0.5)"/>
+            <!-- 边框渐变 -->
+            <linearGradient id="borderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#000000"/>
+              <stop offset="50%" style="stop-color:#666666"/>
+              <stop offset="100%" style="stop-color:#ffffff"/>
             </linearGradient>
-            <filter id="glow">
-              <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-              <feMerge> 
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-              </feMerge>
-            </filter>
+            
+            <!-- 墨色笔杆渐变 -->
+            <linearGradient id="inkBrushHandle" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" style="stop-color:#666666"/>
+              <stop offset="20%" style="stop-color:#404040"/>
+              <stop offset="50%" style="stop-color:#1A1A1A"/>
+              <stop offset="80%" style="stop-color:#000000"/>
+              <stop offset="100%" style="stop-color:#2C2C2C"/>
+            </linearGradient>
+            
+            <!-- 笔头渐变 -->
+            <linearGradient id="brushTipGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" style="stop-color:#4A4A4A"/>
+              <stop offset="50%" style="stop-color:#1A1A1A"/>
+              <stop offset="100%" style="stop-color:#000000"/>
+            </linearGradient>
+            
+            <!-- 金属环渐变 -->
+            <linearGradient id="metalRingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#C0C0C0"/>
+              <stop offset="30%" style="stop-color:#808080"/>
+              <stop offset="70%" style="stop-color:#404040"/>
+              <stop offset="100%" style="stop-color:#202020"/>
+            </linearGradient>
+            
+            <!-- 墨云渐变1 -->
+            <radialGradient id="inkCloudGradient" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" style="stop-color:rgba(0, 0, 0, 0.6)"/>
+              <stop offset="70%" style="stop-color:rgba(102, 102, 102, 0.3)"/>
+              <stop offset="100%" style="stop-color:rgba(0, 0, 0, 0.1)"/>
+            </radialGradient>
+            
+            <!-- 墨云渐变2 -->
+            <radialGradient id="inkCloudGradient2" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" style="stop-color:rgba(26, 26, 26, 0.7)"/>
+              <stop offset="60%" style="stop-color:rgba(76, 76, 76, 0.4)"/>
+              <stop offset="100%" style="stop-color:rgba(255, 255, 255, 0.1)"/>
+            </radialGradient>
           </defs>
         </svg>
       </div>
       
       <!-- 📝 应用信息 -->
-      <h1 class="app-title">AI Novel</h1>
-      <p class="app-subtitle">智能小说创作助手</p>
+      <h1 class="app-title">马良 AI 小说助手</h1>
+      <p class="app-subtitle">神笔在手，妙笔生花</p>
       
       <!-- 📊 进度条 -->
       <div class="progress-container">
@@ -295,7 +503,7 @@
       </div>
       
       <!-- 💬 状态文本 -->
-      <p class="loading-text" id="loadingText">正在初始化应用...</p>
+      <p class="loading-text" id="loadingText">正在启动创作之旅...</p>
     </div>
   </div>
   
@@ -303,24 +511,31 @@
     // 🚀 性能监控
     window.performance.mark('app-start');
     
-    // 🌟 创建粒子背景效果
-    function createParticles() {
-      const particles = document.getElementById('particles');
-      const particleCount = 15;
+    // ☯️ 增强阴阳太极背景动画
+    function enhanceTaichiPattern() {
+      const pattern = document.querySelector('.background-pattern');
+      const dots = document.querySelector('.background-dots');
       
-      for (let i = 0; i < particleCount; i++) {
-        const particle = document.createElement('div');
-        particle.className = 'particle';
-        
-        // 随机大小和位置
-        const size = Math.random() * 4 + 2;
-        particle.style.width = size + 'px';
-        particle.style.height = size + 'px';
-        particle.style.left = Math.random() * 100 + '%';
-        particle.style.animationDelay = Math.random() * 6 + 's';
-        particle.style.animationDuration = (Math.random() * 3 + 4) + 's';
-        
-        particles.appendChild(particle);
+      if (pattern) {
+        // 太极图案缓慢旋转和位移
+        let rotation = 0;
+        setInterval(() => {
+          rotation += 0.5;
+          const offsetX = Math.sin(rotation * Math.PI / 180) * 5;
+          const offsetY = Math.cos(rotation * Math.PI / 180) * 3;
+          pattern.style.transform = `translate(${offsetX}px, ${offsetY}px) rotate(${rotation * 0.1}deg)`;
+        }, 100);
+      }
+      
+      if (dots) {
+        // 墨点图案反向缓慢移动
+        let dotRotation = 0;
+        setInterval(() => {
+          dotRotation -= 0.2;
+          const offsetX = Math.cos(dotRotation * Math.PI / 180) * 3;
+          const offsetY = Math.sin(dotRotation * Math.PI / 180) * 2;
+          dots.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+        }, 150);
       }
     }
     
@@ -331,11 +546,11 @@
       let progress = 0;
       
       const loadingSteps = [
-        '正在加载核心模块...',
-        '正在初始化AI引擎...',
-        '正在连接服务器...',
         '正在准备写作环境...',
-        '即将完成...'
+        '正在初始化智能助手...',
+        '正在连接创作云端...',
+        '正在整理创作工具...',
+        '马上就好...'
       ];
       
       const progressInterval = setInterval(() => {
@@ -360,7 +575,7 @@
     
     // 🎯 页面加载完成后的初始化
     document.addEventListener('DOMContentLoaded', function() {
-      createParticles();
+      enhanceTaichiPattern();
       const progressInterval = simulateProgress();
       
       // ✨ 隐藏加载指示器

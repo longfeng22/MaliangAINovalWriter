@@ -56,7 +56,8 @@ public class SecurityConfig {
                     "/api/v1/prompts/**", "/api/v1/prompt-aggregation/**", "/api/v1/prompt-templates/**", "/api/v1/content-provider/**",
                     "/api/v1/admin/**","/api/v1/public-models/**","/api/v1/credits/**","/api/v1/preset-aggregation/**", "/api/v1/presets/**",
                     "/api/v1/setting-histories/**","/api/v1/setting-generation/**","/api/v1/test/setting-generation/**","/api/v1/compose/**","/api/v1/tool-orchestration/**",
-                    "/api/v1/analytics/**", "/api/v1/payments/**","/api/v1/models/**","/api/v1/providers/**")
+                    "/api/v1/analytics/**", "/api/v1/payments/**", "/api/v1/pricing/**",
+                    "/api/v1/knowledge-bases/**", "/api/v1/knowledge-extraction-tasks/**", "/api/v1/prompt-market/**")
         );
         
         // 添加认证失败处理器
@@ -94,11 +95,17 @@ public class SecurityConfig {
                 .pathMatchers("/api/v1/credit-packs/**").permitAll()
                 // 设定生成：放开 GET /strategies 供游客拉取公共策略
                 .pathMatchers(HttpMethod.GET, "/api/v1/setting-generation/strategies").permitAll()
-
-                                // AI提供商能力/测试/默认端点：放行
+                
+                // AI提供商能力/测试/默认端点：放行
                 .pathMatchers("/api/v1/providers/**").permitAll()
-                                // AI提供商能力/测试/默认端点：放行
-                                .pathMatchers("/api/v1/models/**").permitAll()
+                // AI提供商能力/测试/默认端点：放行
+                .pathMatchers("/api/v1/models/**").permitAll()
+                // 模型定价查询：GET请求放行，让前端可以检查定价
+                .pathMatchers(HttpMethod.GET, "/api/v1/pricing/**").permitAll()
+                // 模型定价管理：POST/PUT/DELETE需要管理员认证
+                .pathMatchers(HttpMethod.POST, "/api/v1/pricing/**").authenticated()
+                .pathMatchers(HttpMethod.PUT, "/api/v1/pricing/**").authenticated()
+                .pathMatchers(HttpMethod.DELETE, "/api/v1/pricing/**").authenticated()
                  // 需要认证的端点
                 .pathMatchers("/api/v1/setting-generation/**").authenticated()
                 .pathMatchers("/api/v1/test/setting-generation/**").authenticated()
@@ -136,6 +143,16 @@ public class SecurityConfig {
                 // 支付：回调放行，其余需要认证
                 .pathMatchers("/api/v1/payments/notify/**").permitAll()
                 .pathMatchers("/api/v1/payments/**").authenticated()
+                // 知识库：搜索和详情放行（允许游客查看公共知识库），其余需要认证
+                .pathMatchers(HttpMethod.GET, "/api/v1/knowledge-bases/fanqie/search").permitAll()
+                .pathMatchers(HttpMethod.GET, "/api/v1/knowledge-bases/fanqie/*").permitAll()
+                .pathMatchers(HttpMethod.GET, "/api/v1/knowledge-bases/public").permitAll()
+                .pathMatchers(HttpMethod.GET, "/api/v1/knowledge-bases/*/detail").permitAll()
+                .pathMatchers("/api/v1/knowledge-bases/**").authenticated()
+                // AI拆书任务管理
+                .pathMatchers("/api/v1/knowledge-extraction-tasks/**").authenticated()
+                // 提示词市场
+                .pathMatchers("/api/v1/prompt-market/**").authenticated()
                 // 其他所有请求需要认证
                 .anyExchange().authenticated()
                 )

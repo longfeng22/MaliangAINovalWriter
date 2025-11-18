@@ -59,6 +59,16 @@ public class AIRequest {
     private String model;
 
     /**
+     * 明确的功能类型（用于计费/追踪决策）
+     */
+    private AIFeatureType featureType;
+
+    /**
+     * 明确的追踪ID（用于预扣费与后扣费关联），优先于metadata/providerSpecific中的幂等键
+     */
+    private String traceId;
+
+    /**
      * 是否启用上下文
      */
     @Builder.Default
@@ -71,6 +81,7 @@ public class AIRequest {
 
         /**
      * 其他参数
+     * 公共模型调用必须设置parameters.modelConfigId，否则无法正常扣费
      */
     @Builder.Default
     private Map<String, Object> parameters = new HashMap<>();
@@ -221,6 +232,22 @@ public class AIRequest {
 
     public void setModel(String model) {
         this.model = model;
+    }
+
+    public AIFeatureType getFeatureType() {
+        return featureType;
+    }
+
+    public void setFeatureType(AIFeatureType featureType) {
+        this.featureType = featureType;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
     }
 
     public Boolean getEnableContext() {

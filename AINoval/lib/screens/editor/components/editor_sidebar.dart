@@ -1,9 +1,11 @@
-import 'package:ainoval/blocs/editor/editor_bloc.dart';
+import 'package:ainoval/blocs/editor/editor_bloc.dart' as editor;
+import 'package:ainoval/models/novel_structure.dart' as novel_models;
 import 'package:ainoval/models/novel_summary.dart';
 import 'package:ainoval/models/novel_snippet.dart';
 import 'package:ainoval/screens/editor/widgets/novel_setting_sidebar.dart';
 import 'package:ainoval/screens/editor/widgets/snippet_list_tab.dart';
 import 'package:ainoval/screens/editor/widgets/snippet_edit_form.dart';
+import 'package:ainoval/screens/editor/components/export_dialog.dart';
 import 'package:ainoval/utils/logger.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -485,7 +487,7 @@ class _EditorSidebarState extends State<EditorSidebar> {
                       // 帮助按钮
                       _buildBottomBarItem(
                         icon: Icons.help_outline,
-                        label: 'Help',
+                        label: '帮助',
                         showLabel: !isCompact,
                         selected: _selectedBottomBarItem == 'Help',
                         onTap: () {
@@ -498,7 +500,7 @@ class _EditorSidebarState extends State<EditorSidebar> {
                       // 提示按钮
                       _buildBottomBarItem(
                         icon: Icons.lightbulb_outline,
-                        label: 'Prompts',
+                        label: '提示词和预设',
                         showLabel: !isCompact,
                         selected: _selectedBottomBarItem == 'Prompts',
                         onTap: () {
@@ -512,20 +514,20 @@ class _EditorSidebarState extends State<EditorSidebar> {
                       // 导出按钮
                       _buildBottomBarItem(
                         icon: Icons.download_outlined,
-                        label: 'Export',
+                        label: '导出',
                         showLabel: !isCompact,
                         selected: _selectedBottomBarItem == 'Export',
                         onTap: () {
                           setState(() {
                             _selectedBottomBarItem = 'Export';
                           });
-                          // TODO: 实现导出功能
+                          _showExportDialog();
                         },
                       ),
                       // 保存按钮
                       _buildBottomBarItem(
                         icon: Icons.save_outlined,
-                        label: 'Save',
+                        label: '保存',
                         showLabel: !isCompact,
                         selected: _selectedBottomBarItem == 'Save',
                         onTap: () {
@@ -535,7 +537,7 @@ class _EditorSidebarState extends State<EditorSidebar> {
                           // 手动保存：触发与自动保存一致的SaveContent事件
                           try {
                             final controller = Provider.of<EditorScreenController>(context, listen: false);
-                            controller.editorBloc.add(const SaveContent());
+                            controller.editorBloc.add(const editor.SaveContent());
                           } catch (e) {
                             AppLogger.w('EditorSidebar', '手动保存触发失败', e);
                           }
@@ -613,6 +615,33 @@ class _EditorSidebarState extends State<EditorSidebar> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 显示导出对话框
+  void _showExportDialog() {
+    final controller = Provider.of<EditorScreenController>(context, listen: false);
+    final novelId = widget.novel.id;
+    final novelTitle = widget.novel.title;
+    // 优先尝试从EditorBloc拿到缓存的完整小说，用于导出
+    novel_models.Novel? cachedNovel;
+    try {
+      final state = controller.editorBloc.state;
+      if (state is editor.EditorLoaded) {
+        cachedNovel = state.novel;
+      }
+    } catch (_) {}
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return ExportDialog(
+          novelId: novelId,
+          novelTitle: novelTitle,
+          cachedNovel: cachedNovel,
+        );
+      },
     );
   }
 }

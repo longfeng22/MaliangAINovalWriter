@@ -1,6 +1,7 @@
 package com.ainovel.server.task.service.impl;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -16,12 +17,15 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
+import com.ainovel.server.task.events.TaskEventPublisher;
 
 import com.ainovel.server.repository.BackgroundTaskRepository;
 import com.ainovel.server.task.model.BackgroundTask;
 import com.ainovel.server.task.model.TaskStatus;
 import com.ainovel.server.task.service.TaskStateService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
@@ -38,13 +42,24 @@ public class TaskStateServiceImpl implements TaskStateService {
     private final ReactiveMongoTemplate mongoTemplate;
     private final ObjectMapper objectMapper;
     
+    private final TaskEventPublisher taskEventPublisher;
+
+    // 内部缓存：用户任务列表（父任务分页 + 子任务扁平化后的序列）
+    // key 结构：userId:statusOrStar:page:size
+    private final Cache<String, java.util.List<BackgroundTask>> userTasksCache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofSeconds(60))
+            .maximumSize(1000)
+            .build();
+
     @Autowired
     public TaskStateServiceImpl(BackgroundTaskRepository taskRepository, 
                              ReactiveMongoTemplate mongoTemplate,
-                             ObjectMapper objectMapper) {
+                             ObjectMapper objectMapper,
+                             TaskEventPublisher taskEventPublisher) {
         this.taskRepository = taskRepository;
         this.mongoTemplate = mongoTemplate;
         this.objectMapper = objectMapper;
+        this.taskEventPublisher = taskEventPublisher;
     }
 
     @Override
@@ -153,6 +168,67 @@ public class TaskStateServiceImpl implements TaskStateService {
                 .set("timestamps.updatedAt", now);
         
         return mongoTemplate.updateFirst(query, update, BackgroundTask.class)
+                .then(taskRepository.findById(taskId)
+                        .doOnNext(task -> {
+                            try {
+                                java.util.Map<String, Object> ev = new java.util.HashMap<>();
+                                ev.put("type", "TASK_COMPLETED");
+                                ev.put("taskId", taskId);
+                                ev.put("taskType", task.getTaskType());
+                                ev.put("userId", task.getUserId());
+                                ev.put("result", result);
+                                if (task.getParentTaskId() != null) ev.put("parentTaskId", task.getParentTaskId());
+                                taskEventPublisher.publish(ev);
+                            } catch (Throwable ignore) {}
+                        })
+                        .then());
+    }
+    
+    @Override
+    public Mono<Void> updateTaskResult(String taskId, Object result) {
+        Instant now = Instant.now();
+        
+        // 无论任务当前状态如何，都更新result和updatedAt时间戳
+        Query query = new Query(Criteria.where("_id").is(taskId));
+        
+        Update update = new Update()
+                .set("result", result)
+                .set("timestamps.updatedAt", now);
+        
+        return mongoTemplate.updateFirst(query, update, BackgroundTask.class)
+                .flatMap(updateResult -> {
+                    if (updateResult.getModifiedCount() == 0) {
+                        log.warn("更新任务result失败，任务不存在或未修改: taskId={}", taskId);
+                        return Mono.empty();
+                    }
+                    
+                    log.info("成功更新任务result: taskId={}, resultType={}", 
+                            taskId, result != null ? result.getClass().getSimpleName() : "null");
+                    
+                    // 查询任务并发布更新事件
+                    return taskRepository.findById(taskId)
+                            .doOnNext(task -> {
+                                try {
+                                    // 发布TASK_COMPLETED事件，包含更新后的result
+                                    java.util.Map<String, Object> ev = new java.util.HashMap<>();
+                                    ev.put("type", "TASK_COMPLETED");
+                                    ev.put("taskId", taskId);
+                                    ev.put("taskType", task.getTaskType());
+                                    ev.put("userId", task.getUserId());
+                                    ev.put("result", result);
+                                    if (task.getParentTaskId() != null) {
+                                        ev.put("parentTaskId", task.getParentTaskId());
+                                    }
+                                    
+                                    log.debug("发布任务result更新事件: taskId={}", taskId);
+                                    taskEventPublisher.publish(ev);
+                                } catch (Throwable ex) {
+                                    log.error("发布任务result更新事件失败: taskId={}, error={}", 
+                                            taskId, ex.getMessage(), ex);
+                                }
+                            })
+                            .then();
+                })
                 .then();
     }
     
@@ -173,7 +249,21 @@ public class TaskStateServiceImpl implements TaskStateService {
         }
         
         return mongoTemplate.updateFirst(query, update, BackgroundTask.class)
-                .then();
+                .then(taskRepository.findById(taskId)
+                        .doOnNext(task -> {
+                            try {
+                                java.util.Map<String, Object> ev = new java.util.HashMap<>();
+                                ev.put("type", "TASK_FAILED");
+                                ev.put("taskId", taskId);
+                                ev.put("taskType", task.getTaskType());
+                                ev.put("userId", task.getUserId());
+                                ev.put("error", errorInfo);
+                                ev.put("deadLetter", isDeadLetter);
+                                if (task.getParentTaskId() != null) ev.put("parentTaskId", task.getParentTaskId());
+                                taskEventPublisher.publish(ev);
+                            } catch (Throwable ignore) {}
+                        })
+                        .then());
     }
     
     @Override
@@ -255,7 +345,19 @@ public class TaskStateServiceImpl implements TaskStateService {
                 .set("timestamps.updatedAt", now);
         
         return mongoTemplate.updateFirst(query, update, BackgroundTask.class)
-                .then();
+                .then(taskRepository.findById(taskId)
+                        .doOnNext(task -> {
+                            try {
+                                java.util.Map<String, Object> ev = new java.util.HashMap<>();
+                                ev.put("type", "TASK_CANCELLED");
+                                ev.put("taskId", taskId);
+                                ev.put("taskType", task.getTaskType());
+                                ev.put("userId", task.getUserId());
+                                if (task.getParentTaskId() != null) ev.put("parentTaskId", task.getParentTaskId());
+                                taskEventPublisher.publish(ev);
+                            } catch (Throwable ignore) {}
+                        })
+                        .then());
     }
     
     @Override
@@ -265,8 +367,22 @@ public class TaskStateServiceImpl implements TaskStateService {
     
     @Override
     public Flux<BackgroundTask> getUserTasks(String userId, TaskStatus status, int page, int size) {
-        // 排除摘要相关任务类型
-        List<String> excludeTypes = Arrays.asList("GENERATE_SUMMARY", "BATCH_GENERATE_SUMMARY");
+        // 尝试缓存命中
+        final String cacheKey = buildUserTasksCacheKey(userId, status, page, size);
+        java.util.List<BackgroundTask> cached = userTasksCache.getIfPresent(cacheKey);
+        if (cached != null) {
+            log.debug("[cache hit] getUserTasks key={} size={}", cacheKey, cached.size());
+            return Flux.fromIterable(cached);
+        }
+
+        // 排除摘要相关任务类型和拆书任务类型
+        List<String> excludeTypes = Arrays.asList(
+            "GENERATE_SUMMARY", 
+            "BATCH_GENERATE_SUMMARY",
+            "KNOWLEDGE_EXTRACTION_FANQIE",
+            "KNOWLEDGE_EXTRACTION_TEXT",
+            "KNOWLEDGE_EXTRACTION_GROUP"
+        );
         
         // 按创建时间倒序排列
         PageRequest pageRequest = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "timestamps.createdAt"));
@@ -278,7 +394,7 @@ public class TaskStateServiceImpl implements TaskStateService {
             parentTasksFlux = taskRepository.findParentTasksByUserIdExcludingTypes(userId, excludeTypes, pageRequest);
         }
         
-        // 为每个父任务查询并附加其子任务
+        // 为每个父任务查询并附加其子任务，最终收集列表后写入缓存
         return parentTasksFlux
             .concatMap(parentTask -> {
                 // 首先返回父任务
@@ -297,7 +413,20 @@ public class TaskStateServiceImpl implements TaskStateService {
                 
                 // 合并父任务和子任务
                 return parentFlux.concatWith(childrenFlux);
-            });
+            })
+            .collectList()
+            .doOnNext(list -> {
+                try {
+                    userTasksCache.put(cacheKey, list);
+                    log.debug("[cache put] getUserTasks key={} size={}", cacheKey, list.size());
+                } catch (Throwable ignore) {}
+            })
+            .flatMapMany(Flux::fromIterable);
+    }
+
+    private String buildUserTasksCacheKey(String userId, TaskStatus status, int page, int size) {
+        String st = (status == null) ? "*" : status.name();
+        return userId + ":" + st + ":" + page + ":" + size;
     }
     
     @Override

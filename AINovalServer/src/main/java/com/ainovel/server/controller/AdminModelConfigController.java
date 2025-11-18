@@ -15,11 +15,11 @@ import com.ainovel.server.dto.PublicModelConfigDetailsDTO;
 import com.ainovel.server.dto.PublicModelConfigRequestDTO;
 import com.ainovel.server.dto.PublicModelConfigResponseDTO;
 import com.ainovel.server.dto.PublicModelConfigWithKeysDTO;
+import com.ainovel.server.repository.ModelPricingRepository;
 import com.ainovel.server.service.PublicModelConfigService;
 
 import org.jasypt.encryption.StringEncryptor;
 import lombok.extern.slf4j.Slf4j;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
@@ -33,11 +33,15 @@ public class AdminModelConfigController {
     
     private final PublicModelConfigService publicModelConfigService;
     private final StringEncryptor encryptor;
+    private final ModelPricingRepository modelPricingRepository;
     
     @Autowired
-    public AdminModelConfigController(PublicModelConfigService publicModelConfigService, StringEncryptor encryptor) {
+    public AdminModelConfigController(PublicModelConfigService publicModelConfigService, 
+                                    StringEncryptor encryptor,
+                                    ModelPricingRepository modelPricingRepository) {
         this.publicModelConfigService = publicModelConfigService;
         this.encryptor = encryptor;
+        this.modelPricingRepository = modelPricingRepository;
     }
     
     /**
@@ -97,10 +101,18 @@ public class AdminModelConfigController {
     @PostMapping
     public Mono<ResponseEntity<ApiResponse<PublicModelConfigResponseDTO>>> createConfig(
             @RequestBody PublicModelConfigRequestDTO requestDTO,
-            @RequestParam(value = "validate", required = false, defaultValue = "false") boolean validate) {
+            @RequestParam(value = "validate", required = false, defaultValue = "false") boolean validate,
+            @RequestParam(value = "checkPricing", required = false, defaultValue = "true") boolean checkPricing) {
         PublicModelConfig config = convertToEntity(requestDTO);
         
-        return publicModelConfigService.createConfig(config)
+        // 首先进行定价验证
+        Mono<Void> pricingValidation = Mono.empty();
+        if (checkPricing) {
+            pricingValidation = validateModelPricing(config.getProvider(), config.getModelId());
+        }
+        
+        return pricingValidation
+                .then(publicModelConfigService.createConfig(config))
                 .flatMap(savedConfig -> {
                     if (validate) {
                         log.info("创建配置后立即验证API Key: {}", savedConfig.getId());
@@ -114,6 +126,91 @@ public class AdminModelConfigController {
                     log.error("创建公共模型配置失败", e);
                     return Mono.just(ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage())));
                 });
+    }
+    
+    /**
+     * 验证模型定价信息是否存在
+     */
+    private Mono<Void> validateModelPricing(String provider, String modelId) {
+        return modelPricingRepository.existsByProviderAndModelIdAndActiveTrue(provider, modelId)
+                .flatMap(exists -> {
+                    if (exists) {
+                        log.info("✅ 模型定价验证通过: {}:{}", provider, modelId);
+                        return Mono.<Void>empty();
+                    } else {
+                        log.warn("⚠️ 模型定价不存在，尝试查找备选方案: {}:{}", provider, modelId);
+                        return findFallbackPricingValidation(provider, modelId);
+                    }
+                });
+    }
+    
+    /**
+     * 查找备选定价方案进行验证
+     */
+    private Mono<Void> findFallbackPricingValidation(String provider, String modelId) {
+        // 查找相同模型ID的其他提供商定价
+        return modelPricingRepository.findByModelIdAndActiveTrue(modelId)
+                .filter(pricing -> !provider.equals(pricing.getProvider()))
+                .next()
+                .flatMap(fallbackPricing -> {
+                    log.info("✅ 找到备选定价方案: {}:{} -> {}:{}", 
+                            provider, modelId, fallbackPricing.getProvider(), fallbackPricing.getModelId());
+                    return Mono.<Void>empty();
+                })
+                // 尝试模型名称匹配
+                .switchIfEmpty(modelPricingRepository.findByModelNameAndActiveTrue(modelId)
+                        .filter(pricing -> !provider.equals(pricing.getProvider()))
+                        .next()
+                        .flatMap(fallbackPricing -> {
+                            log.info("✅ 根据模型名称找到备选定价: {}:{} -> {}:{}", 
+                                    provider, modelId, fallbackPricing.getProvider(), fallbackPricing.getModelName());
+                            return Mono.<Void>empty();
+                        }))
+                // 尝试前缀匹配
+                .switchIfEmpty(findByPrefixValidation(provider, modelId))
+                // 如果都没找到，抛出警告但不阻止创建
+                .switchIfEmpty(Mono.fromRunnable(() -> 
+                        log.warn("⚠️ 未找到模型定价信息和备选方案: {}:{}, 建议手动添加定价信息", provider, modelId)));
+    }
+    
+    /**
+     * 前缀匹配验证
+     */
+    private Mono<Void> findByPrefixValidation(String provider, String modelId) {
+        String prefix = extractModelPrefix(modelId);
+        if (prefix.length() < 3) {
+            return Mono.empty();
+        }
+        
+        return modelPricingRepository.findByModelIdStartingWithIgnoreCase(prefix)
+                .filter(pricing -> !provider.equals(pricing.getProvider()))
+                .next()
+                .flatMap(fallbackPricing -> {
+                    log.info("✅ 通过前缀匹配找到备选定价: {}:{} -> {}:{} (前缀: {})", 
+                            provider, modelId, fallbackPricing.getProvider(), fallbackPricing.getModelId(), prefix);
+                    return Mono.<Void>empty();
+                });
+    }
+    
+    /**
+     * 提取模型前缀
+     */
+    private String extractModelPrefix(String modelId) {
+        if (modelId == null || modelId.isEmpty()) {
+            return "";
+        }
+        
+        String[] separators = {"-", "_", "."};
+        
+        for (String separator : separators) {
+            int index = modelId.indexOf(separator);
+            if (index > 0) {
+                return modelId.substring(0, index);
+            }
+        }
+        
+        int halfLength = modelId.length() / 2;
+        return halfLength > 2 ? modelId.substring(0, halfLength) : modelId;
     }
     
     /**

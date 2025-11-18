@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // kDebugMode
 import 'package:ainoval/utils/web_theme.dart';
 import 'package:ainoval/models/context_selection_models.dart';
+// 🎯 拖放功能
+import 'package:ainoval/widgets/common/context_drop_target.dart';
+import 'package:ainoval/utils/logger.dart';
 
 /// 基于MenuAnchor的上下文选择下拉框组件（官方级联菜单实现）
 class ContextSelectionDropdownMenuAnchor extends StatefulWidget {
@@ -87,6 +90,12 @@ class _ContextSelectionDropdownMenuAnchorState
         
         // 分割线
         const Divider(height: 1),
+
+        // 🚀 基本选项：全部设定（与小说基本信息同类的基础项表现）
+        if (_hasSettingsRoot()) _buildAllSettingsQuickMenuItem(context, isDark, menuWidth),
+        
+        // 分割线（与主菜单分隔）
+        if (_hasSettingsRoot()) const Divider(height: 1),
         
         // 菜单项（对长列表进行虚拟化构建）
         ...widget.data.availableItems.map((item) => _buildMenuItem(item, context, menuWidth)),
@@ -102,13 +111,34 @@ class _ContextSelectionDropdownMenuAnchorState
 
   /// 构建触发按钮
   Widget _buildTriggerButton(BuildContext context, MenuController controller, bool isDark) {
-    return Material(
+    // 🎯 构建按钮UI
+    final buttonWidget = Material(
       type: MaterialType.transparency,
       child: InkWell(
         onTap: () {
           if (controller.isOpen) {
             controller.close();
           } else {
+            // 🚀 首次打开时，如果没有任何选择，则预选默认三项：最近5章摘要、最近5章内容、全部设定
+            try {
+              if (widget.data.selectedCount == 0) {
+                final String nid = widget.data.novelId;
+                final List<String> defaultIds = [
+                  'recent_chapters_summary_' + nid,
+                  'recent_chapters_content_' + nid,
+                  'settings_' + nid,
+                ];
+                ContextSelectionData newData = widget.data;
+                for (final id in defaultIds) {
+                  if (widget.data.flatItems.containsKey(id)) {
+                    newData = newData.selectItem(id);
+                  }
+                }
+                if (newData.selectedCount > 0) {
+                  widget.onSelectionChanged(newData);
+                }
+              }
+            } catch (_) {}
             controller.open();
           }
         },
@@ -149,6 +179,125 @@ class _ContextSelectionDropdownMenuAnchorState
               ),
             ],
           ),
+        ),
+      ),
+    );
+    
+    // 🎯 包装为拖放目标
+    return ContextDropTarget(
+      onAccept: (dragData) {
+        AppLogger.i('ContextSelectionDropdownMenuAnchor', 
+            '🎯 接收拖放: ${dragData.title} (${dragData.type})');
+        
+        // 根据拖放的数据类型，自动添加到上下文选择
+        try {
+          // 🎯 智能ID映射
+          String actualId = dragData.id;
+          
+          // 章节和场景需要添加 flat_ 前缀
+          if (actualId.startsWith('chapter_')) {
+            actualId = 'flat_${actualId.substring(8)}';
+          } else if (actualId.startsWith('scene_')) {
+            actualId = 'flat_${actualId.substring(6)}';
+          }
+          // 片段(snippet_xxx)、设定项、设定组(setting_group_xxx)、设定分类(type_xxx)直接使用原始ID，无需转换
+          
+          // 如果flatItems中存在这个ID，则选中它
+          if (widget.data.flatItems.containsKey(actualId)) {
+            final newData = widget.data.selectItem(actualId);
+            widget.onSelectionChanged(newData);
+            
+            AppLogger.i('ContextSelectionDropdownMenuAnchor', 
+                '✅ 成功添加到上下文: ${dragData.title} (ID: $actualId)');
+          } else {
+            AppLogger.w('ContextSelectionDropdownMenuAnchor', 
+                '⚠️ 无法找到对应的上下文项: ${dragData.id} -> $actualId\n'
+                '可用的ID示例: ${widget.data.flatItems.keys.take(5).join(", ")}...');
+          }
+        } catch (e, stackTrace) {
+          AppLogger.e('ContextSelectionDropdownMenuAnchor', 
+              '❌ 添加上下文失败: ${dragData.id}', e, stackTrace);
+        }
+      },
+      child: buttonWidget,
+    );
+  }
+
+  /// 是否存在"全部设定"根节点（settings_${novelId}）
+  bool _hasSettingsRoot() {
+    final String settingsId = 'settings_' + widget.data.novelId;
+    return widget.data.flatItems.containsKey(settingsId);
+  }
+
+  /// 构建“全部设定”快捷菜单项（表现为基础项，类型视觉与小说基本信息一致）
+  Widget _buildAllSettingsQuickMenuItem(BuildContext context, bool isDark, double menuWidth) {
+    final String settingsId = 'settings_' + widget.data.novelId;
+    final bool isSelected = widget.data.selectedItems.containsKey(settingsId) ||
+        (widget.data.flatItems[settingsId]?.selectionState.isSelected == true);
+
+    return MenuItemButton(
+      style: _getMenuItemButtonStyle(menuWidth),
+      onPressed: () {
+        final item = widget.data.flatItems[settingsId];
+        if (item != null) {
+          _onItemTap(item);
+        }
+      },
+      child: SizedBox(
+        width: menuWidth,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // 选择状态图标（使用非容器样式的选择图标）
+            isSelected
+                ? Icon(Icons.check_circle, size: 16, color: Theme.of(context).colorScheme.primary)
+                : Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant, width: 1.5),
+                    ),
+                  ),
+            const SizedBox(width: 12),
+            // 使用“小说基本信息”类型的图标与颜色表现
+            Icon(
+              ContextSelectionType.novelBasicInfo.icon,
+              size: 16,
+              color: _getTypeIconColor(ContextSelectionType.novelBasicInfo, context),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    '全部设定',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                      color: Theme.of(context).colorScheme.onSurface,
+                      height: 1.2,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '角色与世界观的全部设定',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      height: 1.2,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

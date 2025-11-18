@@ -9,6 +9,7 @@ public class TaskFailedEvent extends TaskApplicationEvent {
     
     private final Map<String, Object> errorInfo;
     private final boolean isDeadLetter;
+    private final String parentTaskId;
     
     /**
      * 创建任务失败事件
@@ -22,9 +23,15 @@ public class TaskFailedEvent extends TaskApplicationEvent {
      */
     public TaskFailedEvent(Object source, String taskId, String taskType, String userId, 
                           Map<String, Object> errorInfo, boolean isDeadLetter) {
+        this(source, taskId, taskType, userId, null, errorInfo, isDeadLetter);
+    }
+    
+    public TaskFailedEvent(Object source, String taskId, String taskType, String userId, 
+                          String parentTaskId, Map<String, Object> errorInfo, boolean isDeadLetter) {
         super(source, taskId, taskType, userId);
         this.errorInfo = errorInfo;
         this.isDeadLetter = isDeadLetter;
+        this.parentTaskId = parentTaskId;
     }
     
     /**
@@ -43,5 +50,9 @@ public class TaskFailedEvent extends TaskApplicationEvent {
      */
     public boolean isDeadLetter() {
         return isDeadLetter;
+    }
+    
+    public String getParentTaskId() {
+        return parentTaskId;
     }
 } 

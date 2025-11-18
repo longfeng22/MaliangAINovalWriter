@@ -1,11 +1,9 @@
 package com.ainovel.server.service.impl;
 
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
-import java.util.function.Supplier;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +24,7 @@ import reactor.core.scheduler.Schedulers;
  * 使用轻量级LLM从文本中提取关键词
  */
 @Slf4j
+@Deprecated
 @Service
 public class KeywordExtractionServiceImpl implements KeywordExtractionService {
 
@@ -104,11 +103,9 @@ public class KeywordExtractionServiceImpl implements KeywordExtractionService {
                 return;
             }
             
-            // 这里使用直接的API调用
-            aiService.createAIModelProvider(provider, extractionModelName, apiKey, endPoint)
-                .generateContent(request)
-                .timeout(Duration.ofSeconds(timeoutSeconds))
-                .flatMap(this::parseKeywords)
+            // 统一按配置ID创建 Provider（这里无用户配置ID，可保留直连；如有 userId+configId，则改为 createProviderByConfigId）
+            // 服务已废弃：直接返回空列表，避免直连旧入口
+            Mono.just(java.util.Collections.<String>emptyList())
                 .doOnError(e -> {
                     log.error("关键词提取失败: {}", e.getMessage(), e);
                     sink.success(Collections.emptyList());

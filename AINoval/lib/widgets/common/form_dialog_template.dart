@@ -10,6 +10,9 @@ import 'package:ainoval/widgets/common/prompt_quick_edit_dialog.dart';
 import 'package:ainoval/models/context_selection_models.dart';
 import 'package:ainoval/models/preset_models.dart';
 import 'package:ainoval/models/prompt_models.dart';
+import 'package:ainoval/screens/prompt_market/prompt_market_dialog.dart';
+import 'package:ainoval/widgets/common/top_toast.dart';
+import 'package:ainoval/utils/event_bus.dart';
 import 'dialog_container.dart';
 import 'dialog_header.dart';
 import 'custom_tab_bar.dart';
@@ -595,6 +598,7 @@ class FormFieldFactory {
     void Function(String systemPrompt, String userPrompt)? onTemporaryPromptsSaved,
     Set<PromptTemplateType>? allowedTypes,
     bool onlyVerifiedPublic = false,
+    bool showMarketButton = true, // 🚀 新增：是否显示提示词市场按钮
   }) {
     return FormFieldset(
       title: title,
@@ -607,6 +611,7 @@ class FormFieldFactory {
         aiFeatureType: aiFeatureType,
         allowedTypes: allowedTypes,
         onlyVerifiedPublic: onlyVerifiedPublic,
+        showMarketButton: showMarketButton,
         onEdit: (contextForEdit, currentTemplateId) {
           if (currentTemplateId == null || currentTemplateId.isEmpty) {
             ScaffoldMessenger.of(contextForEdit).showSnackBar(
@@ -790,7 +795,7 @@ class FormFieldFactory {
       // 核心上下文项
       ContextSelectionItem(
         id: 'preset_full_novel_text',
-        title: 'Full Novel Text',
+        title: '全文内容',
         type: ContextSelectionType.fullNovelText,
         subtitle: '包含完整的小说文本内容',
         metadata: {'isHardcoded': true},
@@ -798,7 +803,7 @@ class FormFieldFactory {
       ),
       ContextSelectionItem(
         id: 'preset_full_outline',
-        title: 'Full Outline',
+        title: '完整大纲',
         type: ContextSelectionType.fullOutline,
         subtitle: '包含完整的小说大纲结构',
         metadata: {'isHardcoded': true},
@@ -806,7 +811,7 @@ class FormFieldFactory {
       ),
       ContextSelectionItem(
         id: 'preset_novel_basic_info',
-        title: 'Novel Basic Info',
+        title: '小说基本信息',
         type: ContextSelectionType.novelBasicInfo,
         subtitle: '小说的基本信息（标题、作者、简介等）',
         metadata: {'isHardcoded': true},
@@ -814,7 +819,7 @@ class FormFieldFactory {
       ),
       ContextSelectionItem(
         id: 'preset_recent_chapters_content',
-        title: 'Recent 5 Chapters Content',
+        title: '最近章节内容',
         type: ContextSelectionType.recentChaptersContent,
         subtitle: '最近5章的内容',
         metadata: {'isHardcoded': true},
@@ -822,7 +827,7 @@ class FormFieldFactory {
       ),
       ContextSelectionItem(
         id: 'preset_recent_chapters_summary',
-        title: 'Recent 5 Chapters Summary',
+        title: '最近章节摘要',
         type: ContextSelectionType.recentChaptersSummary,
         subtitle: '最近5章的摘要',
         metadata: {'isHardcoded': true},
@@ -832,7 +837,7 @@ class FormFieldFactory {
       // 结构化上下文
       ContextSelectionItem(
         id: 'preset_settings',
-        title: 'Character & World Settings',
+        title: '全部设定',
         type: ContextSelectionType.settings,
         subtitle: '角色和世界观设定',
         metadata: {'isHardcoded': true},
@@ -840,7 +845,7 @@ class FormFieldFactory {
       ),
       ContextSelectionItem(
         id: 'preset_snippets',
-        title: 'Reference Snippets',
+        title: '参考片段',
         type: ContextSelectionType.snippets,
         subtitle: '参考片段和素材',
         metadata: {'isHardcoded': true},
@@ -850,7 +855,7 @@ class FormFieldFactory {
       // 当前场景上下文
       ContextSelectionItem(
         id: 'preset_current_chapter',
-        title: 'Current Chapter',
+        title: '当前章节',
         type: ContextSelectionType.chapters,
         subtitle: '当前章节内容',
         metadata: {'isHardcoded': true},
@@ -858,7 +863,7 @@ class FormFieldFactory {
       ),
       ContextSelectionItem(
         id: 'preset_current_scene',
-        title: 'Current Scene',
+        title: '当前场景',
         type: ContextSelectionType.scenes,
         subtitle: '当前场景内容',
         metadata: {'isHardcoded': true},
@@ -890,6 +895,7 @@ class _PromptTemplateDropdown extends StatelessWidget {
     this.onEdit,
     this.allowedTypes,
     this.onlyVerifiedPublic = false,
+    this.showMarketButton = true,
   });
 
   final String? selectedTemplateId;
@@ -898,6 +904,7 @@ class _PromptTemplateDropdown extends StatelessWidget {
   final void Function(BuildContext context, String? currentTemplateId)? onEdit;
   final Set<PromptTemplateType>? allowedTypes;
   final bool onlyVerifiedPublic;
+  final bool showMarketButton;
 
   @override
   Widget build(BuildContext context) {
@@ -989,6 +996,8 @@ class _PromptTemplateDropdown extends StatelessWidget {
           options: templates,
           selectedId: validSelectedValue,
           onChanged: onTemplateSelected,
+          aiFeatureType: aiFeatureType,
+          showMarketButton: showMarketButton,
           onEdit: validSelectedValue == null
               ? null
               : () => onEdit?.call(context, validSelectedValue),
@@ -1029,6 +1038,8 @@ class _PromptTemplateDropdown extends StatelessWidget {
         id: 'system_default_${featureType.toString()}',
         name: '系统默认模板',
         type: PromptTemplateType.system,
+        isPublic: false,
+        hidePrompts: false,
       ));
       debugPrint('  + 系统默认模板: system_default_${featureType.toString()} - 系统默认模板');
     }
@@ -1040,6 +1051,8 @@ class _PromptTemplateDropdown extends StatelessWidget {
         name: userPrompt.name,
         type: PromptTemplateType.private,
         usageCount: userPrompt.usageCount,
+        isPublic: false,
+        hidePrompts: false,
       ));
       debugPrint('  + 用户模板: ${userPrompt.id} - ${userPrompt.name}');
     }
@@ -1051,6 +1064,8 @@ class _PromptTemplateDropdown extends StatelessWidget {
         name: publicPrompt.name,
         type: PromptTemplateType.public,
         isVerified: publicPrompt.isVerified,
+        isPublic: true, // 🆕 标记为公开模板
+        hidePrompts: publicPrompt.hidePrompts, // 🆕 使用公开模板的hidePrompts字段
       ));
       debugPrint('  + 公开模板: public_${publicPrompt.id} - ${publicPrompt.name}');
     }
@@ -1094,6 +1109,8 @@ class PromptTemplateOption {
   final PromptTemplateType type;
   final int? usageCount; // 仅 private 关心
   final bool isVerified; // 仅 public 关心
+  final bool hidePrompts; // 🆕 是否隐藏提示词（用于公开模板）
+  final bool isPublic; // 🆕 是否为公开模板
 
   const PromptTemplateOption({
     required this.id,
@@ -1101,6 +1118,8 @@ class PromptTemplateOption {
     required this.type,
     this.usageCount,
     this.isVerified = false,
+    this.hidePrompts = false,
+    this.isPublic = false,
   });
 }
 
@@ -1110,13 +1129,17 @@ class _PromptTemplatePrettyDropdown extends StatelessWidget {
     required this.options,
     required this.selectedId,
     required this.onChanged,
+    required this.aiFeatureType,
     this.onEdit,
+    this.showMarketButton = true,
   });
 
   final List<PromptTemplateOption> options;
   final String? selectedId;
   final ValueChanged<String?> onChanged;
+  final String aiFeatureType;
   final VoidCallback? onEdit;
+  final bool showMarketButton;
 
   @override
   Widget build(BuildContext context) {
@@ -1177,17 +1200,50 @@ class _PromptTemplatePrettyDropdown extends StatelessWidget {
                 const SizedBox(width: 4),
                 // 右侧编辑按钮（当已选择模板时显示）
                 if (hasSelection)
+                  Builder(
+                    builder: (context) {
+                      // 判断是否应该置灰编辑按钮：公开模板且作者隐藏了提示词
+                      final shouldDisable = selected.isPublic && selected.hidePrompts;
+                      final tooltipMessage = shouldDisable ? '作者隐藏提示词' : '编辑提示词';
+                      
+                      return Tooltip(
+                        message: tooltipMessage,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: shouldDisable ? null : onEdit,
+                          child: Padding(
+                            padding: const EdgeInsets.all(2),
+                            child: Icon(
+                              Icons.edit_outlined,
+                              size: 16,
+                              color: shouldDisable
+                                  ? (isDark ? WebTheme.darkGrey400.withOpacity(0.5) : WebTheme.grey400.withOpacity(0.5))
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                // 🚀 提示词市场按钮（在编辑按钮之后）
+                if (showMarketButton) ...[
+                  const SizedBox(width: 4),
                   Tooltip(
-                    message: '编辑提示词',
+                    message: '提示词市场',
                     child: InkWell(
                       borderRadius: BorderRadius.circular(6),
-                      onTap: onEdit,
-                      child: const Padding(
-                        padding: EdgeInsets.all(2),
-                        child: Icon(Icons.edit_outlined, size: 16),
+                      onTap: () => _openPromptMarket(context),
+                      child: Padding(
+                        padding: const EdgeInsets.all(2),
+                        child: Icon(
+                          Icons.store_outlined,
+                          size: 16,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
                       ),
                     ),
                   ),
+                ],
               ],
             ),
           ),
@@ -1260,6 +1316,51 @@ class _PromptTemplatePrettyDropdown extends StatelessWidget {
     ).then((String? value) {
       onChanged(value);
     });
+  }
+
+  /// 🚀 打开提示词市场对话框
+  Future<void> _openPromptMarket(BuildContext context) async {
+    // 解析当前的 AI 功能类型
+    AIFeatureType? featureType;
+    try {
+      featureType = AIFeatureTypeHelper.fromApiString(aiFeatureType.toUpperCase());
+    } catch (e) {
+      debugPrint('⚠️ 无法解析AI功能类型: $aiFeatureType');
+      if (context.mounted) {
+        TopToast.error(context, '无法打开提示词市场：功能类型无效');
+      }
+      return;
+    }
+
+    // 打开提示词市场对话框
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => PromptMarketDialog(
+        initialFeatureType: featureType,
+      ),
+    );
+
+    // 处理导航请求：通过事件总线保持左侧布局跳转到「提示词与预设」
+    if (result != null && result['navigate_to'] == 'unified_management') {
+      if (context.mounted) {
+        try { EventBus.instance.fire(const NavigateToUnifiedManagement()); } catch (_) {}
+      }
+      return;
+    }
+
+    // 处理返回结果
+    if (result != null && result['id'] != null && context.mounted) {
+      // 选中提示词模板
+      final templateId = result['id'] as String;
+      // 🔧 提示词市场的模板都是公开模板，需要添加 public_ 前缀以匹配下拉框选项
+      final prefixedId = 'public_$templateId';
+      debugPrint('📌 [_openPromptMarket] 从市场选择模板: 原始ID=$templateId, 带前缀ID=$prefixedId');
+      onChanged(prefixedId);
+      
+      // 显示成功提示（因为在 prompt_market_dialog 中已经显示过了，这里就不再显示了）
+      // TopToast.success(context, '已选择提示词: ${result['name']}');
+    }
   }
 
   static IconData _iconForType(PromptTemplateType? type) {

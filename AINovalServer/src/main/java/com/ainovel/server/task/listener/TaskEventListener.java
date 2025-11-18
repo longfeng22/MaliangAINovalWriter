@@ -7,7 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import java.nio.charset.StandardCharsets;
-import com.ainovel.server.web.controller.TaskStatusController.TaskSseBroker;
+import com.ainovel.server.task.events.TaskEventPublisher;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
@@ -23,11 +23,11 @@ import java.util.Map;
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "task.transport", havingValue = "rabbit", matchIfMissing = true)
 public class TaskEventListener {
 
-    private final TaskSseBroker sseBroker;
+    private final TaskEventPublisher sseBroker;
     private final ObjectMapper objectMapper;
 
     @Autowired
-    public TaskEventListener(TaskSseBroker sseBroker, @Qualifier("taskObjectMapper") ObjectMapper objectMapper) {
+    public TaskEventListener(TaskEventPublisher sseBroker, @Qualifier("taskObjectMapper") ObjectMapper objectMapper) {
         this.sseBroker = sseBroker;
         this.objectMapper = objectMapper;
     }
@@ -57,7 +57,7 @@ public class TaskEventListener {
             Map<String, Object> payload;
             try {
                 String body = new String(message.getBody(), StandardCharsets.UTF_8);
-                payload = objectMapper.readValue(body, Map.class);
+                payload = objectMapper.readValue(body, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>(){});
             } catch (Exception parseEx) {
                 log.warn("任务事件消息体解析失败，使用空载荷: {}", parseEx.getMessage());
                 payload = new java.util.HashMap<>();
@@ -65,7 +65,7 @@ public class TaskEventListener {
             // 补充必要字段，统一成 SSE 事件格式
             payload.putIfAbsent("type", eventType != null ? eventType : "TASK_UNKNOWN");
             payload.putIfAbsent("taskId", taskId);
-            // 透传到 SSE Broker
+            // 透传到 Publisher
             sseBroker.publish(payload);
             
             // 确认消息已处理

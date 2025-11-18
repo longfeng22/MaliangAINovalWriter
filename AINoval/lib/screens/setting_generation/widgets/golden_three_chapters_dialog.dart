@@ -13,7 +13,8 @@ import 'package:ainoval/models/user_ai_model_config_model.dart';
 import 'package:ainoval/blocs/ai_config/ai_config_bloc.dart';
 import 'package:ainoval/blocs/universal_ai/universal_ai_bloc.dart';
 import 'package:ainoval/blocs/universal_ai/universal_ai_event.dart';
-// import 'package:ainoval/blocs/universal_ai/universal_ai_state.dart';
+import 'package:ainoval/blocs/universal_ai/universal_ai_state.dart';
+import 'package:ainoval/widgets/common/credit_confirmation_dialog.dart';
 import 'package:ainoval/utils/context_selection_helper.dart';
 import 'package:ainoval/models/context_selection_models.dart';
 import 'package:ainoval/config/app_config.dart';
@@ -376,15 +377,20 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
       }
 
       final model = _selectedModel!;
-      // 积分预估（公共模型时）
+      AppLogger.i('GoldenThreeChaptersDialog', '🔍 开始生成检查: 模型=${model.displayName}, isPublic=${model.isPublic}, id=${model.id}');
+      
+      // 🚀 修复：公共模型需要积分确认
       if (model.isPublic) {
-        final req = _buildPreviewRequest();
-        if (req == null) {
-          TopToast.warning(context, '表单不完整');
-          return;
+        AppLogger.i('GoldenThreeChaptersDialog', '🚀 检测到公共模型，显示积分确认对话框');
+        final shouldContinue = await _showCreditConfirmation();
+        AppLogger.i('GoldenThreeChaptersDialog', '📋 积分确认结果: shouldContinue=$shouldContinue');
+        if (!shouldContinue) {
+          AppLogger.i('GoldenThreeChaptersDialog', '❌ 用户取消了积分确认，停止生成');
+          return; // 用户取消了操作
         }
-        context.read<UniversalAIBloc>().add(EstimateCostEvent(req));
-        // 简化：不拦截确认，直接继续
+        AppLogger.i('GoldenThreeChaptersDialog', '✅ 积分确认通过，继续生成');
+      } else {
+        AppLogger.i('GoldenThreeChaptersDialog', '🔧 私有模型，跳过积分确认');
       }
 
       // 派发到 BLoC（由 BLoC 统一组装 UniversalAIRequest 并流式生成）
@@ -472,6 +478,39 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
     }
   }
 
+  // 🚀 使用公共积分确认对话框
+  Future<bool> _showCreditConfirmation() async {
+    AppLogger.i('GoldenThreeChaptersDialog', '🔧 进入积分确认方法');
+    try {
+      // 构建预估请求
+      AppLogger.i('GoldenThreeChaptersDialog', '🔧 构建预估请求...');
+      final estimationRequest = _buildPreviewRequest();
+      if (estimationRequest == null) {
+        AppLogger.e('GoldenThreeChaptersDialog', '❌ 无法构建预估请求');
+        TopToast.error(context, '无法构建预估请求');
+        return false;
+      }
+      AppLogger.i('GoldenThreeChaptersDialog', '✅ 预估请求构建成功');
+
+      // 使用公共积分确认对话框
+      AppLogger.i('GoldenThreeChaptersDialog', '🔧 显示积分确认对话框...');
+      final result = await showCreditConfirmationDialog(
+        context: context,
+        modelName: _selectedModel!.displayName,
+        featureName: '黄金三章生成',
+        request: estimationRequest,
+      );
+      
+      AppLogger.i('GoldenThreeChaptersDialog', '📋 对话框返回结果: $result');
+      return result;
+
+    } catch (e) {
+      AppLogger.e('GoldenThreeChaptersDialog', '❌ 积分预估失败', e);
+      TopToast.error(context, '积分预估失败: $e');
+      return false;
+    }
+  }
+
   // 为公共模型创建临时配置
   UserAIModelConfigModel createPublicModelConfig(UnifiedAIModel model) {
     final public = (model as PublicAIModel).publicConfig;
@@ -489,6 +528,7 @@ class _GoldenThreeChaptersDialogState extends State<GoldenThreeChaptersDialog> {
     });
   }
 }
+
 
 void showGoldenThreeChaptersDialog(
   BuildContext context, {

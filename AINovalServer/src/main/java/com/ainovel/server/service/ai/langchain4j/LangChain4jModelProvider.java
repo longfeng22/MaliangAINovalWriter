@@ -479,8 +479,27 @@ public abstract class LangChain4jModelProvider implements AIModelProvider, ToolC
 
                 @Override
                 public void onCompleteResponse(ChatResponse response) {
+                    long totalMs = System.currentTimeMillis() - requestStartTime;
                     log.info("LLM响应完成，总耗时: {}ms, 模型: {}, 响应元数据: {}",
-                            System.currentTimeMillis() - requestStartTime, modelName, response.metadata());
+                            totalMs, modelName, response != null ? response.metadata() : null);
+                    // 若未收到任何partial且最终响应包含文本，作为补偿发出一次文本
+                    if (!hasReceivedContent.get() && response != null && response.aiMessage() != null) {
+                        try {
+                            String finalText = response.aiMessage().text();
+                            if (finalText != null && !finalText.trim().isEmpty()) {
+                                Sinks.EmitResult emitResult = sink.tryEmitNext(finalText);
+                                if (emitResult.isFailure()) {
+                                    log.warn("在完成时补发最终文本失败: {}", emitResult);
+                                } else {
+                                    hasReceivedContent.set(true);
+                                    firstChunkTime.compareAndSet(0, System.currentTimeMillis());
+                                    log.debug("在完成时补发最终文本，长度: {}", finalText.length());
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.warn("在完成时读取最终文本失败: {}", e.getMessage());
+                        }
+                    }
                     // 使用replay sink，无需检查订阅者数量，直接完成
                     Sinks.EmitResult result = sink.tryEmitComplete();
                     if (result.isFailure()) {

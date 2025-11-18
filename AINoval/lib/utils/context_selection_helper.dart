@@ -47,6 +47,25 @@ class ContextSelectionHelper {
       //AppLogger.d('ContextSelectionHelper', '✅ 应用初始选择: ${contextData.selectedCount}个已选项');
     }
     
+    // 🚀 默认预选三项：最近5章摘要、最近5章内容、全部设定（如果存在）
+    try {
+      if (novel != null && contextData.selectedCount == 0) {
+        final String nid = novel.id;
+        final List<String> defaultIds = <String>[
+          'recent_chapters_summary_' + nid,
+          'recent_chapters_content_' + nid,
+          'settings_' + nid,
+        ];
+        ContextSelectionData preselected = contextData;
+        for (final id in defaultIds) {
+          if (preselected.flatItems.containsKey(id)) {
+            preselected = preselected.selectItem(id);
+          }
+        }
+        contextData = preselected;
+      }
+    } catch (_) {}
+    
     return contextData;
   }
   

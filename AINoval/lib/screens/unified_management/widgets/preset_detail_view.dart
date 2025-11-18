@@ -17,6 +17,10 @@ import 'package:ainoval/utils/logger.dart';
 import 'package:ainoval/widgets/common/index.dart';
 import 'package:ainoval/widgets/common/form_dialog_template.dart';
 import 'package:ainoval/widgets/common/dynamic_form_field_widget.dart';
+import 'package:ainoval/widgets/common/share_template_dialog.dart';
+import 'package:ainoval/widgets/common/top_toast.dart';
+import 'package:ainoval/services/api_service/repositories/prompt_market_repository.dart';
+import 'package:ainoval/services/api_service/base/api_client.dart';
 // 移除未使用的 multi_select 引用
 
 /// 预设详情视图
@@ -593,30 +597,46 @@ class _PresetDetailViewState extends State<PresetDetailView>
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (!preset.isSystem) ...[
-                _buildCompactActionButton(
-                  icon: Icons.save,
-                  tooltip: '保存',
-                  onPressed: _hasUnsavedChanges ? () => _savePreset(preset) : null,
-                  isDisabled: !_hasUnsavedChanges,
+              // 🆕 分享按钮（最左侧）
+              if (!preset.isSystem && !preset.isPublic) ...[
+                _buildTextButton(
+                  icon: Icons.share_rounded,
+                  label: '分享',
+                  tooltip: '分享预设到市场',
+                  onPressed: () => _showShareDialog(preset),
+                  backgroundColor: const Color(0xFF007AFF),
+                  textColor: Colors.white,
                 ),
                 const SizedBox(width: 4),
               ],
-              _buildCompactActionButton(
+              
+              if (!preset.isSystem) ...[
+                _buildTextButton(
+                  icon: Icons.save,
+                  label: '保存',
+                  tooltip: '保存',
+                  onPressed: _hasUnsavedChanges ? () => _savePreset(preset) : null,
+                ),
+                const SizedBox(width: 4),
+              ],
+              _buildTextButton(
                 icon: Icons.save_as,
+                label: '另存为',
                 tooltip: '另存为',
                 onPressed: () => _saveAsPreset(preset),
               ),
               const SizedBox(width: 4),
-              _buildCompactActionButton(
+              _buildTextButton(
                 icon: preset.showInQuickAccess ? Icons.star : Icons.star_outline,
+                label: '快捷',
                 tooltip: preset.showInQuickAccess ? '取消快捷访问' : '设为快捷访问',
                 onPressed: () => _toggleQuickAccess(preset),
               ),
               if (!preset.isSystem) ...[
                 const SizedBox(width: 4),
-                _buildCompactActionButton(
+                _buildTextButton(
                   icon: Icons.delete_outline,
+                  label: '删除',
                   tooltip: '删除',
                   onPressed: () => _deletePreset(preset),
                   isDestructive: true,
@@ -629,49 +649,131 @@ class _PresetDetailViewState extends State<PresetDetailView>
     );
   }
 
-  // 移除未使用的 _buildActionButton 以消除告警
-  
-  /// 构建紧凑型操作按钮
-  Widget _buildCompactActionButton({
+  /// 构建文本按钮（图标+文字）
+  Widget _buildTextButton({
     required IconData icon,
+    required String label,
     required String tooltip,
     VoidCallback? onPressed,
+    Color? backgroundColor,
+    Color? textColor,
     bool isDestructive = false,
-    bool isDisabled = false,
   }) {
     final isDark = WebTheme.isDarkMode(context);
+    final defaultBackgroundColor = isDark ? WebTheme.darkGrey200 : WebTheme.grey100;
+    final defaultTextColor = onPressed != null 
+        ? (isDestructive ? WebTheme.error : (isDark ? WebTheme.darkGrey600 : WebTheme.grey700))
+        : (isDark ? WebTheme.darkGrey400 : WebTheme.grey400);
+    
     return Tooltip(
       message: tooltip,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: isDisabled ? null : onPressed,
+      preferBelow: false,
+      child: Container(
+        height: 28,
+        decoration: BoxDecoration(
+          color: backgroundColor ?? defaultBackgroundColor,
           borderRadius: BorderRadius.circular(4),
-          child: Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(
-                color: isDisabled
-                    ? (isDark ? WebTheme.darkGrey300 : WebTheme.grey300)
-                    : (isDark ? WebTheme.darkGrey300 : WebTheme.grey300),
-                width: 1,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(4),
+            onTap: onPressed,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    icon,
+                    size: 14,
+                    color: textColor ?? defaultTextColor,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: textColor ?? defaultTextColor,
+                    ),
+                  ),
+                ],
               ),
-            ),
-            child: Icon(
-              icon,
-              size: 14,
-              color: isDisabled
-                  ? WebTheme.getSecondaryTextColor(context)
-                  : isDestructive 
-                      ? WebTheme.error
-                      : WebTheme.getTextColor(context),
             ),
           ),
         ),
       ),
     );
+  }
+  
+  /// 显示分享对话框
+  Future<void> _showShareDialog(AIPromptPreset preset) async {
+    // 🚀 获取AI功能类型
+    AIFeatureType? featureType;
+    try {
+      featureType = AIFeatureTypeHelper.fromApiString(preset.aiFeatureType.toUpperCase());
+    } catch (e) {
+      AppLogger.error(_tag, '无法解析AI功能类型: ${preset.aiFeatureType}', e);
+      if (mounted) {
+        TopToast.error(context, '无法确定预设类型');
+      }
+      return;
+    }
+    
+    // 🚀 获取积分奖励信息
+    int? rewardPoints;
+    try {
+      final marketRepo = PromptMarketRepository(ApiClient());
+      final allPoints = await marketRepo.getAllRewardPoints();
+      final featureTypeKey = featureType.toApiString();
+      rewardPoints = allPoints[featureTypeKey];
+    } catch (e) {
+      AppLogger.error(_tag, '获取积分奖励信息失败: $e');
+      rewardPoints = 1; // 默认1积分
+    }
+    
+    if (!mounted) return;
+    
+    await showDialog(
+      context: context,
+      builder: (context) => ShareTemplateDialog(
+        templateId: preset.presetId,
+        templateName: preset.presetName ?? '未命名预设',
+        description: preset.presetDescription,
+        featureType: featureType!,
+        isPublic: preset.isPublic,
+        reviewStatus: null, // 预设暂时没有审核状态
+        usageCount: preset.useCount,
+        rewardPoints: rewardPoints,
+        hidePrompts: false, // 预设默认不隐藏
+        hasSettingGenerationConfig: false, // 🆕 预设目前不包含设定生成配置
+        onSubmitReview: (hidePrompts) async {
+          Navigator.of(context).pop();
+          await _submitPresetForReview(preset, hidePrompts);
+        },
+      ),
+    );
+  }
+  
+  /// 提交预设审核
+  Future<void> _submitPresetForReview(AIPromptPreset preset, bool hidePrompts) async {
+    try {
+      // TODO: 实现预设分享API，需要支持hidePrompts参数
+      // 当前预设系统还没有对应的分享接口，需要后端支持
+      if (mounted) {
+        final hideTip = hidePrompts ? '（已隐藏提示词）' : '';
+        TopToast.info(context, '预设分享功能开发中$hideTip，敬请期待');
+      }
+      
+      // 刷新数据
+      context.read<PresetBloc>().add(const LoadAllPresetData());
+    } catch (e) {
+      AppLogger.error(_tag, '提交审核失败: $e');
+      if (mounted) {
+        TopToast.error(context, '提交失败: $e');
+      }
+    }
   }
 
   /// 构建标签栏
@@ -1353,6 +1455,8 @@ class _PresetDetailViewState extends State<PresetDetailView>
         return AIRequestType.generation;
       case AIFeatureType.novelCompose:
         return AIRequestType.novelCompose;
+      case AIFeatureType.storyPlotContinuation:
+        return AIRequestType.expansion; // 使用扩展类型
       default:
         return AIRequestType.expansion; // 默认类型
     }

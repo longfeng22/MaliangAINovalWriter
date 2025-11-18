@@ -64,7 +64,9 @@ public class LocalTaskTransport implements TaskTransport {
         this.eventPublisher = eventPublisher;
         this.taskSubmissionService = taskSubmissionService;
         this.taskConversionConfig = taskConversionConfig;
-        this.taskSink = Sinks.many().unicast().onBackpressureBuffer();
+        // ✅ 修复：使用 multicast() 替代 unicast()，支持并发提交任务
+        // unicast() 只支持单订阅者且不支持并发写入，会导致 FAIL_NON_SERIALIZED 错误
+        this.taskSink = Sinks.many().multicast().onBackpressureBuffer();
         this.concurrency = Math.max(1, concurrency);
         this.retryDelays = parseRetryDelays(retryDelaysStr);
         startConsumersIfNeeded();
@@ -73,11 +75,40 @@ public class LocalTaskTransport implements TaskTransport {
     @Override
     public Mono<Void> dispatchTask(String taskId, String userId, String taskType, Object parameters) {
         return Mono.fromRunnable(() -> {
-            Sinks.EmitResult result = taskSink.tryEmitNext(taskId);
-            if (result.isFailure()) {
-                log.error("本地队列入队失败: taskId={}, result={}", taskId, result);
-                throw new IllegalStateException("Local task queue emit failed: " + result);
+            // ✅ 并发写入重试机制：在 FAIL_NON_SERIALIZED 时自动重试
+            // multicast() Sink 在高并发下可能出现序列化冲突，需要重试
+            int maxRetries = 100; // 最多重试100次
+            int retryCount = 0;
+            
+            while (retryCount < maxRetries) {
+                Sinks.EmitResult result = taskSink.tryEmitNext(taskId);
+                
+                if (result.isSuccess()) {
+                    if (retryCount > 0) {
+                        log.debug("任务入队成功（重试{}次）: taskId={}", retryCount, taskId);
+                    }
+                    return; // 成功，退出
+                }
+                
+                if (result == Sinks.EmitResult.FAIL_NON_SERIALIZED) {
+                    // 并发冲突，短暂等待后重试
+                    retryCount++;
+                    try {
+                        Thread.sleep(1); // 等待1毫秒
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("Task dispatch interrupted: " + taskId, e);
+                    }
+                } else {
+                    // 其他错误，直接失败（不打印堆栈，因为是业务异常）
+                    log.error("本地队列入队失败: taskId={}, result={}, retries={}", taskId, result, retryCount);
+                    throw new IllegalStateException("Local task queue emit failed: " + result);
+                }
             }
+            
+            // 超过最大重试次数（不打印堆栈，因为是业务异常）
+            log.error("本地队列入队失败（超过最大重试次数）: taskId={}, maxRetries={}", taskId, maxRetries);
+            throw new IllegalStateException("Local task queue emit failed after " + maxRetries + " retries");
         });
     }
 
@@ -123,7 +154,7 @@ public class LocalTaskTransport implements TaskTransport {
                 return taskStateService.trySetRunning(taskId, executionNodeId)
                     .flatMap(updated -> {
                         if (!updated) return Mono.empty();
-                        eventPublisher.publishEvent(new TaskStartedEvent(this, taskId, task.getTaskType(), task.getUserId(), executionNodeId));
+                        eventPublisher.publishEvent(new TaskStartedEvent(this, taskId, task.getTaskType(), task.getUserId(), executionNodeId, task.getParentTaskId()));
                         return executeTask(task);
                     });
             });
@@ -170,7 +201,7 @@ public class LocalTaskTransport implements TaskTransport {
 
             // 其他任务：先持久化，再发布 Completed 事件（与 Rabbit 流程保持一致）
             return taskStateService.recordCompletion(task.getId(), result.getResult())
-                    .doOnSuccess(v -> eventPublisher.publishEvent(new TaskCompletedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), result.getResult())));
+                    .doOnSuccess(v -> eventPublisher.publishEvent(new TaskCompletedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), task.getParentTaskId(), result.getResult())));
         } else if (result.isRetryable()) {
             long delay = getRetryDelay(task.getRetryCount());
             int nextRetry = task.getRetryCount() + 1;
@@ -183,10 +214,10 @@ public class LocalTaskTransport implements TaskTransport {
                 "message", result.getError() != null ? result.getError().getMessage() : "non-retryable",
                 "exceptionClass", result.getError() != null ? result.getError().getClass().getName() : ""
             );
-            eventPublisher.publishEvent(new TaskFailedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), errorInfo, false));
+            eventPublisher.publishEvent(new TaskFailedEvent(this, task.getId(), task.getTaskType(), task.getUserId(), task.getParentTaskId(), errorInfo, false));
             return taskStateService.recordFailure(task.getId(), errorInfo, false);
         } else if (result.isCancelled()) {
-            eventPublisher.publishEvent(new TaskCancelledEvent(this, task.getId(), task.getTaskType(), task.getUserId()));
+            eventPublisher.publishEvent(new TaskCancelledEvent(this, task.getId(), task.getTaskType(), task.getUserId(), task.getParentTaskId()));
             return taskStateService.recordCancellation(task.getId());
         }
         return Mono.error(new IllegalStateException("未知的任务结果状态"));

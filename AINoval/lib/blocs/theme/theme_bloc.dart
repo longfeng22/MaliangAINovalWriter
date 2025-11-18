@@ -80,19 +80,9 @@ class ThemeBloc extends Bloc<ThemeEvent, ThemeState> {
     ThemeToggled event,
     Emitter<ThemeState> emit,
   ) async {
-    ThemeMode newThemeMode;
-    switch (state.themeMode) {
-      case ThemeMode.light:
-        newThemeMode = ThemeMode.dark;
-        break;
-      case ThemeMode.dark:
-        newThemeMode = ThemeMode.system;
-        break;
-      case ThemeMode.system:
-        newThemeMode = ThemeMode.light;
-        break;
-    }
-    
+    // 简化为“黑/白”二态切换：浅色 <-> 深色
+    final ThemeMode newThemeMode =
+        (state.themeMode == ThemeMode.dark) ? ThemeMode.light : ThemeMode.dark;
     add(ThemeChanged(newThemeMode));
   }
 }

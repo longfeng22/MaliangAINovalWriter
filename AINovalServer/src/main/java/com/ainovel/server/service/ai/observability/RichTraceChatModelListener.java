@@ -55,7 +55,7 @@ public class RichTraceChatModelListener implements ChatModelListener {
 
     @Override
     public void onResponse(ChatModelResponseContext context) {
-        //log.info("🚀 RichTraceChatModelListener.onResponse 被调用");
+        log.info("🚀 RichTraceChatModelListener.onResponse 被调用");
         try {
             // 从attributes中获取Trace对象并增强响应信息（支持跨线程）
             enrichTraceWithResponseDetails(context);
@@ -355,10 +355,11 @@ public class RichTraceChatModelListener implements ChatModelListener {
 
                     // 流式场景：仅增强，不在监听器中发布事件，留给装饰器在流结束时发布（保证聚合内容存在）
                     if (trace.getType() == com.ainovel.server.domain.model.observability.LLMTrace.CallType.STREAMING_CHAT) {
-                        log.debug("Streaming 请求：在监听器中仅增强，不发布事件: traceId={}", trace.getTraceId());
+                        log.info("🔄 Streaming 请求：在监听器中仅增强，不发布事件: traceId={}, type={}", trace.getTraceId(), trace.getType());
                     } else {
+                        log.info("📤 非流式请求：监听器发布事件: traceId={}, type={}", trace.getTraceId(), trace.getType());
                         eventPublisher.publishEvent(new LLMTraceEvent(this, trace));
-                        log.debug("LLM追踪事件已发布（含完整tokenUsage）: traceId={}", trace.getTraceId());
+                        log.info("✅ LLM追踪事件已发布（含完整tokenUsage）: traceId={}", trace.getTraceId());
                         // 非流式：发布后清理
                         traceContextManager.clearTrace();
                         log.debug("已清理trace上下文: traceId={}", trace.getTraceId());
@@ -372,10 +373,11 @@ public class RichTraceChatModelListener implements ChatModelListener {
                 try {
                     if (trace.getType() != com.ainovel.server.domain.model.observability.LLMTrace.CallType.STREAMING_CHAT) {
                         // 非流式：增强失败时仍需发布事件（但不重复）
+                        log.info("📤 增强失败-非流式请求：监听器发布事件: traceId={}, type={}", trace.getTraceId(), trace.getType());
                         eventPublisher.publishEvent(new LLMTraceEvent(this, trace));
-                        log.debug("增强失败但已发布LLM追踪事件: traceId={}", trace.getTraceId());
+                        log.info("⚠️ 增强失败但已发布LLM追踪事件: traceId={}", trace.getTraceId());
                     } else {
-                        log.debug("流式请求增强失败：不在监听器中发布事件，等待装饰器处理: traceId={}", trace.getTraceId());
+                        log.info("🔄 增强失败-流式请求：不在监听器中发布事件，等待装饰器处理: traceId={}, type={}", trace.getTraceId(), trace.getType());
                     }
                 } catch (Exception publishError) {
                     log.error("发布LLM追踪事件失败: traceId={}", trace.getTraceId(), publishError);
@@ -456,6 +458,13 @@ public class RichTraceChatModelListener implements ChatModelListener {
                     requiresPostDeduction, streamFeatureType, isPublicModel,
                     providerSpecific != null ? providerSpecific.keySet() : java.util.Collections.emptySet());
             
+            // 设定生成的工具编排：若打了跳过计费标记，则跳过发布调整事件
+            Object skipBilling = providerSpecific.get(com.ainovel.server.service.billing.BillingKeys.SKIP_BILLING_FOR_TOOL_ORCHESTRATION);
+            if (Boolean.TRUE.equals(skipBilling)) {
+                log.info("计费跳过：工具编排链路，traceId={}", trace.getTraceId());
+                return;
+            }
+
             if (Boolean.TRUE.equals(requiresPostDeduction) && streamFeatureType != null && Boolean.TRUE.equals(isPublicModel)) {
                 // 获取真实的token使用量
                 if (trace.getResponse() != null && trace.getResponse().getMetadata() != null 
@@ -465,12 +474,12 @@ public class RichTraceChatModelListener implements ChatModelListener {
                     String userId = trace.getUserId();
                     
                     if (tokenUsage.getInputTokenCount() != null && tokenUsage.getOutputTokenCount() != null && userId != null) {
-                        // 解耦扣费：发布计费请求事件，由编排器处理幂等等
+                        // 🚀 重构：发布费用调整事件，而不是直接扣费事件
                         try {
-                            billingEventPublisher.publishEvent(new com.ainovel.server.service.ai.observability.events.BillingRequestedEvent(this, trace));
-                            log.info("🧾 已发布BillingRequestedEvent: traceId={}", trace.getTraceId());
+                            billingEventPublisher.publishEvent(new com.ainovel.server.service.ai.observability.events.CreditAdjustmentRequestedEvent(this, trace));
+                            log.info("🧾 已发布CreditAdjustmentRequestedEvent: traceId={}", trace.getTraceId());
                         } catch (Exception e) {
-                            log.error("发布BillingRequestedEvent失败: traceId={}", trace.getTraceId(), e);
+                            log.error("发布CreditAdjustmentRequestedEvent失败: traceId={}", trace.getTraceId(), e);
                         }
                     } else {
                         log.warn("公共模型流式请求缺少必要的扣费信息: userId={}, inputTokens={}, outputTokens={}", 

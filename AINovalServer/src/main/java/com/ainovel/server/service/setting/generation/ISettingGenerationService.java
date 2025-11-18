@@ -37,6 +37,58 @@ public interface ISettingGenerationService {
     );
     
     /**
+     * 启动支持知识库集成的设定生成
+     * 
+     * @param userId 用户ID
+     * @param novelId 小说ID
+     * @param initialPrompt 用户提示词
+     * @param promptTemplateId 提示词模板ID
+     * @param modelConfigId 模型配置ID
+     * @param usePublicTextModel 是否使用公共文本模型
+     * @param knowledgeBaseMode 知识库模式 (NONE/REUSE/IMITATION/HYBRID)
+     * @param knowledgeBaseIds 知识库ID列表
+     * @param knowledgeBaseCategories 知识库分类映射
+     * @return 会话Mono
+     */
+    Mono<SettingGenerationSession> startGenerationWithKnowledgeBase(
+        String userId,
+        String novelId,
+        String initialPrompt,
+        String promptTemplateId,
+        String modelConfigId,
+        Boolean usePublicTextModel,
+        String knowledgeBaseMode,
+        java.util.List<String> knowledgeBaseIds,
+        java.util.Map<String, java.util.List<String>> knowledgeBaseCategories
+    );
+    
+    /**
+     * 混合模式知识库集成（区分复用和参考）
+     * 
+     * @param userId 用户ID
+     * @param novelId 小说ID（可选）
+     * @param initialPrompt 初始提示词
+     * @param promptTemplateId 提示词模板ID
+     * @param modelConfigId 模型配置ID
+     * @param usePublicTextModel 是否使用公共文本模型
+     * @param reuseKnowledgeBaseIds 用于复用的知识库ID列表
+     * @param referenceKnowledgeBaseIds 用于参考的知识库ID列表（可选）
+     * @param knowledgeBaseCategories 知识库分类过滤
+     * @return 生成会话
+     */
+    Mono<SettingGenerationSession> startGenerationWithKnowledgeBaseHybrid(
+        String userId,
+        String novelId,
+        String initialPrompt,
+        String promptTemplateId,
+        String modelConfigId,
+        Boolean usePublicTextModel,
+        java.util.List<String> reuseKnowledgeBaseIds,
+        java.util.List<String> referenceKnowledgeBaseIds,
+        java.util.Map<String, java.util.List<String>> knowledgeBaseCategories
+    );
+    
+    /**
      * 从小说设定创建编辑会话
      * 
      * 用户选择模式说明：
@@ -102,6 +154,15 @@ public interface ISettingGenerationService {
     );
     
     /**
+     * 删除节点及其所有子节点
+     * 
+     * @param sessionId 会话ID
+     * @param nodeId 节点ID
+     * @return 被删除的所有节点ID列表（包括子节点）
+     */
+    Mono<List<String>> deleteNode(String sessionId, String nodeId);
+    
+    /**
      * 保存生成的设定
      */
     Mono<SaveResult> saveGeneratedSettings(String sessionId, String novelId);
@@ -150,6 +211,90 @@ public interface ISettingGenerationService {
      * @param promptTemplateId 使用的提示词模板ID（用于决定策略与提示风格）
      */
     Mono<Void> adjustSession(String sessionId, String adjustmentPrompt, String modelConfigId, String promptTemplateId);
+    
+    /**
+     * 启动设定生成（结构化输出循环模式）
+     * 不使用工具调用，直接输出JSON，循环最多N次直到满足质量要求
+     *
+     * @param userId 用户ID
+     * @param novelId 小说ID（可为null）
+     * @param initialPrompt 初始提示词
+     * @param promptTemplateId 提示词模板ID
+     * @param modelConfigId 模型配置ID
+     * @param maxIterations 最大迭代次数（默认3）
+     * @return 会话Mono
+     */
+    Mono<SettingGenerationSession> startGenerationStructured(
+        String userId,
+        String novelId,
+        String initialPrompt,
+        String promptTemplateId,
+        String modelConfigId,
+        Integer maxIterations
+    );
+    
+    /**
+     * 启动设定生成（结构化输出循环模式 + 知识库集成）
+     *
+     * @param userId 用户ID
+     * @param novelId 小说ID（可为null）
+     * @param initialPrompt 初始提示词
+     * @param promptTemplateId 提示词模板ID
+     * @param modelConfigId 模型配置ID
+     * @param maxIterations 最大迭代次数（默认3）
+     * @param knowledgeBaseMode 知识库模式 (NONE/REUSE/IMITATION/HYBRID)
+     * @param knowledgeBaseIds 知识库ID列表（REUSE/IMITATION模式使用）
+     * @param reuseKnowledgeBaseIds 用于复用的知识库ID列表（HYBRID模式专用，优先级高于knowledgeBaseIds）
+     * @param referenceKnowledgeBaseIds 用于参考的知识库ID列表（HYBRID模式专用）
+     * @param knowledgeBaseCategories 知识库分类映射
+     * @return 会话Mono
+     */
+    Mono<SettingGenerationSession> startGenerationStructuredWithKnowledgeBase(
+        String userId,
+        String novelId,
+        String initialPrompt,
+        String promptTemplateId,
+        String modelConfigId,
+        Integer maxIterations,
+        String knowledgeBaseMode,
+        java.util.List<String> knowledgeBaseIds,
+        java.util.List<String> reuseKnowledgeBaseIds,
+        java.util.List<String> referenceKnowledgeBaseIds,
+        java.util.Map<String, java.util.List<String>> knowledgeBaseCategories
+    );
+    
+    /**
+     * 🔧 新增：支持前端传入sessionId的重载方法
+     * 启动设定生成（结构化输出循环模式 + 知识库集成）
+     *
+     * @param sessionId 前端生成的sessionId（可选，如果为null则后端自动生成）
+     * @param userId 用户ID
+     * @param novelId 小说ID（可为null）
+     * @param initialPrompt 初始提示词
+     * @param promptTemplateId 提示词模板ID
+     * @param modelConfigId 模型配置ID
+     * @param maxIterations 最大迭代次数（默认3）
+     * @param knowledgeBaseMode 知识库模式 (NONE/REUSE/IMITATION/HYBRID)
+     * @param knowledgeBaseIds 知识库ID列表（REUSE/IMITATION模式使用）
+     * @param reuseKnowledgeBaseIds 用于复用的知识库ID列表（HYBRID模式专用，优先级高于knowledgeBaseIds）
+     * @param referenceKnowledgeBaseIds 用于参考的知识库ID列表（HYBRID模式专用）
+     * @param knowledgeBaseCategories 知识库分类映射
+     * @return 会话Mono
+     */
+    Mono<SettingGenerationSession> startGenerationStructuredWithKnowledgeBase(
+        String sessionId,
+        String userId,
+        String novelId,
+        String initialPrompt,
+        String promptTemplateId,
+        String modelConfigId,
+        Integer maxIterations,
+        String knowledgeBaseMode,
+        java.util.List<String> knowledgeBaseIds,
+        java.util.List<String> reuseKnowledgeBaseIds,
+        java.util.List<String> referenceKnowledgeBaseIds,
+        java.util.Map<String, java.util.List<String>> knowledgeBaseCategories
+    );
     
     /**
      * 策略模板信息

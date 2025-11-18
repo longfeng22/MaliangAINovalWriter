@@ -19,6 +19,11 @@ public final class PublicModelBillingNormalizer {
     public static void normalize(AIRequest request, Map<String, String> config) {
         if (request == null || config == null) return;
 
+        // 工具编排链路跳过计费
+        if ("true".equalsIgnoreCase(config.get(BillingKeys.SKIP_BILLING_FOR_TOOL_ORCHESTRATION))) {
+            return;
+        }
+
         // 识别公共模型标记
         boolean usedPublic = parseBool(config.get(BillingKeys.USED_PUBLIC_MODEL))
                 || parseBool(config.get("isPublicModel")); // 兼容老字段
@@ -97,6 +102,11 @@ public final class PublicModelBillingNormalizer {
             String correlationId,
             String idempotencyKey) {
         if (dto == null) return;
+        // 工具编排链路跳过计费（若上层已设定）
+        Object skip = dto.getParameters() != null ? dto.getParameters().get(BillingKeys.SKIP_BILLING_FOR_TOOL_ORCHESTRATION) : null;
+        if (skip != null && "true".equalsIgnoreCase(String.valueOf(skip))) {
+            return;
+        }
         // 写 metadata
         if (dto.getMetadata() == null) dto.setMetadata(new java.util.HashMap<>());
         if (usedPublicModel) dto.getMetadata().put(BillingKeys.USED_PUBLIC_MODEL, true);

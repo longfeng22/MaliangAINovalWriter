@@ -71,6 +71,7 @@ class _PromptQuickEditDialogState extends State<PromptQuickEditDialog> with Tick
               updatedAt: pub.updatedAt,
               isPublic: true,
               isVerified: pub.isVerified,
+              settingGenerationConfig: pub.settingGenerationConfig, // 🆕 传递设定生成配置
             );
           }
         } else {

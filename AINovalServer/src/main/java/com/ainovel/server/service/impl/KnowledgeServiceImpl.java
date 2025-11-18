@@ -211,12 +211,6 @@ public class KnowledgeServiceImpl implements KnowledgeService {
                                 return indexContent(novelId, "character", character.getId(), content);
                             })
                             .then();
-                }))
-                .then(Mono.defer(() -> {
-                    // 获取小说的所有设定信息
-                    return novelService.getNovelSettings(novelId)
-                            .flatMap(setting -> indexContent(novelId, "setting", setting.getId(), setting.getContent()))
-                            .then();
                 }));
     }
     

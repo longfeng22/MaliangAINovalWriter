@@ -558,7 +558,7 @@ class _NovelSettingDetailContentState extends State<_NovelSettingDetailContent> 
     if (_isLoading) {
       return Container(
         decoration: BoxDecoration(
-          color: isDark ? WebTheme.darkGrey900 : WebTheme.getBackgroundColor(context),
+          color: WebTheme.getCardColor(context),
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
@@ -576,7 +576,7 @@ class _NovelSettingDetailContentState extends State<_NovelSettingDetailContent> 
     
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? WebTheme.darkGrey900 : WebTheme.getBackgroundColor(context),
+        color: WebTheme.getCardColor(context),
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
@@ -1173,7 +1173,7 @@ class _NovelSettingDetailContentState extends State<_NovelSettingDetailContent> 
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                               decoration: BoxDecoration(
                                 color: isSelected 
-                                    ? (isDark ? WebTheme.darkGrey700 : WebTheme.grey100)
+                                    ? WebTheme.getTextColor(context).withOpacity(0.12)
                                     : Colors.transparent,
                               ),
                               child: Row(
@@ -1192,9 +1192,9 @@ class _NovelSettingDetailContentState extends State<_NovelSettingDetailContent> 
                                       style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                                        color: isSelected 
-                                            ? (isDark ? WebTheme.grey200 : WebTheme.grey900)
-                                            : (isDark ? WebTheme.grey300 : WebTheme.grey700),
+                                    color: isSelected 
+                                        ? WebTheme.getTextColor(context)
+                                        : WebTheme.getSecondaryTextColor(context),
                                       ),
                                     ),
                                   ),
@@ -1783,14 +1783,14 @@ class _NovelSettingDetailContentState extends State<_NovelSettingDetailContent> 
             ),
             child: TextFormField(
               controller: _descriptionController,
-              maxLines: 3, // 进一步缩小到3行
-              minLines: 3, // 设置最小行数
+              maxLines: 10, // 增加到10行以显示更多内容
+              minLines: 10, // 设置最小行数为10行
               decoration: const InputDecoration(
                 border: InputBorder.none,
-                contentPadding: EdgeInsets.all(10), // 从12缩小到10
+                contentPadding: EdgeInsets.all(10),
                 hintText: '输入描述内容...',
               ),
-              style: const TextStyle(fontSize: 12), // 缩小字体
+              style: const TextStyle(fontSize: 12),
             ),
           ),
           

@@ -43,9 +43,13 @@ public class TaskExecutorServiceImpl implements TaskExecutorService {
     public TaskExecutorServiceImpl(List<BackgroundTaskExecutable<?, ?>> executables, TaskStateService taskStateService) {
         this.taskStateService = taskStateService;
         for (BackgroundTaskExecutable<?, ?> executable : executables) {
-            String taskType = executable.getTaskType();
-            executors.put(taskType, executable);
-            logger.info("已注册任务执行器: {}", taskType);
+            // ✅ 使用 getSupportedTaskTypes() 支持多任务类型执行器
+            List<String> supportedTypes = executable.getSupportedTaskTypes();
+            for (String taskType : supportedTypes) {
+                executors.put(taskType, executable);
+                logger.info("已注册任务执行器: {} (执行器类: {})", 
+                    taskType, executable.getClass().getSimpleName());
+            }
         }
     }
     

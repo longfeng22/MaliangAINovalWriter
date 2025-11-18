@@ -52,7 +52,7 @@ public class LLMTrace {
     /**
      * 唯一链路ID
      */
-    @Indexed
+    @Indexed(unique = true, sparse = true)
     private String traceId;
 
     /**

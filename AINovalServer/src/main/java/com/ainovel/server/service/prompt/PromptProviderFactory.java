@@ -19,6 +19,7 @@ import com.ainovel.server.service.prompt.providers.TextRefactorPromptProvider;
 import com.ainovel.server.service.prompt.providers.TextSummaryPromptProvider;
 import com.ainovel.server.service.prompt.providers.SettingTreeGenerationPromptProvider;
 import com.ainovel.server.service.prompt.providers.NovelComposePromptProvider;
+import com.ainovel.server.service.prompt.providers.StoryPlotContinuationPromptProvider;
 
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -66,6 +67,9 @@ public class PromptProviderFactory {
     @Autowired
     private NovelComposePromptProvider novelComposePromptProvider;
 
+    @Autowired
+    private StoryPlotContinuationPromptProvider storyPlotContinuationPromptProvider;
+
     @PostConstruct
     public void initializeProviders() {
         // 注册所有提示词提供器
@@ -80,6 +84,7 @@ public class PromptProviderFactory {
         registerProvider(sceneBeatGenerationPromptProvider);
         registerProvider(settingTreeGenerationPromptProvider);
         registerProvider(novelComposePromptProvider);
+        registerProvider(storyPlotContinuationPromptProvider);
         
         log.info("提示词提供器注册完成，可用类型: {}", providers.keySet());
     }

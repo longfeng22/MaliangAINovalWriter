@@ -27,12 +27,16 @@ public class LLMTraceEventListener {
     @Async("llmTraceExecutor")
     @EventListener
     public void handleLLMTraceEvent(LLMTraceEvent event) {
+        log.info("📥 接收到LLMTraceEvent: traceId={}, source={}, type={}", 
+                event.getTrace().getTraceId(), 
+                event.getSource().getClass().getSimpleName(),
+                event.getTrace().getType());
         traceService.save(event.getTrace())
                 .subscribeOn(Schedulers.boundedElastic()) // 使用弹性调度器处理IO
                 .subscribe(
-                        saved -> log.debug("LLM追踪记录保存成功: traceId={}, provider={}, model={}", 
+                        saved -> log.info("💾 LLM追踪记录保存成功: traceId={}, provider={}, model={}", 
                                 saved.getTraceId(), saved.getProvider(), saved.getModel()),
-                        error -> log.error("LLM追踪记录保存失败: traceId={}", 
+                        error -> log.error("❌ LLM追踪记录保存失败: traceId={}", 
                                 event.getTrace().getTraceId(), error)
                 );
     }

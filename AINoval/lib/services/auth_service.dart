@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:ainoval/config/app_config.dart';
 import 'package:ainoval/services/api_service/base/api_client.dart';
@@ -35,6 +36,53 @@ class AuthService {
   // 当前认证状态
   AuthState _currentState = AuthState.unauthenticated();
   AuthState get currentState => _currentState;
+
+  /// 确保Access Token在给定的最小有效期内可用
+  /// 如果即将过期（小于[minValidity]），尝试使用refresh token刷新
+  /// 返回true表示可用（或刷新成功），false表示刷新失败/不可用
+  Future<bool> ensureAccessTokenFresh({Duration minValidity = const Duration(seconds: 60)}) async {
+    final token = AppConfig.authToken;
+    if (token == null || token.isEmpty) return false;
+    try {
+      final remaining = _getRemainingValidity(token);
+      if (remaining != null && remaining > minValidity) {
+        return true; // 足够新鲜
+      }
+      // 即将过期或无法解析：尝试刷新
+      final ok = await refreshToken();
+      return ok;
+    } catch (_) {
+      // 解析失败则尝试刷新一次
+      try {
+        final ok = await refreshToken();
+        return ok;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+
+  /// 计算JWT剩余有效期
+  Duration? _getRemainingValidity(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length < 2) return null;
+      final payload = parts[1];
+      // base64Url 解码
+      String normalized = payload.padRight(payload.length + (4 - payload.length % 4) % 4, '=');
+      final jsonStr = utf8.decode(base64Url.decode(normalized));
+      final map = json.decode(jsonStr) as Map<String, dynamic>;
+      final exp = map['exp'];
+      if (exp is int) {
+        final expTime = DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+        final now = DateTime.now().toUtc();
+        return expTime.difference(now);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
   
   /// 初始化认证服务
   Future<void> init() async {
@@ -42,8 +90,28 @@ class AuthService {
     final token = prefs.getString(_tokenKey);
     
     if (token != null) {
+      // 🔧 检查token是否过期（避免使用缓存的过期token尝试连接）
+      if (_isTokenExpired(token)) {
+        AppLogger.w('AuthService', '🗑️ 检测到过期的缓存token，自动清除以避免连接风暴');
+        
+        // 清除所有认证信息
+        await prefs.remove(_tokenKey);
+        await prefs.remove(_refreshTokenKey);
+        await prefs.remove(_userIdKey);
+        await prefs.remove(_usernameKey);
+        
+        // 保持未认证状态
+        _currentState = AuthState.unauthenticated();
+        _authStateController.add(_currentState);
+        
+        AppLogger.i('AuthService', '✅ 已清除过期token，用户需要重新登录');
+        return; // 不恢复session
+      }
+      
       final userId = prefs.getString(_userIdKey);
       final username = prefs.getString(_usernameKey);
+      
+      AppLogger.i('AuthService', '✅ 从缓存恢复有效token（用户: $username）');
       
       // 设置认证状态
       _currentState = AuthState.authenticated(
@@ -59,6 +127,66 @@ class AuthService {
       
       // 发送认证状态更新
       _authStateController.add(_currentState);
+    } else {
+      AppLogger.i('AuthService', 'ℹ️ 无缓存token，用户需要登录');
+    }
+  }
+  
+  /// 🔧 检查JWT token是否过期
+  /// 
+  /// 通过解码JWT的payload部分，检查exp（过期时间）字段
+  /// 注意：这里不验证签名，只检查过期时间
+  bool _isTokenExpired(String token) {
+    try {
+      // JWT格式：header.payload.signature
+      final parts = token.split('.');
+      if (parts.length != 3) {
+        AppLogger.w('AuthService', 'Token格式无效（不是JWT格式）');
+        return true;
+      }
+      
+      // Base64解码payload
+      String payload = parts[1];
+      // 处理Base64 URL-safe编码（替换 - 和 _）
+      payload = payload.replaceAll('-', '+').replaceAll('_', '/');
+      
+      // 补齐padding
+      switch (payload.length % 4) {
+        case 2:
+          payload += '==';
+          break;
+        case 3:
+          payload += '=';
+          break;
+      }
+      
+      final decoded = utf8.decode(base64.decode(payload));
+      final data = json.decode(decoded) as Map<String, dynamic>;
+      
+      // 检查exp字段
+      final exp = data['exp'];
+      if (exp == null) {
+        AppLogger.w('AuthService', 'Token缺少exp字段');
+        return true;
+      }
+      
+      // JWT的exp是Unix时间戳（秒）
+      final expiryDate = DateTime.fromMillisecondsSinceEpoch(exp * 1000);
+      final now = DateTime.now();
+      final isExpired = now.isAfter(expiryDate);
+      
+      if (isExpired) {
+        final expiredAgo = now.difference(expiryDate);
+        AppLogger.w('AuthService', '⏰ Token已过期（过期时间: $expiryDate，已过期: ${expiredAgo.inMinutes}分钟）');
+      } else {
+        final remainingTime = expiryDate.difference(now);
+        AppLogger.d('AuthService', '✅ Token有效（剩余时间: ${remainingTime.inHours}小时${remainingTime.inMinutes % 60}分钟）');
+      }
+      
+      return isExpired;
+    } catch (e, stackTrace) {
+      AppLogger.e('AuthService', '解析Token失败，视为已过期', e, stackTrace);
+      return true; // 解码失败，认为已过期
     }
   }
   

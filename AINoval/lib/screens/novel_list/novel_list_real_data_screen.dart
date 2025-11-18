@@ -41,6 +41,14 @@ import 'package:ainoval/blocs/prompt_new/prompt_new_event.dart';
 import 'package:ainoval/blocs/preset/preset_bloc.dart';
 import 'package:ainoval/blocs/preset/preset_event.dart';
 import 'package:ainoval/screens/unified_management/unified_management_screen.dart' deferred as unified_mgmt;
+import 'package:ainoval/screens/prompt_market/prompt_market_dialog.dart';
+import 'package:ainoval/blocs/theme/theme_bloc.dart';
+import 'package:ainoval/blocs/theme/theme_event.dart';
+import 'package:ainoval/screens/knowledge_base/fanqie_novel_search_screen.dart';
+import 'package:ainoval/screens/knowledge_base/public_knowledge_base_list_screen.dart';
+import 'package:ainoval/screens/knowledge_base/my_knowledge_base_list_screen.dart';
+import 'package:ainoval/widgets/debug/sse_debug_panel.dart';
+import 'package:ainoval/utils/event_bus.dart';
 
 // 提供匿名模式下的登录弹窗与鉴权工具方法
 Future<void> showLoginDialog(BuildContext context) async {
@@ -106,6 +114,12 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
         context.read<NovelListBloc>().add(LoadNovels());
       }
     });
+
+    // 订阅“跳到提示词与预设”事件，保持左侧布局
+    EventBus.instance.on<NavigateToUnifiedManagement>().listen((_) {
+      if (!mounted) return;
+      _handleNavigation('unified_management');
+    });
   }
 
   void _handleTagClick(String newPrompt) {
@@ -125,6 +139,15 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
     setState(() {
       _selectedModel = model;
     });
+  }
+
+  /// 🔧 显示SSE调试面板（仅开发环境）
+  void _showSseDebugPanel(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => const SseDebugPanel(),
+    );
   }
 
   void _handleNavigation(String route) {
@@ -151,6 +174,14 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
           return;
         }
         setState(() { _currentRoute = 'analytics'; });
+        break;
+      case 'prompt_market':
+        // 提示词市场 - 弹出对话框
+        if (!(context.read<AuthBloc>().state is AuthAuthenticated)) {
+          showLoginDialog(context);
+          return;
+        }
+        _showPromptMarket();
         break;
       case 'unified_management':
         // 需要登录
@@ -204,9 +235,47 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
         }
         _showSettingsDialog();
         break;
+      case 'fanqie_search':
+        // 番茄小说搜索（AI拆书）- 作为子视图显示
+        if (!(context.read<AuthBloc>().state is AuthAuthenticated)) {
+          showLoginDialog(context);
+          return;
+        }
+        setState(() { _currentRoute = 'fanqie_search'; });
+        break;
+      case 'public_knowledge_bases':
+        // 公共知识库列表 - 作为子视图显示
+        if (!(context.read<AuthBloc>().state is AuthAuthenticated)) {
+          showLoginDialog(context);
+          return;
+        }
+        setState(() { _currentRoute = 'public_knowledge_bases'; });
+        break;
+      case 'my_knowledge_bases':
+        // 我的知识库列表 - 作为子视图显示
+        if (!(context.read<AuthBloc>().state is AuthAuthenticated)) {
+          showLoginDialog(context);
+          return;
+        }
+        setState(() { _currentRoute = 'my_knowledge_bases'; });
+        break;
       default:
         // 其他导航逻辑可以在此处添加
         break;
+    }
+  }
+
+  /// 显示提示词市场对话框
+  void _showPromptMarket() async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => const PromptMarketDialog(),
+    );
+    
+    // 处理导航请求
+    if (result != null && result['navigate_to'] == 'unified_management') {
+      _handleNavigation('unified_management');
     }
   }
 
@@ -331,15 +400,23 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
                                       ))),
                       ),
                       const Spacer(),
+                      // 🔧 开发环境：SSE调试按钮
+                      if (AppConfig.environment == Environment.development) ...[
+                        IconButton(
+                          icon: const Icon(Icons.bug_report, size: 20),
+                          onPressed: () => _showSseDebugPanel(context),
+                          color: Colors.orange,
+                          tooltip: 'SSE连接调试',
+                        ),
+                        const SizedBox(width: 4),
+                      ],
                       // Theme Toggle
                       IconButton(
                         icon: Icon(
                           isDark ? Icons.light_mode : Icons.dark_mode,
                           size: 20,
                         ),
-                        onPressed: () {
-                          // Toggle theme
-                        },
+                        onPressed: () => context.read<ThemeBloc>().add(ThemeToggled()),
                         color: WebTheme.getSecondaryTextColor(context),
                       ),
                       const SizedBox(width: 4),
@@ -396,7 +473,13 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
                                       return const Center(child: CircularProgressIndicator());
                                     },
                                   )
-                                : LayoutBuilder(
+                                : _currentRoute == 'fanqie_search'
+                                    ? const FanqieNovelSearchScreen()
+                                    : _currentRoute == 'public_knowledge_bases'
+                                        ? const PublicKnowledgeBaseListScreen()
+                                        : _currentRoute == 'my_knowledge_bases'
+                                            ? const MyKnowledgeBaseListScreen()
+                                            : LayoutBuilder(
                                 builder: (context, constraints) {
                                   final width = constraints.maxWidth;
                                   final bool isNarrow = width < 1024;
@@ -445,27 +528,29 @@ class _NovelListRealDataScreenState extends State<NovelListRealDataScreen> {
                                           ),
                                         ),
                                         // Right Panel - 下方自适应宽度与高度
-                                        Container(
-                                          padding: panelPadding,
-                                          decoration: BoxDecoration(
-                                            color: WebTheme.getCardColor(context),
-                                            borderRadius: BorderRadius.circular(12),
-                                            border: Border.all(
-                                              color: WebTheme.getBorderColor(context),
-                                              width: 1,
+                                        Expanded(
+                                          child: Container(
+                                            padding: panelPadding,
+                                            decoration: BoxDecoration(
+                                              color: WebTheme.getCardColor(context),
+                                              borderRadius: BorderRadius.circular(12),
+                                              border: Border.all(
+                                                color: WebTheme.getBorderColor(context),
+                                                width: 1,
+                                              ),
                                             ),
-                                          ),
-                                          child: BlocProvider(
-                                            create: (context) => NovelImportBloc(
-                                              novelRepository: RepositoryProvider.of<NovelRepository>(context),
-                                            ),
-                                            child: BlocListener<NovelImportBloc, NovelImportState>(
-                                              listener: (context, importState) {
-                                                if (importState is NovelImportSuccess && mounted) {
-                                                  context.read<NovelListBloc>().add(RefreshNovels());
-                                                }
-                                              },
-                                              child: const NovelGridRealData(),
+                                            child: BlocProvider(
+                                              create: (context) => NovelImportBloc(
+                                                novelRepository: RepositoryProvider.of<NovelRepository>(context),
+                                              ),
+                                              child: BlocListener<NovelImportBloc, NovelImportState>(
+                                                listener: (context, importState) {
+                                                  if (importState is NovelImportSuccess && mounted) {
+                                                    context.read<NovelListBloc>().add(RefreshNovels());
+                                                  }
+                                                },
+                                                child: const NovelGridRealData(),
+                                              ),
                                             ),
                                           ),
                                         ),

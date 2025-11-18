@@ -7,6 +7,7 @@ import 'package:ainoval/utils/event_bus.dart';
 import 'package:ainoval/utils/task_translation.dart';
 import 'package:ainoval/utils/web_theme.dart';
 import 'package:ainoval/widgets/common/top_toast.dart';
+import 'package:ainoval/widgets/common/loading_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 // import 'package:ainoval/screens/editor/controllers/editor_screen_controller.dart';
@@ -15,6 +16,7 @@ import 'package:ainoval/services/api_service/repositories/editor_repository.dart
 import 'package:ainoval/models/novel_structure.dart';
 import 'package:ainoval/services/task_event_cache.dart';
 import 'package:ainoval/utils/logger.dart';
+import 'package:ainoval/config/app_config.dart';
 import 'package:ainoval/utils/quill_helper.dart';
 import 'package:ainoval/blocs/credit/credit_bloc.dart';
 import 'package:ainoval/blocs/editor/editor_bloc.dart';
@@ -41,6 +43,7 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
   bool _isLoadingHistory = false;
   bool _hasMoreHistory = true;
   int _currentHistoryPage = 0;
+  final ScrollController _scrollController = ScrollController();
 
   String _formatTime(dynamic ts) {
     try {
@@ -57,6 +60,108 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
     } catch (_) {
       return '';
     }
+  }
+  
+  /// 获取任务的模型信息
+  String _getModelInfo(Map<String, dynamic> task) {
+    final String taskType = task['taskType'] ?? '';
+    
+    // 处理剧情推演子任务
+    if (taskType == 'STORY_PREDICTION_SINGLE') {
+      // 从任务进度或结果中提取模型信息
+      final progress = task['progress'];
+      final result = task['result'];
+      
+      // 尝试从进度中获取模型信息
+      if (progress is Map<String, dynamic>) {
+        final predictionProgress = progress['predictionProgress'];
+        if (predictionProgress is List && predictionProgress.isNotEmpty) {
+          final firstPrediction = predictionProgress[0];
+          if (firstPrediction is Map<String, dynamic>) {
+            final modelName = firstPrediction['modelName'];
+            if (modelName != null && modelName.isNotEmpty) {
+              return '模型: $modelName';
+            }
+          }
+        }
+      }
+      
+      // 尝试从结果中获取模型信息
+      if (result is Map<String, dynamic>) {
+        final predictions = result['predictions'];
+        if (predictions is List && predictions.isNotEmpty) {
+          final firstPrediction = predictions[0];
+          if (firstPrediction is Map<String, dynamic>) {
+            final modelName = firstPrediction['modelName'];
+            if (modelName != null && modelName.isNotEmpty) {
+              return '模型: $modelName';
+            }
+          }
+        }
+      }
+    }
+    
+    // 处理自动续写子任务
+    if (taskType == 'GENERATE_SINGLE_CHAPTER') {
+      final result = task['result'];
+      if (result is Map<String, dynamic>) {
+        final summaryModel = result['summaryModelName'];
+        final contentModel = result['contentModelName'];
+        
+        List<String> modelParts = [];
+        if (summaryModel != null && summaryModel.isNotEmpty) {
+          modelParts.add('生成摘要 $summaryModel');
+        }
+        if (contentModel != null && contentModel.isNotEmpty) {
+          modelParts.add('生成内容 $contentModel');
+        }
+        
+        if (modelParts.isNotEmpty) {
+          return modelParts.join(' ');
+        }
+      }
+    }
+    
+    return '';
+  }
+
+  /// 获取详细模型信息（摘要/内容模型）
+  String _getDetailedModelInfo(Map<String, dynamic> task) {
+    final String taskType = task['taskType'] ?? '';
+    final progress = task['progress'];
+    final result = task['result'];
+
+    // 自动续写：Prefer result.summaryModelName/contentModelName
+    if (taskType == 'GENERATE_SINGLE_CHAPTER') {
+      if (result is Map<String, dynamic>) {
+        final s = (result['summaryModelName'] ?? '').toString();
+        final c = (result['contentModelName'] ?? '').toString();
+        final parts = <String>[];
+        if (s.isNotEmpty) parts.add('摘要生成 $s');
+        if (c.isNotEmpty) parts.add('内容生成 $c');
+        return parts.join('  ·  ');
+      }
+    }
+
+    // 剧情推演：若结果中包含predictions，取第一个的modelName
+    if (taskType == 'STORY_PREDICTION_SINGLE') {
+      String? model;
+      if (progress is Map<String, dynamic>) {
+        final list = progress['predictionProgress'];
+        if (list is List && list.isNotEmpty && list.first is Map) {
+          model = (list.first['modelName'] ?? '').toString();
+        }
+      }
+      if ((model == null || model.isEmpty) && result is Map<String, dynamic>) {
+        final preds = result['predictions'];
+        if (preds is List && preds.isNotEmpty && preds.first is Map) {
+          model = (preds.first['modelName'] ?? '').toString();
+        }
+      }
+      return model != null && model.isNotEmpty ? '模型 $model' : '';
+    }
+
+    return '';
   }
 
   @override
@@ -78,12 +183,28 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
         ..addAll(snap.childrenByParent);
       AppLogger.i('AITaskCenterPanel', '初始化快照: events=${_events.length}, tasks=${_tasks.length}, parents=${_childrenByParent.length}');
     } catch (_) {}
-    // 面板不再直接订阅 SSE，统一通过全局事件总线接收，避免重复连接导致后端日志重复
-    // 但为避免因全局未启动监听而"空白"，此处幂等触发一次开始监听
-    try { EventBus.instance.fire(const StartTaskEventsListening()); } catch (_) {}
+    // 🔧 面板不再直接订阅 SSE，统一通过全局事件总线接收
+    // 🔧 重要：不再主动触发 StartTaskEventsListening，避免多组件重复触发导致连接风暴
+    // 🔧 SSE连接由 main.dart 统一管理，登录时自动启动，面板只需被动接收事件即可
+    // if (AppConfig.authToken != null && AppConfig.authToken!.isNotEmpty) {
+    //   try { EventBus.instance.fire(const StartTaskEventsListening()); } catch (_) {}
+    // } else {
+    //   AppLogger.w('AITaskCenterPanel', '跳过启动全局任务事件监听：未检测到有效token');
+    // }
     
     // 初始加载历史任务
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadHistoryTasks();
+    });
+
+    // 监听滚动触底，自动加载更多（每次5条父任务）
+    _scrollController.addListener(() {
+      if (!_hasMoreHistory || _isLoadingHistory) return;
+      if (!_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      // 仅在列表可滚动且接近底部时触发，避免初始内容不足时误触发
+      if (position.maxScrollExtent <= 0) return;
+      if (position.pixels < position.maxScrollExtent - 120) return;
       _loadHistoryTasks();
     });
 
@@ -121,7 +242,40 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
       try { TaskEventCache.instance.onEvent(ev); } catch (_) {}
       _events.insert(0, ev);
       final merged = Map<String, dynamic>.from(_tasks[taskId] ?? {});
+      final prevType = (merged['type'] ?? '').toString();
       merged.addAll(ev);
+      // 终态守护：一旦进入终态，后续的非终态事件不再回退状态
+      const terminalTypes = {
+        'TASK_COMPLETED', 'TASK_FAILED', 'TASK_CANCELLED', 'TASK_DEAD_LETTER', 'TASK_COMPLETED_WITH_ERRORS'
+      };
+      final bool wasTerminal = terminalTypes.contains(prevType);
+      final bool nowTerminal = terminalTypes.contains(ty);
+      if (wasTerminal && !nowTerminal) {
+        // 保持终态，不回退到进行中；同时不恢复进度
+        merged['type'] = prevType;
+        merged.remove('progress');
+      } else if (nowTerminal) {
+        // 进入终态时，清理progress
+        merged.remove('progress');
+        // 同步一个标准status字段，便于其他分支直接读取
+        switch (ty) {
+          case 'TASK_COMPLETED':
+            merged['status'] = 'COMPLETED';
+            break;
+          case 'TASK_FAILED':
+            merged['status'] = 'FAILED';
+            break;
+          case 'TASK_CANCELLED':
+            merged['status'] = 'CANCELLED';
+            break;
+          case 'TASK_DEAD_LETTER':
+            merged['status'] = 'DEAD_LETTER';
+            break;
+          case 'TASK_COMPLETED_WITH_ERRORS':
+            merged['status'] = 'COMPLETED_WITH_ERRORS';
+            break;
+        }
+      }
       // 只有在原始事件包含时间戳或者是新任务时才更新时间戳，避免轮询导致的排序变化
       if (ev.containsKey('ts') || !_tasks.containsKey(taskId)) {
         merged['ts'] = ev['ts'] ?? merged['ts'] ?? nowTs;
@@ -143,6 +297,10 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
 
     // 优化后的轮询：仅在SSE连接异常时作为降级方案
     _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      // 未认证或尚未收到任何事件（_lastEventTs=0）时，不进行降级轮询，避免无意义请求
+      if (AppConfig.authToken == null || AppConfig.authToken!.isEmpty || _lastEventTs == 0) {
+        return;
+      }
       final now = DateTime.now().millisecondsSinceEpoch;
       // 只有在30秒内没有任何事件到达时才轮询，说明SSE可能断开
       if (now - _lastEventTs < 30000) {
@@ -188,6 +346,7 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _sub?.cancel();
     _busSub?.cancel();
     _pollTimer?.cancel();
@@ -204,7 +363,8 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
     
     try {
       AppLogger.i('AITaskCenterPanel', '加载历史任务: page=$_currentHistoryPage');
-      final result = await _repo.getUserHistoryTasksPaged(page: _currentHistoryPage, size: 20);
+      // 每次仅请求5条父任务（后端按父任务分页）
+      final result = await _repo.getUserHistoryTasksPaged(page: _currentHistoryPage, size: 5);
       
       if (result.tasks.isNotEmpty) {
         // 处理任务数据，构建父子关系
@@ -337,9 +497,27 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
 
   /// 构建任务列表
   Widget _buildTaskList(BuildContext context) {
-    // 合并实时任务和历史任务（只展示父任务）
+    // 合并实时任务和历史任务（只展示父任务，且排除拆书任务）
     final realtimeTasks = _tasks.values
-        .where((t) => (t['parentTaskId'] == null || (t['parentTaskId'].toString().isEmpty)))
+        .where((t) {
+          // 只显示父任务
+          if (t['parentTaskId'] != null && t['parentTaskId'].toString().isNotEmpty) {
+            return false;
+          }
+          
+          // 排除拆书任务类型
+          final taskType = (t['taskType'] ?? '').toString();
+          const bookExtractionTypes = [
+            'KNOWLEDGE_EXTRACTION_FANQIE', 
+            'KNOWLEDGE_EXTRACTION_TEXT', 
+            'KNOWLEDGE_EXTRACTION_GROUP'
+          ];
+          if (bookExtractionTypes.contains(taskType)) {
+            return false;
+          }
+          
+          return true;
+        })
         .toList();
     
     // 去重合并历史任务
@@ -355,13 +533,26 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
       }
     }
     
-    // 再添加历史任务（避免重复）
+    // 再添加历史任务（避免重复，且排除拆书任务）
     for (final task in _historyTasks) {
       final taskId = (task['taskId'] ?? '').toString();
-      if (taskId.isNotEmpty && !taskIds.contains(taskId)) {
-        allTasks.add(task);
-        taskIds.add(taskId);
+      if (taskId.isEmpty || taskIds.contains(taskId)) {
+        continue;
       }
+      
+      // 排除拆书任务类型
+      final taskType = (task['taskType'] ?? '').toString();
+      const bookExtractionTypes = [
+        'KNOWLEDGE_EXTRACTION_FANQIE', 
+        'KNOWLEDGE_EXTRACTION_TEXT', 
+        'KNOWLEDGE_EXTRACTION_GROUP'
+      ];
+      if (bookExtractionTypes.contains(taskType)) {
+        continue;
+      }
+      
+      allTasks.add(task);
+      taskIds.add(taskId);
     }
     
     // 按时间倒序排列
@@ -372,6 +563,7 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
     }
 
     return ListView.separated(
+      controller: _scrollController,
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: allTasks.length + (_hasMoreHistory ? 1 : 0), // 加载更多按钮
       separatorBuilder: (context, index) => const SizedBox(height: 4),
@@ -640,8 +832,8 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
       final cStatusColor = TaskTranslation.getTaskStatusColor(cStatusName);
       final isCompleted = TaskTranslation.isTaskCompleted(cType);
       
-      // 仅对子任务（单章生成）完成时提供"预览合并"
-      final bool canPreview = isCompleted && cTaskType == 'GENERATE_SINGLE_CHAPTER';
+      // 对子任务（单章生成、剧情预测）完成时提供"预览合并"
+      final bool canPreview = isCompleted && (cTaskType == 'GENERATE_SINGLE_CHAPTER' || cTaskType == 'STORY_PREDICTION_SINGLE');
       
       return Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
@@ -654,6 +846,7 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
             width: 0.5,
           ),
         ),
+        constraints: const BoxConstraints(minHeight: 72),
         child: Row(
           children: [
             _buildStatusIcon(cStatusColor, isCompleted, TaskTranslation.isTaskRunning(cType), TaskTranslation.isTaskFailed(cType)),
@@ -671,6 +864,34 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 2),
+                  // 显示模型信息
+                  if (_getModelInfo(child).isNotEmpty) ...[
+                    Text(
+                      _getModelInfo(child),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                        fontSize: 10,
+                        fontStyle: FontStyle.italic,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                  ],
+                  // 详细模型信息：摘要/内容生成所用模型
+                  if (_getDetailedModelInfo(child).isNotEmpty) ...[
+                    Text(
+                      _getDetailedModelInfo(child),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                        fontSize: 11,
+                      ),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: true,
+                    ),
+                    const SizedBox(height: 4),
+                  ],
                   Row(
                     children: [
                       _buildStatusBadge(context, cStatusName, cStatusColor),
@@ -689,22 +910,16 @@ class _AITaskCenterPanelState extends State<AITaskCenterPanel> {
             ),
             if (canPreview) ...[
               const SizedBox(width: 8),
-              ElevatedButton(
-                onPressed: () => _openMergePreview(context, child),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: WebTheme.getPrimaryColor(context),
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: ElevatedButton(
+                  onPressed: () => _openMergePreview(context, child),
+                  style: WebTheme.getPrimaryButtonStyle(context).copyWith(
+                    minimumSize: MaterialStateProperty.all(const Size(64, 32)),
+                    padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
                   ),
-                  textStyle: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
+                  child: const Text('预览合并'),
                 ),
-                child: const Text('预览合并'),
               ),
             ],
           ],
@@ -772,7 +987,7 @@ class _MergePreviewDialogState extends State<_MergePreviewDialog> {
       // 处理生成的内容，去掉可能的quill格式
       final rawContent = result['generatedContent']?.toString();
       AppLogger.i('AI任务合并', '初始化 - 原始生成内容: ${rawContent?.length ?? 0}个字符');
-      AppLogger.i('AI任务合并', '初始化 - 生成内容预览: ${rawContent?.substring(0, 100) ?? "空"}...');
+      AppLogger.i('AI任务合并', '初始化 - 生成内容预览: ${rawContent != null && rawContent.length > 100 ? rawContent.substring(0, 100) : rawContent ?? "空"}...');
       
       if (rawContent != null && rawContent.isNotEmpty) {
         _generatedContent = QuillHelper.isValidQuillFormat(rawContent) 
@@ -1734,12 +1949,15 @@ class _MergePreviewDialogState extends State<_MergePreviewDialog> {
 
 
   Future<void> _onMergeSubmit() async {
+    // 显示加载中提示
+    final loadingController = LoadingToast.show(context, message: '正在添加内容...');
+    
     try {
       final api = RepositoryProvider.of<ApiClient>(context);
       final EditorRepository repo = EditorRepositoryImpl(apiClient: api);
       final String? novelIdOpt = _novelId;
       if (novelIdOpt == null || novelIdOpt.isEmpty) {
-        TopToast.error(context, '缺少小说ID，无法合并');
+        loadingController.error('缺少小说ID，无法合并');
         return;
       }
       final String novelId = novelIdOpt;
@@ -1748,37 +1966,41 @@ class _MergePreviewDialogState extends State<_MergePreviewDialog> {
         // 原子化创建新章节和场景
         final chapterTitle = 'AI生成章节';
         final sceneTitle = 'AI生成场景';
+        final String actIdForInsert = _targetChapterId != null 
+            ? (_findActIdForChapter(_targetChapterId!) ?? _findFirstActId())
+            : _findFirstActId();
         await repo.addChapterWithScene(
           novelId, 
-          _findFirstActId(), 
+          actIdForInsert, 
           chapterTitle, 
           sceneTitle, 
           sceneSummary: _generatedSummary, 
-          sceneContent: _generatedContent
+          sceneContent: _generatedContent,
+          insertAfterChapterId: _targetChapterId // 若选择了目标章节，则在其后插入
         );
         
-        TopToast.success(context, '已创建新章节：$chapterTitle，包含完整内容和摘要');
+        loadingController.success('已成功创建新章节：$chapterTitle');
         
         // addChapterWithScene已经发布了CHAPTER_ADDED和SCENE_ADDED事件，会自动触发刷新
       } else if (_mergeMode == 'append') {
         if (_targetChapterId == null) {
-          TopToast.error(context, '请选择目标章节');
+          loadingController.error('请选择目标章节');
           return;
         }
         final title = 'AI生成场景';
         final newScene = await repo.addSceneFine(novelId, _targetChapterId!, title, summary: _generatedSummary, content: _generatedContent, position: _insertPosition == -1 ? null : _insertPosition);
         
-        TopToast.success(context, '已追加到目标章节：${newScene.title}');
+        loadingController.success('已成功追加到目标章节：${newScene.title}');
         
         // addSceneFine已经发布了NovelStructureUpdatedEvent，不需要额外刷新
       } else if (_mergeMode == 'replace') {
         if (_targetChapterId == null || _targetSceneId == null) {
-          TopToast.error(context, '请选择目标章节与场景');
+          loadingController.error('请选择目标章节与场景');
           return;
         }
         final actId = _findActIdForChapter(_targetChapterId!);
         if (actId == null) {
-          TopToast.error(context, '无法定位目标章节所属卷');
+          loadingController.error('无法定位目标章节所属卷');
           return;
         }
         // 调试：检查生成的内容
@@ -1786,7 +2008,7 @@ class _MergePreviewDialogState extends State<_MergePreviewDialog> {
         AppLogger.i('AI任务合并', '替换模式 - 生成的摘要长度: ${_generatedSummary?.length ?? 0}');
         
         if (_generatedContent == null || _generatedContent!.isEmpty) {
-          TopToast.error(context, '生成的内容为空，无法替换场景内容');
+          loadingController.error('生成的内容为空，无法替换场景内容');
           return;
         }
         
@@ -1795,7 +2017,7 @@ class _MergePreviewDialogState extends State<_MergePreviewDialog> {
         final summary = Summary(id: '${_targetSceneId!}_summary', content: _generatedSummary ?? '');
         await repo.saveSceneContent(novelId, actId, _targetChapterId!, _targetSceneId!, content, wordCount, summary);
         
-        TopToast.success(context, '已替换目标场景内容');
+        loadingController.success('已成功替换目标场景内容');
         
         // 强制刷新当前活动场景的内容 - 如果替换的是当前正在编辑的场景
         if (mounted) {
@@ -1834,9 +2056,12 @@ class _MergePreviewDialogState extends State<_MergePreviewDialog> {
           content: quillJson,
         ));
       }
-      if (mounted) Navigator.pop(context);
+      // 延迟关闭面板，让用户看到成功提示
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) Navigator.pop(context);
+      });
     } catch (e) {
-      TopToast.error(context, '合并失败: $e');
+      loadingController.error('合并失败: $e');
     }
   }
 

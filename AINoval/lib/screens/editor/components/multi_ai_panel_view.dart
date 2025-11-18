@@ -569,10 +569,15 @@ class _MultiAIPanelViewState extends State<MultiAIPanelView> {
           'ts': DateTime.now().millisecondsSinceEpoch,
         };
         EventBus.instance.fire(TaskEventReceived(event: placeholder));
-        // 按需启动全局监听
-        EventBus.instance.fire(const StartTaskEventsListening());
+        // 🔧 重要：不再主动触发 StartTaskEventsListening，避免多组件重复触发导致连接风暴
+        // 🔧 SSE连接由 main.dart 统一管理，登录时自动启动，面板只需发送占位事件即可
+        // if (AppConfig.authToken != null && AppConfig.authToken!.isNotEmpty) {
+        //   EventBus.instance.fire(const StartTaskEventsListening());
+        // } else {
+        //   AppLogger.w('MultiAIPanelView', '跳过启动全局任务事件监听：未检测到有效token');
+        // }
       } catch (_) {}
-      // 完成由“AI任务中心”统一订阅与提示
+      // 完成由"AI任务中心"统一订阅与提示
     } catch (e, st) {
       AppLogger.e('MultiAIPanelView', '提交自动续写任务失败', e, st);
       if (mounted) {

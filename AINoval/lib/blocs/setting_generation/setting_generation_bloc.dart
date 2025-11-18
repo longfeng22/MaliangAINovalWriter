@@ -1,6 +1,7 @@
 import 'dart:async';
 import '../../models/compose_preview.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:uuid/uuid.dart';
 import '../../config/app_config.dart';
 import '../../models/setting_generation_session.dart';
 import '../../models/setting_node.dart';
@@ -8,6 +9,7 @@ import '../../models/setting_type.dart';
 import '../../models/setting_generation_event.dart' as event_model;
 import '../../models/strategy_template_info.dart';
 import '../../services/api_service/repositories/setting_generation_repository.dart';
+import '../../services/api_service/base/api_exception.dart';
 import '../../models/ai_request_models.dart';
 import '../../utils/logger.dart';
 import '../../utils/setting_node_utils.dart';
@@ -59,6 +61,7 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
     on<CancelSessionEvent>(_onCancelSession);
     on<GetUserHistoriesEvent>(_onGetUserHistories);
     on<DeleteHistoryEvent>(_onDeleteHistory);
+    on<BatchDeleteHistoriesEvent>(_onBatchDeleteHistories);
     on<CopyHistoryEvent>(_onCopyHistory);
     on<RestoreHistoryToNovelEvent>(_onRestoreHistoryToNovel);
     on<ResetEvent>(_onReset);
@@ -82,6 +85,12 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
     
     // 新增：内容更新事件处理器
     on<UpdateNodeContentEvent>(_onUpdateNodeContent);
+    
+    // 新增：手动添加子节点事件处理器
+    on<AddChildNodeEvent>(_onAddChildNode);
+    
+    // 新增：删除节点事件处理器
+    on<DeleteNodeEvent>(_onDeleteNode);
     
     // 移除：不再需要的复杂保存节点设定逻辑
     // on<SaveNodeSettingEvent>(_onSaveNodeSetting);
@@ -612,7 +621,19 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
             .map((e) => StrategyTemplateInfo.fromJson(e as Map<String, dynamic>))
             .toList();
       } else {
-        strategies = await _repository.getAvailableStrategies();
+        // 合并：公开策略 + 用户自己的策略，去重按 promptTemplateId
+        final publicList = await _repository.getPublicStrategies();
+        final myList = await _repository.getUserStrategies();
+        final merged = <String, StrategyTemplateInfo>{};
+        for (final e in publicList) {
+          final item = StrategyTemplateInfo.fromJson(e as Map<String, dynamic>);
+          merged[item.promptTemplateId] = item;
+        }
+        for (final e in myList) {
+          final item = StrategyTemplateInfo.fromJson(e as Map<String, dynamic>);
+          merged[item.promptTemplateId] = item;
+        }
+        strategies = merged.values.toList();
       }
       
       // 游客模式下不拉取历史记录；仅已登录且有 userId 时加载
@@ -837,8 +858,8 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
         sessions = currentState.sessions;
       }
 
-      // 创建新会话
-      final sessionId = 'session_${DateTime.now().millisecondsSinceEpoch}';
+      // 🔧 修复：使用UUID生成sessionId（与后端保持一致）
+      final sessionId = const Uuid().v4();
       final newSession = SettingGenerationSession(
         sessionId: sessionId,
         userId: event.userId ?? AppConfig.userId ?? 'default_user',
@@ -870,6 +891,7 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       // 监听生成流
       _generationStreamSubscription?.cancel();
       _generationStreamSubscription = _repository.startGeneration(
+        sessionId: sessionId,  // 🔧 传递前端生成的sessionId
         initialPrompt: event.initialPrompt,
         promptTemplateId: event.promptTemplateId,
         novelId: event.novelId,
@@ -878,6 +900,16 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
         usePublicTextModel: event.usePublicTextModel,
         textPhasePublicProvider: event.textPhasePublicProvider,
         textPhasePublicModelId: event.textPhasePublicModelId,
+        // 📚 知识库集成参数
+        knowledgeBaseMode: event.knowledgeBaseMode,
+        knowledgeBaseIds: event.knowledgeBaseIds,
+        knowledgeBaseCategories: event.knowledgeBaseCategories,
+        // 📚 混合模式专用参数
+        reuseKnowledgeBaseIds: event.reuseKnowledgeBaseIds,
+        referenceKnowledgeBaseIds: event.referenceKnowledgeBaseIds,
+        // 🔧 结构化输出循环模式参数
+        useStructuredOutput: event.useStructuredOutput,
+        structuredIterations: event.structuredIterations,
       ).listen(
         (generationEvent) {
           add(_HandleGenerationEventInternal(generationEvent));
@@ -1251,6 +1283,222 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
       // 修改：不再因为更新节点内容失败而发出错误状态，避免影响用户体验
       AppLogger.info(_tag, '节点内容更新失败，但不影响UI状态');
     }
+  }
+
+  /// 手动添加子节点
+  void _onAddChildNode(
+    AddChildNodeEvent event,
+    Emitter<SettingGenerationState> emit,
+  ) async {
+    AppLogger.i(_tag, '🔧 开始添加子节点: 父节点=${event.parentNodeId}, 标题=${event.title}');
+
+    try {
+      // 1. 检查当前状态是否支持添加子节点
+      if (state is! SettingGenerationCompleted && state is! SettingGenerationInProgress) {
+        AppLogger.w(_tag, '❌ 当前状态不支持添加子节点: ${state.runtimeType}');
+        return;
+      }
+
+      // 2. 获取当前活跃会话
+      SettingGenerationSession? activeSession;
+      if (state is SettingGenerationCompleted) {
+        activeSession = (state as SettingGenerationCompleted).activeSession;
+      } else if (state is SettingGenerationInProgress) {
+        activeSession = (state as SettingGenerationInProgress).activeSession;
+      }
+
+      if (activeSession == null) {
+        AppLogger.w(_tag, '❌ 没有活跃会话，无法添加子节点');
+        return;
+      }
+
+      // 3. 查找父节点
+      final parentNode = SettingNodeUtils.findNodeInTree(activeSession.rootNodes, event.parentNodeId);
+      if (parentNode == null) {
+        AppLogger.w(_tag, '❌ 找不到父节点: ${event.parentNodeId}');
+        return;
+      }
+
+      // 4. 创建新的子节点
+      final childNode = SettingNode(
+        id: DateTime.now().millisecondsSinceEpoch.toString(), // 临时ID
+        parentId: event.parentNodeId,
+        name: event.title,
+        type: SettingType.fromValue(event.type),
+        description: event.content,
+        generationStatus: GenerationStatus.completed,
+      );
+
+      // 5. 更新父节点，添加子节点
+      final updatedRootNodes = _addChildNodeToTree(activeSession.rootNodes, event.parentNodeId, childNode);
+
+      // 6. 更新会话
+      final updatedSession = activeSession.copyWith(rootNodes: updatedRootNodes);
+
+      // 7. 更新状态
+      if (state is SettingGenerationCompleted) {
+        final currentState = state as SettingGenerationCompleted;
+        emit(currentState.copyWith(
+          activeSession: updatedSession,
+          renderedNodeIds: {...currentState.renderedNodeIds, childNode.id},
+        ));
+      } else if (state is SettingGenerationInProgress) {
+        final currentState = state as SettingGenerationInProgress;
+        emit(currentState.copyWith(
+          activeSession: updatedSession,
+          renderedNodeIds: {...currentState.renderedNodeIds, childNode.id},
+        ));
+      }
+
+      AppLogger.i(_tag, '✅ 成功添加子节点: ${event.title}');
+
+    } catch (e, stackTrace) {
+      AppLogger.e(_tag, '❌ 添加子节点失败: $e', stackTrace);
+    }
+  }
+
+  /// 在节点树中添加子节点
+  List<SettingNode> _addChildNodeToTree(List<SettingNode> rootNodes, String parentId, SettingNode childNode) {
+    return rootNodes.map((node) {
+      if (node.id == parentId) {
+        // 找到父节点，添加子节点
+        final existingChildren = node.children ?? [];
+        return node.copyWith(
+          children: [...existingChildren, childNode],
+        );
+      } else if (node.children != null && node.children!.isNotEmpty) {
+        // 递归搜索子节点
+        final updatedChildren = _addChildNodeToTree(node.children!, parentId, childNode);
+        return node.copyWith(children: updatedChildren);
+      }
+      return node;
+    }).toList();
+  }
+
+  /// 删除节点及其所有子节点
+  void _onDeleteNode(
+    DeleteNodeEvent event,
+    Emitter<SettingGenerationState> emit,
+  ) async {
+    AppLogger.i(_tag, '🗑️ 开始删除节点: ${event.nodeId}');
+
+    try {
+      // 1. 检查当前状态是否支持删除节点
+      if (state is! SettingGenerationCompleted && state is! SettingGenerationInProgress) {
+        AppLogger.w(_tag, '❌ 当前状态不支持删除节点: ${state.runtimeType}');
+        return;
+      }
+
+      // 2. 获取当前活跃会话
+      SettingGenerationSession? activeSession;
+      String? sessionId;
+      if (state is SettingGenerationCompleted) {
+        final currentState = state as SettingGenerationCompleted;
+        activeSession = currentState.activeSession;
+        sessionId = currentState.activeSessionId;
+      } else if (state is SettingGenerationInProgress) {
+        final currentState = state as SettingGenerationInProgress;
+        activeSession = currentState.activeSession;
+        sessionId = currentState.activeSessionId;
+      }
+
+      if (activeSession == null || sessionId == null) {
+        AppLogger.w(_tag, '❌ 没有活跃会话，无法删除节点');
+        return;
+      }
+
+      // 3. 查找要删除的节点
+      final nodeToDelete = SettingNodeUtils.findNodeInTree(activeSession.rootNodes, event.nodeId);
+      if (nodeToDelete == null) {
+        AppLogger.w(_tag, '❌ 找不到要删除的节点: ${event.nodeId}');
+        return;
+      }
+
+      // 4. 先调用后端API删除节点
+      AppLogger.i(_tag, '🚀 调用后端API删除节点: ${event.nodeId}');
+      final deleteResult = await _repository.deleteNode(
+        sessionId: sessionId,
+        nodeId: event.nodeId,
+      );
+
+      final deletedNodeIds = (deleteResult['deletedNodeIds'] as List<dynamic>?)
+          ?.map((id) => id.toString())
+          .toList() ?? [];
+
+      AppLogger.i(_tag, '✅ 后端删除成功，共删除 ${deletedNodeIds.length} 个节点');
+
+      // 5. 从本地节点树中删除节点
+      final updatedRootNodes = _removeNodeFromTree(activeSession.rootNodes, event.nodeId);
+
+      // 6. 更新会话
+      final updatedSession = activeSession.copyWith(rootNodes: updatedRootNodes);
+
+      // 7. 更新渲染状态，移除已删除节点的渲染信息
+      final Set<String> updatedRenderedNodeIds;
+      final Map<String, NodeRenderInfo> updatedNodeRenderStates;
+
+      if (state is SettingGenerationCompleted) {
+        final currentState = state as SettingGenerationCompleted;
+        updatedRenderedNodeIds = currentState.renderedNodeIds.where((id) => !deletedNodeIds.contains(id)).toSet();
+        updatedNodeRenderStates = Map.from(currentState.nodeRenderStates)
+          ..removeWhere((key, value) => deletedNodeIds.contains(key));
+      } else {
+        final currentState = state as SettingGenerationInProgress;
+        updatedRenderedNodeIds = currentState.renderedNodeIds.where((id) => !deletedNodeIds.contains(id)).toSet();
+        updatedNodeRenderStates = Map.from(currentState.nodeRenderStates)
+          ..removeWhere((key, value) => deletedNodeIds.contains(key));
+      }
+
+      // 8. 更新状态
+      if (state is SettingGenerationCompleted) {
+        final currentState = state as SettingGenerationCompleted;
+        emit(currentState.copyWith(
+          activeSession: updatedSession,
+          renderedNodeIds: updatedRenderedNodeIds,
+          nodeRenderStates: updatedNodeRenderStates,
+          selectedNodeId: currentState.selectedNodeId == event.nodeId ? null : currentState.selectedNodeId,
+          message: '已删除节点及其 ${deletedNodeIds.length - 1} 个子节点',
+        ));
+      } else if (state is SettingGenerationInProgress) {
+        final currentState = state as SettingGenerationInProgress;
+        emit(currentState.copyWith(
+          activeSession: updatedSession,
+          renderedNodeIds: updatedRenderedNodeIds,
+          nodeRenderStates: updatedNodeRenderStates,
+          selectedNodeId: currentState.selectedNodeId == event.nodeId ? null : currentState.selectedNodeId,
+          stickyWarning: '已删除节点及其 ${deletedNodeIds.length - 1} 个子节点',
+        ));
+      }
+
+      AppLogger.i(_tag, '✅ 成功删除节点: ${event.nodeId}');
+
+    } catch (e, stackTrace) {
+      AppLogger.e(_tag, '❌ 删除节点失败: $e', stackTrace);
+      emit(SettingGenerationError(
+        message: '删除节点失败：${e.toString()}',
+        error: e,
+        stackTrace: stackTrace,
+      ));
+    }
+  }
+
+  /// 从节点树中删除指定节点
+  List<SettingNode> _removeNodeFromTree(List<SettingNode> rootNodes, String nodeId) {
+    final result = <SettingNode>[];
+    for (final node in rootNodes) {
+      // 如果是要删除的节点，跳过
+      if (node.id == nodeId) {
+        continue;
+      }
+      // 如果有子节点，递归删除
+      if (node.children != null && node.children!.isNotEmpty) {
+        final updatedChildren = _removeNodeFromTree(node.children!, nodeId);
+        result.add(node.copyWith(children: updatedChildren));
+      } else {
+        result.add(node);
+      }
+    }
+    return result;
   }
 
   Timer? _pendingNodesTimer;
@@ -2320,11 +2568,66 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
             .where((session) => session.sessionId != event.historyId)
             .toList();
         emit(currentState.copyWith(sessions: updatedSessions));
+      } else if (state is SettingGenerationInProgress) {
+        final currentState = state as SettingGenerationInProgress;
+        final updatedSessions = currentState.sessions
+            .where((session) => session.sessionId != event.historyId)
+            .toList();
+        emit(currentState.copyWith(sessions: updatedSessions));
+      } else if (state is SettingGenerationCompleted) {
+        final currentState = state as SettingGenerationCompleted;
+        final updatedSessions = currentState.sessions
+            .where((session) => session.sessionId != event.historyId)
+            .toList();
+        emit(currentState.copyWith(sessions: updatedSessions));
       }
       
       AppLogger.i(_tag, '历史记录已删除: ${event.historyId}');
     } catch (e, stackTrace) {
       AppLogger.error(_tag, '删除历史记录失败', e, stackTrace);
+    }
+  }
+
+  /// 批量删除历史记录
+  Future<void> _onBatchDeleteHistories(
+    BatchDeleteHistoriesEvent event,
+    Emitter<SettingGenerationState> emit,
+  ) async {
+    try {
+      AppLogger.i(_tag, '开始批量删除历史记录: ${event.historyIds.length}条');
+      
+      final result = await _repository.batchDeleteHistories(
+        historyIds: event.historyIds,
+      );
+      
+      final deletedCount = result['data']['deletedCount'] as int;
+      AppLogger.i(_tag, '批量删除成功: ${deletedCount}条');
+      
+      // 从当前会话列表中移除已删除的记录
+      final deletedIds = event.historyIds.toSet();
+      
+      if (state is SettingGenerationReady) {
+        final currentState = state as SettingGenerationReady;
+        final updatedSessions = currentState.sessions
+            .where((session) => !deletedIds.contains(session.sessionId))
+            .toList();
+        emit(currentState.copyWith(sessions: updatedSessions));
+      } else if (state is SettingGenerationInProgress) {
+        final currentState = state as SettingGenerationInProgress;
+        final updatedSessions = currentState.sessions
+            .where((session) => !deletedIds.contains(session.sessionId))
+            .toList();
+        emit(currentState.copyWith(sessions: updatedSessions));
+      } else if (state is SettingGenerationCompleted) {
+        final currentState = state as SettingGenerationCompleted;
+        final updatedSessions = currentState.sessions
+            .where((session) => !deletedIds.contains(session.sessionId))
+            .toList();
+        emit(currentState.copyWith(sessions: updatedSessions));
+      }
+      
+    } catch (e, stackTrace) {
+      AppLogger.error(_tag, '批量删除历史记录失败', e, stackTrace);
     }
   }
 
@@ -2593,25 +2896,12 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
     // if (generationEvent is event_model.NodeDeletedEvent) { ... }
 
     if (generationEvent is event_model.SessionStartedEvent) {
-      // 🔧 关键修复：更新为后端返回的真实sessionID
-      final realSessionId = generationEvent.sessionId;
-      AppLogger.i(_tag, '🔄 更新sessionID: ${currentState.activeSessionId} -> $realSessionId');
-      
-      // 更新会话信息
-      final updatedSession = currentState.activeSession.copyWith(
-        sessionId: realSessionId,
-      );
-      
-      final updatedSessions = currentState.sessions.map((session) {
-        return session.sessionId == currentState.activeSessionId ? updatedSession : session;
-      }).toList();
+      // 🔧 由于前端现在使用UUID生成sessionId并传给后端，不再需要更新sessionId
+      AppLogger.i(_tag, '✅ SessionStartedEvent - sessionId: ${generationEvent.sessionId}');
       
       emit(currentState.copyWith(
         events: updatedEvents,
         currentOperation: '会话已启动，正在生成设定...',
-        activeSessionId: realSessionId, // 🔧 更新活跃会话ID
-        activeSession: updatedSession,   // 🔧 更新活跃会话对象
-        sessions: updatedSessions,       // 🔧 更新会话列表
       ));
     } else     if (generationEvent is event_model.NodeCreatedEvent) {
       // 🚀 改进：智能立即处理，只有真正需要等待的节点才暂存
@@ -3344,9 +3634,24 @@ class SettingGenerationBloc extends Bloc<SettingGenerationBlocEvent, SettingGene
   
   /// 获取用户友好的错误信息
   String _getUserFriendlyErrorMessage(dynamic error) {
+    // 🚀 优先检查具体的异常类型
+    if (error is InsufficientCreditsException) {
+      return error.message;
+    }
+    
     final errorString = error.toString().toLowerCase();
     
-    if (errorString.contains('unknown strategy')) {
+    // 🚀 检查积分不足相关的关键词
+    if (errorString.contains('积分不足') || 
+        errorString.contains('积分余额不足') ||
+        errorString.contains('payment required') ||
+        errorString.contains('402')) {
+      // 尝试提取更详细的信息
+      if (errorString.contains('需要') && errorString.contains('积分')) {
+        return error.toString(); // 保持原始详细信息
+      }
+      return '积分余额不足，请充值后继续使用';
+    } else if (errorString.contains('unknown strategy')) {
       return '选择的生成策略不可用，请刷新页面后重试';
     } else if (errorString.contains('text_stage_empty') || errorString.contains('start_failed')) {
       // 明确提示当前模型调用异常

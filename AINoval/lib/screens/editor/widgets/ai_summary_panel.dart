@@ -199,16 +199,19 @@ class _AISummaryPanelState extends State<AISummaryPanel> with AIDialogCommonLogi
             }
           },
           builder: (context, universalAIState) {
-            return Column(
-              children: [
-                // 面板标题栏
-                _buildHeader(context, editorState),
+            return SafeArea(
+              bottom: true,
+              child: Column(
+                children: [
+                  // 面板标题栏
+                  _buildHeader(context, editorState),
 
-                // 面板内容
-                Expanded(
-                  child: _buildSummaryContentPanel(context, editorState),
-                ),
-              ],
+                  // 面板内容
+                  Expanded(
+                    child: _buildSummaryContentPanel(context, editorState),
+                  ),
+                ],
+              ),
             );
           },
         );
@@ -307,35 +310,23 @@ class _AISummaryPanelState extends State<AISummaryPanel> with AIDialogCommonLogi
                                     color: WebTheme.getTextColor(context),
                                   ),
                                 ),
-                                content: const SingleChildScrollView(
+                                content: SingleChildScrollView(
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        '1. 选择要生成摘要的场景',
-                                        style: TextStyle(fontSize: 12, color: Colors.black87),
-                                      ),
-                                      SizedBox(height: 6),
-                                      Text(
-                                        '2. 选择AI模型和配置',
-                                        style: TextStyle(fontSize: 12, color: Colors.black87),
-                                      ),
-                                      SizedBox(height: 6),
-                                      Text(
-                                        '3. 点击"生成摘要"按钮',
-                                        style: TextStyle(fontSize: 12, color: Colors.black87),
-                                      ),
-                                      SizedBox(height: 6),
-                                      Text(
-                                        '4. 生成完成后，可以直接编辑摘要内容',
-                                        style: TextStyle(fontSize: 12, color: Colors.black87),
-                                      ),
-                                      SizedBox(height: 6),
-                                      Text(
-                                        '5. 点击"保存摘要"按钮将摘要保存到场景',
-                                        style: TextStyle(fontSize: 12, color: Colors.black87),
-                                      ),
+                                      Text('1. 在上方选择AI模型与是否启用智能上下文。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                      const SizedBox(height: 6),
+                                      Text('2. 先在左侧选择要生成摘要的场景。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                      const SizedBox(height: 6),
+                                      Text('3. 点击“生成摘要”，进度会实时显示。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                      const SizedBox(height: 6),
+                                      Text('4. 生成完成后可直接编辑，或点击“保存摘要”。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                      const SizedBox(height: 10),
+                                      Text('小技巧：', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: WebTheme.getTextColor(context))),
+                                      const SizedBox(height: 4),
+                                      Text('· 小屏支持滚动查看完整内容与按钮。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                      Text('· 可通过“关联提示词模板”优化效果。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
                                     ],
                                   ),
                                 ),
@@ -399,24 +390,40 @@ class _AISummaryPanelState extends State<AISummaryPanel> with AIDialogCommonLogi
 
   // 构建摘要内容面板
   Widget _buildSummaryContentPanel(BuildContext context, EditorLoaded state) {
+    final mq = MediaQuery.of(context);
+    final bool isSmallScreen = mq.size.width < 1200 || mq.size.height < 800;
+    final double outerPadding = isSmallScreen ? 8.0 : 10.0;
+
     return Padding(
-      padding: const EdgeInsets.all(10.0),
+      padding: EdgeInsets.all(outerPadding),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 模型配置区域
-          _buildModelConfigSection(context, state),
-          
-          const SizedBox(height: 10),
-          
-          // 分割线
-          Container(
-            height: 1,
-            color: WebTheme.getSecondaryBorderColor(context),
+          // 顶部区域：可滚动，适配小屏幕
+          Flexible(
+            child: Scrollbar(
+              thumbVisibility: MediaQuery.of(context).size.height < 800,
+              child: SingleChildScrollView(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 模型配置区域
+                    _buildModelConfigSection(context, state),
+                    const SizedBox(height: 10),
+                    // 分割线
+                    Container(
+                      height: 1,
+                      color: WebTheme.getSecondaryBorderColor(context),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                ),
+              ),
+            ),
           ),
-          const SizedBox(height: 10),
-          
-          // 生成的摘要区域
+
+          // 生成的摘要区域（底部区域保留，确保操作与内容显示良好）
           Expanded(
             child: _buildSummarySection(context, state),
           ),

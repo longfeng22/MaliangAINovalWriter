@@ -34,6 +34,26 @@ class EnhancedTemplatesManagementBody extends StatefulWidget {
 class _EnhancedTemplatesManagementScreenState extends State<EnhancedTemplatesManagementScreen> 
     with TickerProviderStateMixin {
   final GlobalKey<_EnhancedTemplatesManagementBodyState> _bodyKey = GlobalKey<_EnhancedTemplatesManagementBodyState>();
+  late TabController _topLevelTabController;
+  int _topLevelTabIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _topLevelTabController = TabController(length: 2, vsync: this);
+    _topLevelTabController.addListener(() {
+      setState(() {
+        _topLevelTabIndex = _topLevelTabController.index;
+      });
+      _bodyKey.currentState?._switchTemplateType(_topLevelTabIndex == 0 ? 'public' : 'user');
+    });
+  }
+
+  @override
+  void dispose() {
+    _topLevelTabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,8 +62,17 @@ class _EnhancedTemplatesManagementScreenState extends State<EnhancedTemplatesMan
         backgroundColor: WebTheme.getBackgroundColor(context),
         foregroundColor: WebTheme.getTextColor(context),
         title: Text(
-          '公共模板管理',
+          '增强模板管理',
           style: TextStyle(color: WebTheme.getTextColor(context)),
+        ),
+        bottom: TabBar(
+          controller: _topLevelTabController,
+          tabs: const [
+            Tab(text: '公共模板'),
+            Tab(text: '用户模板'),
+          ],
+          labelColor: WebTheme.getTextColor(context),
+          unselectedLabelColor: WebTheme.getTextColor(context).withOpacity(0.6),
         ),
         actions: [
           IconButton(
@@ -56,11 +85,12 @@ class _EnhancedTemplatesManagementScreenState extends State<EnhancedTemplatesMan
             icon: Icon(Icons.analytics, color: WebTheme.getTextColor(context)),
             tooltip: '统计信息',
           ),
-          IconButton(
-            onPressed: () => _bodyKey.currentState?._startCreate(),
-            icon: Icon(Icons.add, color: WebTheme.getTextColor(context)),
-            tooltip: '添加官方模板',
-          ),
+          if (_topLevelTabIndex == 0)
+            IconButton(
+              onPressed: () => _bodyKey.currentState?._startCreate(),
+              icon: Icon(Icons.add, color: WebTheme.getTextColor(context)),
+              tooltip: '添加官方模板',
+            ),
         ],
       ),
       backgroundColor: WebTheme.getBackgroundColor(context),
@@ -80,13 +110,15 @@ class _EnhancedTemplatesManagementScreenState extends State<EnhancedTemplatesMan
             tooltip: '刷新数据',
             child: const Icon(Icons.refresh),
           ),
-          const SizedBox(height: 12),
-          FloatingActionButton(
-            heroTag: "add",
-            onPressed: () => _bodyKey.currentState?._startCreate(),
-            tooltip: '添加官方模板',
-            child: const Icon(Icons.add),
-          ),
+          if (_topLevelTabIndex == 0) ...[
+            const SizedBox(height: 12),
+            FloatingActionButton(
+              heroTag: "add",
+              onPressed: () => _bodyKey.currentState?._startCreate(),
+              tooltip: '添加官方模板',
+              child: const Icon(Icons.add),
+            ),
+          ],
         ],
       ),
     );
@@ -101,6 +133,7 @@ class _EnhancedTemplatesManagementBodyState extends State<EnhancedTemplatesManag
   Map<String, Object> _statistics = {};
   bool _isLoading = true;
   String? _error;
+  String _templateType = 'public'; // 'public' 或 'user'
   String _selectedTab = 'ALL';
   List<String> _selectedTemplates = [];
   bool _batchMode = false;
@@ -179,34 +212,82 @@ class _EnhancedTemplatesManagementBodyState extends State<EnhancedTemplatesManag
     }
   }
 
+  void _switchTemplateType(String type) {
+    setState(() {
+      _templateType = type;
+      _selectedTab = 'ALL';
+      _batchMode = false;
+      _selectedTemplates.clear();
+      _isCreating = false;
+      _selectedTemplate = null;
+      _currentPage = 1;
+    });
+    _loadData();
+  }
+
   Future<void> _loadTemplates() async {
     try {
       List<EnhancedUserPromptTemplate> templates;
       
-      switch (_selectedTab) {
-        case 'VERIFIED':
-          templates = await _adminRepository.getVerifiedEnhancedTemplates();
-          break;
-        case 'PENDING':
-          templates = await _adminRepository.getPendingEnhancedTemplates();
-          break;
-        case 'POPULAR':
-          templates = await _adminRepository.getPopularEnhancedTemplates(
-            featureType: _filterFeatureType,
-            limit: 20,
-          );
-          break;
-        case 'LATEST':
-          templates = await _adminRepository.getLatestEnhancedTemplates(
-            featureType: _filterFeatureType,
-            limit: 20,
-          );
-          break;
-        default:
-          templates = await _adminRepository.getAllPublicEnhancedTemplates(
-            featureType: _filterFeatureType,
-          );
-          break;
+      if (_templateType == 'user') {
+        // 用户模板：直接获取所有用户模板，然后前端过滤
+        templates = await _adminRepository.getAllUserEnhancedTemplates(
+          page: 0,
+          size: 1000, // 获取更多数据用于前端过滤
+          search: _searchKeyword.isEmpty ? null : _searchKeyword,
+        );
+        
+        // 过滤掉系统模板（userId为system的模板）
+        templates = templates.where((t) => t.userId != 'system').toList();
+        
+        // 根据选中的tab进行过滤
+        switch (_selectedTab) {
+          case 'VERIFIED':
+            templates = templates.where((t) => t.isVerified == true).toList();
+            break;
+          case 'PENDING':
+            templates = templates.where((t) => t.isPublic == true && t.isVerified != true).toList();
+            break;
+          case 'POPULAR':
+            templates.sort((a, b) => (b.usageCount + (b.favoriteCount ?? 0)).compareTo(a.usageCount + (a.favoriteCount ?? 0)));
+            templates = templates.take(20).toList();
+            break;
+          case 'LATEST':
+            templates.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+            templates = templates.take(20).toList();
+            break;
+          case 'ALL':
+          default:
+            // 显示所有
+            break;
+        }
+      } else {
+        // 公共模板：使用原有逻辑
+        switch (_selectedTab) {
+          case 'VERIFIED':
+            templates = await _adminRepository.getVerifiedEnhancedTemplates();
+            break;
+          case 'PENDING':
+            templates = await _adminRepository.getPendingEnhancedTemplates();
+            break;
+          case 'POPULAR':
+            templates = await _adminRepository.getPopularEnhancedTemplates(
+              featureType: _filterFeatureType,
+              limit: 20,
+            );
+            break;
+          case 'LATEST':
+            templates = await _adminRepository.getLatestEnhancedTemplates(
+              featureType: _filterFeatureType,
+              limit: 20,
+            );
+            break;
+          default:
+            templates = await _adminRepository.getAllPublicEnhancedTemplates(
+              featureType: _filterFeatureType,
+            );
+            break;
+        }
       }
 
       // 应用搜索过滤
@@ -367,7 +448,7 @@ class _EnhancedTemplatesManagementBodyState extends State<EnhancedTemplatesManag
           ] else ...[ 
             Expanded(
               child: Text(
-                '公共模板总数: ${_templates.length}',
+                '${_templateType == 'public' ? '公共' : '用户'}模板总数: ${_templates.length}',
                 style: TextStyle(
                   color: WebTheme.getTextColor(context),
                   fontWeight: FontWeight.w500,
@@ -624,6 +705,7 @@ class _EnhancedTemplatesManagementBodyState extends State<EnhancedTemplatesManag
                   template: template,
                   isSelected: _selectedTemplates.contains(template.id),
                   batchMode: _batchMode,
+                  showUserInfo: _templateType == 'user', // 用户模板模式显示用户信息
                   onTap: () => _handleTemplateTap(template),
                   onEdit: () => _openEditor(template),
                   onDelete: () => _deleteTemplate(template),

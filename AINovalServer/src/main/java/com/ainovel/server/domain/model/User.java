@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -107,6 +108,12 @@ public class User {
      * 最后登录时间
      */
     private LocalDateTime lastLoginAt;
+
+    /**
+     * JWT 版本号（用于强制失效旧token）
+     */
+    @Builder.Default
+    private Integer tokenVersion = 1;
     
     /**
      * 账户状态枚举

@@ -153,4 +153,75 @@ public class RichTextUtil {
         // Simple heuristic: starts with <, ends with >, and contains at least one tag-like structure.
         return trimmedText.startsWith("<") && trimmedText.endsWith(">") && trimmedText.matches(".*<[^>]+>.*");
     }
+
+    /**
+     * 将纯文本转换为Quill Delta JSON格式
+     * 
+     * @param plainText 纯文本字符串
+     * @return Quill Delta JSON格式字符串
+     */
+    public static String plainTextToDeltaJson(String plainText) {
+        if (plainText == null || plainText.isEmpty()) {
+            return "[{\"insert\":\"\\n\"}]";
+        }
+        
+        try {
+            // 如果文本不以换行符结尾，添加一个（Quill要求）
+            String textWithNewline = plainText;
+            if (!textWithNewline.endsWith("\n")) {
+                textWithNewline += "\n";
+            }
+            
+            // 直接构建Quill Delta格式的Map，然后转换为JSON
+            // 这比使用Op类更简单可靠
+            Map<String, Object> opMap = new java.util.HashMap<>();
+            opMap.put("insert", textWithNewline);
+            
+            List<Map<String, Object>> ops = new java.util.ArrayList<>();
+            ops.add(opMap);
+            
+            // 转换为JSON字符串（数组格式）
+            return objectMapper.writeValueAsString(ops);
+        } catch (Exception e) {
+            log.error("将纯文本转换为Quill Delta JSON失败: {}", e.getMessage(), e);
+            // 发生错误时返回空文档
+            return "[{\"insert\":\"\\n\"}]";
+        }
+    }
+
+    /**
+     * 检查字符串是否已经是有效的Quill Delta JSON格式
+     * 
+     * @param text 待检查的文本
+     * @return true如果是有效的Quill Delta JSON，否则返回false
+     */
+    public static boolean isQuillDeltaJson(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return false;
+        }
+        
+        String trimmed = text.trim();
+        
+        // 检查是否是标准的Quill Delta对象格式 {"ops":[...]}
+        if (trimmed.startsWith("{") && trimmed.contains("\"ops\"")) {
+            try {
+                objectMapper.readValue(trimmed, Delta.class);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        
+        // 检查是否是数组格式 [{"insert":"..."}]
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            try {
+                List<Op> ops = objectMapper.readValue(trimmed, new TypeReference<List<Op>>() {});
+                return ops != null && !ops.isEmpty();
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        
+        return false;
+    }
 } 

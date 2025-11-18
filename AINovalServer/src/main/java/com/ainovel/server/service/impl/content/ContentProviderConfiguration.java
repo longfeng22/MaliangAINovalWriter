@@ -67,6 +67,9 @@ public class ContentProviderConfiguration {
     @Autowired
     private CurrentSceneSummaryProvider currentSceneSummaryProvider;
 
+    @Autowired
+    private AllSettingsProvider allSettingsProvider;
+
     @PostConstruct
     public void initializeContentProviders() {
         // 注册所有内容提供器
@@ -101,6 +104,8 @@ public class ContentProviderConfiguration {
         contentProviderFactory.registerProvider("scenes", sceneProvider);
         contentProviderFactory.registerProvider("settings", settingProvider);
         contentProviderFactory.registerProvider("snippets", snippetProvider);
+        // 新增：统一的“全部设定”提供器
+        contentProviderFactory.registerProvider("all_settings", allSettingsProvider);
         
         log.info("内容提供器注册完成，可用类型: {}", contentProviderFactory.getAvailableTypes());
     }

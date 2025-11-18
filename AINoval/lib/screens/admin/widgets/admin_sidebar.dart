@@ -167,6 +167,33 @@ class AdminSidebar extends StatelessWidget {
                     index: 10,
                   ),
                 ),
+                PermissionGuard.permission(
+                  PermissionService.MODEL_MANAGEMENT,
+                  child: _buildMenuItem(
+                    context,
+                    icon: Icons.attach_money,
+                    title: '模型定价',
+                    index: 11,
+                  ),
+                ),
+                PermissionGuard.permission(
+                  PermissionService.STATISTICS_VIEW,
+                  child: _buildMenuItem(
+                    context,
+                    icon: Icons.auto_stories,
+                    title: 'AI拆书任务',
+                    index: 12,
+                  ),
+                ),
+                PermissionGuard.permission(
+                  PermissionService.TEMPLATE_MANAGEMENT,
+                  child: _buildMenuItem(
+                    context,
+                    icon: Icons.fact_check_rounded,
+                    title: '内容审核',
+                    index: 13,
+                  ),
+                ),
               ],
             ),
           ),

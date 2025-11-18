@@ -14,6 +14,11 @@ class AdminDashboardStats extends Equatable {
   final List<ChartData> userGrowthData;
   final List<ChartData> requestsData;
   final List<ActivityItem> recentActivities;
+  final List<ChartData> dailyLoginData;
+  final List<ChartData> dailyRegistrationData;
+  final List<UserNovelStats> userNovelStats;
+  final int newUsersToday;
+  final int loginsToday;
 
   const AdminDashboardStats({
     required this.totalUsers,
@@ -24,6 +29,11 @@ class AdminDashboardStats extends Equatable {
     required this.userGrowthData,
     required this.requestsData,
     required this.recentActivities,
+    required this.dailyLoginData,
+    required this.dailyRegistrationData,
+    required this.userNovelStats,
+    required this.newUsersToday,
+    required this.loginsToday,
   });
 
   factory AdminDashboardStats.fromJson(Map<String, dynamic> json) =>
@@ -41,6 +51,11 @@ class AdminDashboardStats extends Equatable {
         userGrowthData,
         requestsData,
         recentActivities,
+        dailyLoginData,
+        dailyRegistrationData,
+        userNovelStats,
+        newUsersToday,
+        loginsToday,
       ];
 }
 
@@ -291,5 +306,43 @@ class AdminSystemConfig extends Equatable {
         configGroup,
         enabled,
         readOnly,
+      ];
+}
+
+@JsonSerializable()
+class UserNovelStats extends Equatable {
+  final String userId;
+  final String username;
+  final String? displayName;
+  final int novelCount;
+  final DateTime lastCreatedAt;
+
+  const UserNovelStats({
+    required this.userId,
+    required this.username,
+    this.displayName,
+    required this.novelCount,
+    required this.lastCreatedAt,
+  });
+
+  factory UserNovelStats.fromJson(Map<String, dynamic> json) {
+    return UserNovelStats(
+      userId: json['userId'] as String,
+      username: json['username'] as String,
+      displayName: json['displayName'] as String?,
+      novelCount: (json['novelCount'] as num).toInt(),
+      lastCreatedAt: parseBackendDateTime(json['lastCreatedAt']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => _$UserNovelStatsToJson(this);
+
+  @override
+  List<Object?> get props => [
+        userId,
+        username,
+        displayName,
+        novelCount,
+        lastCreatedAt,
       ];
 }

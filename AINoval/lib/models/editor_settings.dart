@@ -255,21 +255,28 @@ class EditorSettings {
 
   /// 获取可用的字体列表
   static List<String> get availableFontFamilies => [
-    'Noto Sans SC', // Google Noto 简体中文字体
-    'Roboto',
+    // 本地字体 - 已在pubspec.yaml中声明
+    'Noto Sans SC', // Google Noto 简体中文字体（默认）
+    'Roboto', // Google Roboto英文字体
+    'Roboto Condensed', // Roboto紧凑版
+    'Roboto SemiCondensed', // Roboto半紧凑版
+    
+    // 系统字体
     'serif', // 中文友好的衬线字体
     'sans-serif', // 中文友好的无衬线字体
-    'monospace',
+    'monospace', // 等宽字体
+    
+    // 平台相关字体（作为回退选项）
     'PingFang SC', // 苹果中文字体
     'Microsoft YaHei', // 微软雅黑
     'SimHei', // 黑体
     'SimSun', // 宋体
-    'Helvetica',
-    'Times New Roman',
-    'Courier New',
-    'Georgia',
-    'Verdana',
-    'Arial',
+    'Helvetica', // macOS/iOS
+    'Times New Roman', // Windows
+    'Courier New', // 跨平台等宽
+    'Georgia', // 跨平台衬线
+    'Verdana', // 跨平台无衬线
+    'Arial', // 跨平台无衬线
   ];
 
   /// 获取可用的字体粗细选项

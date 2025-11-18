@@ -131,6 +131,8 @@ class PromptNewState extends Equatable {
         createdAt: publicPrompt.createdAt,
         lastUsedAt: publicPrompt.lastUsedAt,
         updatedAt: publicPrompt.updatedAt,
+        hidePrompts: publicPrompt.hidePrompts,
+        settingGenerationConfig: publicPrompt.settingGenerationConfig, // 🆕 传递设定生成配置
       );
       allPrompts.add(publicPromptAsUser);
     }

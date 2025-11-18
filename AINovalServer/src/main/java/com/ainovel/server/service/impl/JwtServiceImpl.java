@@ -60,6 +60,11 @@ public class JwtServiceImpl implements JwtService {
     }
     
     private String generateToken(Map<String, Object> extraClaims, User user, long expiration) {
+        // 增强：为后续可撤销性预置 jti，并将 tokenVersion 固定为用户当前版本
+        extraClaims.putIfAbsent("jti", java.util.UUID.randomUUID().toString());
+        Integer currentUserTokenVersion = user.getTokenVersion() == null ? 1 : user.getTokenVersion();
+        // 强制覆盖，以保证新签发的token与用户当前版本一致
+        extraClaims.put("tokenVersion", currentUserTokenVersion);
         return Jwts.builder()
                 .setClaims(extraClaims)
                 .setSubject(user.getUsername())
@@ -96,12 +101,48 @@ public class JwtServiceImpl implements JwtService {
     @Override
     public boolean validateToken(String token, User user) {
         final String username = extractUsername(token);
-        return (username.equals(user.getUsername()) && !isTokenExpired(token));
+        if (!username.equals(user.getUsername())) {
+            return false;
+        }
+        if (isTokenExpired(token)) {
+            return false;
+        }
+        // 关键校验：tokenVersion 必须与用户当前版本一致
+        try {
+            Integer tokenVersion = extractTokenVersion(token);
+            Integer userVersion = user.getTokenVersion() == null ? 1 : user.getTokenVersion();
+            if (tokenVersion == null) tokenVersion = 1;
+            return tokenVersion.equals(userVersion);
+        } catch (Exception ignore) {
+            // 无法解析时，保守处理为无效
+            return false;
+        }
     }
     
     @Override
     public boolean isTokenExpired(String token) {
         return extractExpiration(token).before(new Date());
+    }
+    
+    @Override
+    public Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+
+    @Override
+    public String extractJti(String token) {
+        try {
+            return extractClaim(token, claims -> claims.getId());
+        } catch (Exception ignore) {
+            // 兼容通过claims字段存入的jti
+            return extractClaim(token, claims -> claims.get("jti", String.class));
+        }
+    }
+
+    @Override
+    public Integer extractTokenVersion(String token) {
+        Integer v = extractClaim(token, claims -> claims.get("tokenVersion", Integer.class));
+        return v != null ? v : 1;
     }
     
     private <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
@@ -122,7 +163,5 @@ public class JwtServiceImpl implements JwtService {
         return Keys.hmacShaKeyFor(keyBytes);
     }
     
-    private Date extractExpiration(String token) {
-        return extractClaim(token, Claims::getExpiration);
-    }
+    // 保留旧私有方法的功能由接口方法替代
 } 

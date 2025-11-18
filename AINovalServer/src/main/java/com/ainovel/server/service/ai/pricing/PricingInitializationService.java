@@ -279,6 +279,10 @@ public class PricingInitializationService implements ApplicationRunner {
                 
                 createPricing("siliconflow", "deepseek-chat", "DeepSeek Chat", 
                         0.00014, 0.00028, 32768, "SiliconFlow DeepSeek Chat模型"),
+
+                // SiliconFlow Qwen3-8B（免费）- 修复定价缺失导致的扣费调整失败
+                createPricing("siliconflow", "Qwen/Qwen3-8B", "Qwen3-8B", 
+                        0.0, 0.0, 32768, "SiliconFlow Qwen3-8B - 免费使用"),
                 
                 // OpenRouter 热门模型
                 createPricing("openrouter", "anthropic/claude-3.5-sonnet", "Claude 3.5 Sonnet (OpenRouter)", 

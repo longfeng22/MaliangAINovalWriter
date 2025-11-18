@@ -4,7 +4,6 @@ import com.ainovel.server.common.response.ApiResponse;
 import com.ainovel.server.common.response.PagedResponse;
 import com.ainovel.server.common.response.CursorPageResponse;
 
-import com.ainovel.server.common.security.CurrentUser;
 import com.ainovel.server.domain.model.observability.LLMTrace;
 import com.ainovel.server.service.ai.observability.LLMTraceService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -15,6 +14,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
@@ -193,7 +193,8 @@ public class AdminLLMObservabilityController {
     @Operation(summary = "导出LLM调用日志(带过滤)", description = "导出指定条件的LLM调用日志，应用与search相同的过滤")
     public Mono<ResponseEntity<ApiResponse<List<LLMTrace>>>> exportTracesAdvanced(
             @RequestBody(required = false) Map<String, Object> filterCriteria,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 导出LLM调用日志(高级)", adminId);
 
         String userId = asString(filterCriteria, "userId");
@@ -415,7 +416,8 @@ public class AdminLLMObservabilityController {
     @Operation(summary = "导出LLM调用日志", description = "导出指定条件的LLM调用日志")
     public Mono<ResponseEntity<ApiResponse<List<LLMTrace>>>> exportTraces(
             @RequestBody(required = false) Map<String, Object> filterCriteria,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 导出LLM调用日志", adminId);
         
         return llmTraceService.exportTraces(filterCriteria)
@@ -433,7 +435,8 @@ public class AdminLLMObservabilityController {
     @Operation(summary = "清理旧日志", description = "清理指定时间之前的LLM调用日志")
     public Mono<ResponseEntity<ApiResponse<Map<String, Object>>>> cleanupOldTraces(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime beforeTime,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 清理{}之前的LLM调用日志", adminId, beforeTime);
         
         return llmTraceService.cleanupOldTraces(beforeTime)

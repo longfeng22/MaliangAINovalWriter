@@ -238,6 +238,12 @@ public class EnhancedUserPromptServiceImpl implements EnhancedUserPromptService 
         return repository.findById(templateId)
                 .switchIfEmpty(Mono.error(new IllegalArgumentException("模板不存在: " + templateId)))
                 .flatMap(template -> {
+                    // 🔒 若作者开启了隐藏提示词，禁止他人复制
+                    String owner = template.getAuthorId() != null ? template.getAuthorId() : template.getUserId();
+                    boolean isOwner = userId != null && userId.equals(owner);
+                    if (Boolean.TRUE.equals(template.getHidePrompts()) && !isOwner) {
+                        return Mono.error(new IllegalStateException("作者隐藏了提示词，禁止复制"));
+                    }
                     // 允许复制任何模板，包括其他用户的私有模板
                     log.info("复制模板: templateId={}, isPublic={}, owner={}", templateId, template.getIsPublic(), template.getUserId());
 
@@ -270,6 +276,7 @@ public class EnhancedUserPromptServiceImpl implements EnhancedUserPromptService 
                                         .sourceTemplateId(templateId)
                                         .version(1)
                                         .language(template.getLanguage() != null ? template.getLanguage() : "zh")
+                                        .settingGenerationConfig(template.getSettingGenerationConfig()) // 🆕 复制设定生成配置
                                         .createdAt(now)
                                         .updatedAt(now)
                                         .build();
@@ -648,7 +655,13 @@ public class EnhancedUserPromptServiceImpl implements EnhancedUserPromptService 
             "   - 'description' (字符串): 详细描述\n" +
             "3. 可选字段：\n" +
             "   - 'attributes' (对象): 属性键值对\n" +
-            "   - 'tags' (数组): 标签列表\n\n" +
+            "   - 'tags' (数组): 标签列表\n" +
+            "   - 'parentId' (字符串): 父设定ID，用于建立层级关系\n\n" +
+            "**设定关联规则：**\n" +
+            "- 如果新生成的设定与已有设定存在关联关系或父子关系，请填充 'parentId' 字段\n" +
+            "- parentId 应该是已有设定的ID（在已有设定列表中查找）\n" +
+            "- 例如：某个物品属于某个角色，该物品的parentId应该是该角色的ID\n" +
+            "- 例如：某个地点的子区域，子区域的parentId应该是父区域的ID\n\n" +
             "**JSON格式要求：**\n" +
             "- 必须以 [ 开始，以 ] 结束\n" +
             "- 每个对象必须完整闭合 { }\n" +
@@ -657,7 +670,7 @@ public class EnhancedUserPromptServiceImpl implements EnhancedUserPromptService 
             "- 不要添加任何解释文字或代码块标记\n" +
             "- 确保JSON语法完全正确\n\n" +
             "**示例输出格式：**\n" +
-            "[{\"name\":\"示例名称\",\"type\":\"角色\",\"description\":\"示例描述\"}]\n\n" +
+            "[{\"name\":\"示例名称\",\"type\":\"角色\",\"description\":\"示例描述\"},{\"name\":\"相关物品\",\"type\":\"道具\",\"description\":\"示例描述\",\"parentId\":\"已有设定ID\"}]\n\n" +
             "如果找不到某种类型的设定，请不要包含它。专注于生成完整、有效的JSON数组。");
         
         // 用户提示词模板 - 增强指导

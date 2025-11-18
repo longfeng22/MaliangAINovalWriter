@@ -80,6 +80,20 @@ class ToggleFavoriteStatus extends PromptNewEvent {
   List<Object?> get props => [promptId, isFavorite];
 }
 
+/// 提交审核
+class SubmitForReview extends PromptNewEvent {
+  final String promptId;
+  final bool hidePrompts;
+
+  const SubmitForReview({
+    required this.promptId,
+    this.hidePrompts = false,
+  });
+
+  @override
+  List<Object?> get props => [promptId, hidePrompts];
+}
+
 /// 设置默认提示词模板
 class SetDefaultTemplate extends PromptNewEvent {
   final String promptId;

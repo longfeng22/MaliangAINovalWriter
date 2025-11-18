@@ -31,7 +31,6 @@ import com.ainovel.server.service.SceneService;
 import com.ainovel.server.service.NovelSettingService;
 import com.ainovel.server.service.setting.SettingConversionService;
 import com.ainovel.server.service.setting.generation.InMemorySessionManager;
-import com.ainovel.server.service.EnhancedUserPromptService;
 import com.ainovel.server.service.UserPromptService;
 import com.ainovel.server.service.cache.NovelStructureCache;
 import com.ainovel.server.service.UserAIModelConfigService;
@@ -41,14 +40,12 @@ import com.ainovel.server.service.CreditService;
 import com.ainovel.server.service.PublicModelConfigService;
 import com.ainovel.server.repository.AIChatMessageRepository;
 import com.ainovel.server.domain.model.AIChatMessage;
-import com.ainovel.server.service.PublicAIApplicationService;
 import com.ainovel.server.service.EnhancedUserPromptService;
 import com.ainovel.server.web.dto.request.UniversalAIRequestDto;
 import com.ainovel.server.web.dto.response.UniversalAIResponseDto;
 import com.ainovel.server.web.dto.response.UniversalAIPreviewResponseDto;
 import com.ainovel.server.common.util.RichTextUtil;
 import com.ainovel.server.common.util.PromptXmlFormatter;
-import com.ainovel.server.common.util.PromptTemplateModel;
 
 // 🚀 新增：导入重构后的内容提供器相关类
 import com.ainovel.server.service.impl.content.ContentProviderFactory;
@@ -60,6 +57,7 @@ import com.ainovel.server.service.prompt.PromptProviderFactory;
 import com.ainovel.server.service.prompt.AIFeaturePromptProvider;
 import com.ainovel.server.service.prompt.impl.VirtualThreadPlaceholderResolver;
 import com.ainovel.server.service.prompt.impl.ContextualPlaceholderResolver;
+import com.ainovel.server.service.billing.BillingKeys;
 
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
@@ -136,6 +134,9 @@ public class UniversalAIServiceImpl implements UniversalAIService {
     @Autowired
     private RagService ragService;
 
+    @Autowired
+    private com.ainovel.server.service.ai.observability.TraceContextManager traceContextManager;
+
 
     @Autowired
     private PromptXmlFormatter promptXmlFormatter;
@@ -161,8 +162,7 @@ public class UniversalAIServiceImpl implements UniversalAIService {
     @Autowired
     private AIChatMessageRepository messageRepository;
     
-    @Autowired
-    private PublicAIApplicationService publicAIApplicationService;
+    // 删除公共AI应用服务依赖：统一走 Provider 装饰器链
 
     // 🚀 新增：增强的用户提示词服务依赖
     @Autowired
@@ -171,6 +171,43 @@ public class UniversalAIServiceImpl implements UniversalAIService {
     // 🚀 移除：所有内部的ContentProvider相关代码已提取为独立类
     // ContentProvider接口、ContentResult类和各种Provider实现已移动到独立的包中
 
+    /**
+     * 🔥 构建初始的系统和用户消息（用于多轮对话场景）
+     */
+    @Override
+    public Mono<List<UniversalAIRequestDto.MessageDto>> buildInitialMessages(UniversalAIRequestDto request) {
+        log.info("构建初始消息: requestType={}, userId={}", request.getRequestType(), request.getUserId());
+        
+        return buildPrompts(request)
+                .map(prompts -> {
+                    List<UniversalAIRequestDto.MessageDto> messages = new ArrayList<>();
+                    
+                    // 第1条：系统消息
+                    String systemPrompt = prompts.get("system");
+                    if (systemPrompt != null && !systemPrompt.isEmpty()) {
+                        messages.add(UniversalAIRequestDto.MessageDto.builder()
+                                .role("system")
+                                .content(systemPrompt)
+                                .build());
+                        log.info("✅ 第1条系统消息构建完成，长度={}", systemPrompt.length());
+                    }
+                    
+                    // 第2条：用户消息
+                    String userPrompt = prompts.get("user");
+                    if (userPrompt != null && !userPrompt.isEmpty()) {
+                        messages.add(UniversalAIRequestDto.MessageDto.builder()
+                                .role("user")
+                                .content(userPrompt)
+                                .build());
+                        log.info("✅ 第2条用户消息构建完成，长度={}", userPrompt.length());
+                    }
+                    
+                    log.info("✅ 初始消息构建完成，总计{}条", messages.size());
+                    return messages;
+                })
+                .doOnError(error -> log.error("构建初始消息失败: {}", error.getMessage(), error));
+    }
+    
     @Override
     public Mono<UniversalAIResponseDto> processRequest(UniversalAIRequestDto request) {
         log.info("处理通用AI请求 - 类型: {}, 用户ID: {}", request.getRequestType(), request.getUserId());
@@ -330,13 +367,19 @@ public class UniversalAIServiceImpl implements UniversalAIService {
      * 构建AI请求对象
      */
     @Trace(operationName = "ai.universal.buildAIRequest")
-    private Mono<AIRequest> buildAIRequest(UniversalAIRequestDto request) {
+    @Override
+    public Mono<AIRequest> buildAIRequest(UniversalAIRequestDto request) {
         return buildPrompts(request)
                 .flatMap(prompts -> {
                     AIRequest aiRequest = new AIRequest();
                     aiRequest.setUserId(request.getUserId());
                     aiRequest.setNovelId(request.getNovelId());
                     aiRequest.setSceneId(request.getSceneId());
+                    // 设置明确的功能类型
+                    try {
+                        AIFeatureType ft = mapRequestTypeToFeatureType(request.getRequestType());
+                        aiRequest.setFeatureType(ft);
+                    } catch (Exception ignore) {}
 
                     // 从多个来源获取模型配置信息
                     String modelName = null;
@@ -438,12 +481,63 @@ public class UniversalAIServiceImpl implements UniversalAIService {
                     } else {
                         messagesMono = Mono.fromSupplier(() -> {
                             List<AIRequest.Message> messages = new ArrayList<>();
-                            if (userPrompt != null && !userPrompt.isEmpty()) {
-                                AIRequest.Message userMessage = new AIRequest.Message();
-                                userMessage.setRole("user");
-                                userMessage.setContent(userPrompt);
-                                messages.add(userMessage);
+                            
+                            // 🔥 检查是否为完整消息列表（第一条为system消息）
+                            boolean isCompleteMessageList = false;
+                            if (request.getHistoricalMessages() != null && !request.getHistoricalMessages().isEmpty()) {
+                                UniversalAIRequestDto.MessageDto firstMsg = request.getHistoricalMessages().get(0);
+                                if ("system".equalsIgnoreCase(firstMsg.getRole())) {
+                                    isCompleteMessageList = true;
+                                    log.info("🔥 检测到完整消息列表（第一条为system），直接使用，不再添加提示词");
+                                }
                             }
+                            
+                            if (isCompleteMessageList) {
+                                // 完整消息列表模式：直接使用 historicalMessages，不再添加
+                                log.info("✅ 使用完整消息列表，数量: {}", request.getHistoricalMessages().size());
+                                for (UniversalAIRequestDto.MessageDto dto : request.getHistoricalMessages()) {
+                                    AIRequest.Message msg = new AIRequest.Message();
+                                    msg.setRole(dto.getRole());
+                                    msg.setContent(dto.getContent());
+                                    messages.add(msg);
+                                    log.info("  ✅ 消息{}: role={}, contentLength={}", 
+                                             messages.size(), dto.getRole(), 
+                                             dto.getContent() != null ? dto.getContent().length() : 0);
+                                }
+                            } else {
+                                // 传统模式：先添加 historicalMessages（如果有），再添加当前用户消息
+                                if (request.getHistoricalMessages() != null && !request.getHistoricalMessages().isEmpty()) {
+                                    log.info("✅ 检测到历史消息（传统模式），数量: {}", request.getHistoricalMessages().size());
+                                    for (UniversalAIRequestDto.MessageDto dto : request.getHistoricalMessages()) {
+                                        AIRequest.Message msg = new AIRequest.Message();
+                                        msg.setRole(dto.getRole());
+                                        msg.setContent(dto.getContent());
+                                        messages.add(msg);
+                                        log.info("  ✅ 添加历史消息: role={}, contentLength={}", dto.getRole(), 
+                                                 dto.getContent() != null ? dto.getContent().length() : 0);
+                                    }
+                                }
+                                
+                                // 添加当前用户消息（如果存在且不是历史消息的最后一条）
+                                if (userPrompt != null && !userPrompt.isEmpty()) {
+                                    boolean duplicateLast = false;
+                                    if (!messages.isEmpty()) {
+                                        AIRequest.Message last = messages.get(messages.size() - 1);
+                                        String lastRole = last.getRole() != null ? last.getRole() : "";
+                                        String lastContent = last.getContent() != null ? last.getContent() : "";
+                                        duplicateLast = "user".equalsIgnoreCase(lastRole) && userPrompt.equals(lastContent);
+                                    }
+                                    if (!duplicateLast) {
+                                        AIRequest.Message userMessage = new AIRequest.Message();
+                                        userMessage.setRole("user");
+                                        userMessage.setContent(userPrompt);
+                                        messages.add(userMessage);
+                                        log.info("  ✅ 添加当前用户消息: contentLength={}", userPrompt.length());
+                                    }
+                                }
+                            }
+                            
+                            log.info("✅ 最终消息列表数量: {}", messages.size());
                             return messages;
                         });
                     }
@@ -483,6 +577,44 @@ public class UniversalAIServiceImpl implements UniversalAIService {
                             metadata.putAll(request.getMetadata());
                         }
                         aiRequest.setMetadata(metadata);
+                        // 确保 traceId 与 幂等键存在并双向同步：
+                        // 1) 若两者都缺失，则生成新的 traceId 并同时写入 metadata 与 parameters.providerSpecific
+                        try {
+                            String existingTraceId = aiRequest.getTraceId();
+                            Object existingIdem = metadata.get(BillingKeys.REQUEST_IDEMPOTENCY_KEY);
+                            boolean noTraceId = (existingTraceId == null || existingTraceId.isBlank());
+                            boolean noIdem = (existingIdem == null || String.valueOf(existingIdem).isBlank());
+                            if (noTraceId && noIdem) {
+                                String newId = java.util.UUID.randomUUID().toString();
+                                aiRequest.setTraceId(newId);
+                                metadata.put(BillingKeys.REQUEST_IDEMPOTENCY_KEY, newId);
+
+                                // 同步到 parameters.providerSpecific
+                                Map<String, Object> params = aiRequest.getParameters();
+                                if (params == null) {
+                                    params = new HashMap<>();
+                                    aiRequest.setParameters(params);
+                                }
+                                Object psObj = params.get("providerSpecific");
+                                Map<String, Object> providerSpecific;
+                                if (psObj instanceof Map<?, ?>) {
+                                    @SuppressWarnings("unchecked")
+                                    Map<String, Object> casted = (Map<String, Object>) psObj;
+                                    providerSpecific = new HashMap<String, Object>(casted);
+                                } else {
+                                    providerSpecific = new HashMap<String, Object>();
+                                }
+                                providerSpecific.put(BillingKeys.REQUEST_IDEMPOTENCY_KEY, newId);
+                                params.put("providerSpecific", providerSpecific);
+                            }
+                        } catch (Exception ignore) {}
+                        // 若存在幂等键则同步到 traceId 字段
+                        try {
+                            Object idem = metadata.get(com.ainovel.server.service.billing.BillingKeys.REQUEST_IDEMPOTENCY_KEY);
+                            if (idem instanceof String s && !s.isBlank()) {
+                                aiRequest.setTraceId(s);
+                            }
+                        } catch (Exception ignore) {}
 
                         // 🚀 调整debug日志，避免暴露完整的提示词内容
                         log.debug("构建的AI请求: userId={}, model={}, messages数量={}, metadata keys={}",
@@ -1139,70 +1271,6 @@ public class UniversalAIServiceImpl implements UniversalAIService {
         }
     }
 
-    /**
-     * 🚀 计算某个内容类型和ID包含的所有子内容ID
-     */
-    private Set<String> calculateContainedIds(String type, String id, String novelId) {
-        Set<String> containedIds = new HashSet<>();
-        
-        if (type == null || id == null) {
-            return containedIds;
-        }
-
-        switch (type.toLowerCase()) {
-            case TYPE_FULL_NOVEL_TEXT:
-            case TYPE_FULL_NOVEL_SUMMARY:
-                // 🚀 完整小说包含所有章节和场景
-                try {
-                    List<Scene> allScenes = novelService.findScenesByNovelIdInOrder(novelId).collectList().block();
-                    if (allScenes != null) {
-                        for (Scene scene : allScenes) {
-                            containedIds.add("scene_" + scene.getId());
-                            containedIds.add("chapter_" + scene.getChapterId());
-                        }
-                    }
-                } catch (Exception e) {
-                    log.warn("获取小说场景列表失败: {}", e.getMessage());
-                }
-                break;
-                
-            case TYPE_ACT:
-                // 🚀 Act包含其下的所有章节和场景
-                // 注意：这里需要根据实际的Act实现来获取包含的章节
-                // 暂时跳过，因为Act的实现还不完整
-                log.debug("Act类型的包含关系计算暂未实现");
-                break;
-                
-            case TYPE_CHAPTER:
-                // 🚀 章节包含其下的所有场景
-                try {
-                    String chapterId = extractIdFromContextId(id);
-                    // 🚀 修复：确保章节ID格式正确（去掉前缀），适配数据库字段格式变更
-                    String normalizedChapterId = normalizeChapterIdForQuery(chapterId);
-                    List<Scene> chapterScenes = sceneService.findSceneByChapterIdOrdered(normalizedChapterId).collectList().block();
-                    if (chapterScenes != null) {
-                        for (Scene scene : chapterScenes) {
-                            containedIds.add("scene_" + scene.getId());
-                        }
-                    }
-                } catch (Exception e) {
-                    log.warn("获取章节场景列表失败: {}", e.getMessage());
-                }
-                break;
-                
-            case TYPE_SCENE:
-                // 🚀 场景只包含自己
-                containedIds.add(normalizeId(type, id));
-                break;
-                
-            default:
-                // 🚀 其他类型（设定、片段等）只包含自己
-                containedIds.add(normalizeId(type, id));
-                break;
-        }
-
-        return containedIds;
-    }
 
     // 🚀 移除：这些方法已移动到对应的独立Provider类中
     // - getFullNovelTextContent -> FullNovelTextProvider
@@ -1215,13 +1283,7 @@ public class UniversalAIServiceImpl implements UniversalAIService {
      * 调用AI服务
      */
     private Mono<AIResponse> callAIService(AIRequest aiRequest, String requestType) {
-        // 🚀 改为通过数据库校验 provider+modelId 判定公共模型
-        return isPublicModelByDB(aiRequest).flatMap(isPublic -> {
-            if (Boolean.TRUE.equals(isPublic)) {
-                return handlePublicModelRequest(aiRequest, requestType, false);
-            }
-
-            switch (requestType.toLowerCase()) {
+        switch (requestType.toLowerCase()) {
             case "chat":
                 return novelAIService.generateChatResponse(
                         aiRequest.getUserId(), 
@@ -1274,8 +1336,7 @@ public class UniversalAIServiceImpl implements UniversalAIService {
                     log.info("未指定特定模型，使用默认生成方法");
                     return novelAIService.generateNovelContent(aiRequest);
                 }
-            }
-        });
+        }
     }
 
     /**
@@ -1283,13 +1344,7 @@ public class UniversalAIServiceImpl implements UniversalAIService {
      */
     @Trace(operationName = "ai.universal.stream")
     private Flux<String> callAIServiceStream(AIRequest aiRequest, String requestType) {
-        // 🚀 改为通过数据库校验 provider+modelId 判定公共模型
-        return isPublicModelByDB(aiRequest).flatMapMany(isPublic -> {
-            if (Boolean.TRUE.equals(isPublic)) {
-                return handlePublicModelRequestStream(aiRequest, requestType);
-            }
-
-            switch (requestType.toLowerCase()) {
+        switch (requestType.toLowerCase()) {
             case "chat":
                 return novelAIService.generateChatResponseStream(
                         aiRequest.getUserId(), 
@@ -1324,96 +1379,19 @@ public class UniversalAIServiceImpl implements UniversalAIService {
                                         .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk));
                             });
                 }
-                // 如果指定了模型名称，使用指定的模型
-                else if (requestedModelName != null && !requestedModelName.isEmpty()) {
-                    log.info("使用指定的模型名称: {}", requestedModelName);
-                    return novelAIService.getAIModelProvider(aiRequest.getUserId(), requestedModelName)
-                            .flatMapMany(provider -> {
-                                log.info("获取到指定模型的AI模型提供商: {}, 开始流式生成", provider.getModelName());
-                                return provider.generateContentStream(aiRequest)
-                                        .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk));
-                            })
-                            .onErrorResume(error -> {
-                                log.error("使用指定模型名称 {} 失败，回退到默认流程: {}", requestedModelName, error.getMessage());
-                                // 回退到默认的流式生成方法
-                                return novelAIService.generateNovelContentStream(aiRequest)
-                                        .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk));
-                            });
-                }
                 // 使用默认的流式生成方法
                 else {
-                    log.info("未指定特定模型，使用默认流式生成方法");
-                    return novelAIService.generateNovelContentStream(aiRequest)
-                            .filter(chunk -> chunk != null && !chunk.isBlank() && !"heartbeat".equalsIgnoreCase(chunk));
+                    log.error("未指定特定模型，流程错误");
+                    throw new RuntimeException("未指定特定模型，流程错误");
                 }
-            }
-        });
+        }
     }
 
     /**
      * 🚀 重构：处理公共模型流式请求 - 改为后扣费模式（流式特殊处理）
      * 注意：流式请求无法在过程中获取token使用量，依赖观测系统后续处理
      */
-    private Flux<String> handlePublicModelRequestStream(AIRequest aiRequest, String requestType) {
-        // 优先使用公共模型配置ID进行解析与校验
-        String publicCfgId = extractPublicModelConfigId(aiRequest);
-        if (publicCfgId == null || publicCfgId.isBlank()) {
-            return Flux.error(new IllegalArgumentException("公共模型请求缺少publicModelConfigId"));
-        }
-
-        AIFeatureType featureType = mapRequestTypeToFeatureType(requestType);
-
-        return publicModelConfigService.findById(publicCfgId)
-                .switchIfEmpty(Mono.error(new IllegalArgumentException("指定的公共模型配置不存在: " + publicCfgId)))
-                .flatMapMany(publicModel -> {
-                    if (!publicModel.getEnabled()) {
-                        return Flux.error(new IllegalArgumentException("该公共模型当前不可用"));
-                    }
-                    if (!publicModel.isEnabledForFeature(featureType)) {
-                        return Flux.error(new IllegalArgumentException("该公共模型不支持当前功能: " + featureType));
-                    }
-
-                    // 标记计费上下文到parameters.providerSpecific（监听器只读此处）
-                    try {
-                        com.ainovel.server.service.billing.PublicModelBillingContext ctx =
-                            com.ainovel.server.service.billing.PublicModelBillingContext.builder()
-                                .usedPublicModel(true)
-                                .requiresPostStreamDeduction(true)
-                                .streamFeatureType(featureType.toString())
-                                .publicModelConfigId(publicCfgId)
-                                .provider(publicModel.getProvider())
-                                .modelId(publicModel.getModelId())
-                                .build();
-                        com.ainovel.server.service.billing.BillingMarkerEnricher.applyTo(aiRequest, ctx);
-                    } catch (Exception ignore) {}
-
-                    // 确保下游公共服务能正确解析 provider/model：将模型名写入 aiRequest.model
-                    try {
-                        aiRequest.setModel(publicModel.getModelId());
-                        if (aiRequest.getMetadata() != null) {
-                            aiRequest.getMetadata().put("provider", publicModel.getProvider());
-                            aiRequest.getMetadata().put("modelId", publicModel.getModelId());
-                        }
-                    } catch (Exception ignore) {}
-
-                    log.info("🚀 处理公共模型流式请求: {}:{}, 用户: {}", publicModel.getProvider(), publicModel.getModelId(), aiRequest.getUserId());
-
-                    return publicAIApplicationService.generateContentStreamWithPublicModel(aiRequest)
-                            .doOnNext(chunk -> {
-                                log.debug("公共模型流式响应块: provider={}, modelId={}, chunkLength={}",
-                                        publicModel.getProvider(), publicModel.getModelId(),
-                                        chunk != null ? chunk.length() : 0);
-                            })
-                            .doOnComplete(() -> {
-                                log.info("公共模型流式生成完成: provider={}, modelId={}",
-                                        publicModel.getProvider(), publicModel.getModelId());
-                            })
-                            .doOnError(error -> {
-                                log.error("公共模型流式生成失败: provider={}, modelId={}, error={}",
-                                        publicModel.getProvider(), publicModel.getModelId(), error.getMessage(), error);
-                            });
-                });
-    }
+    // 已收敛到按 configId 获取 Provider 的统一路径（公共模型逻辑下沉到装饰器层）
 
     /**
      * 转换为响应DTO
@@ -1514,7 +1492,49 @@ public class UniversalAIServiceImpl implements UniversalAIService {
             log.warn("请求类型为null，默认使用AI_CHAT");
             return AIFeatureType.AI_CHAT;
         }
-        return AIFeatureType.valueOf(requestType);
+
+        final String rt = requestType.trim();
+        if (rt.isEmpty()) {
+            return AIFeatureType.AI_CHAT;
+        }
+
+        // 兼容大小写与历史别名
+        String key = rt.toLowerCase();
+        switch (key) {
+            case "chat":
+                return AIFeatureType.AI_CHAT;
+            case "expansion":
+                return AIFeatureType.TEXT_EXPANSION;
+            case "summary":
+                return AIFeatureType.TEXT_SUMMARY;
+            case "refactor":
+                return AIFeatureType.TEXT_REFACTOR;
+            case "generation":
+                return AIFeatureType.NOVEL_GENERATION;
+            case "scene_to_summary":
+                return AIFeatureType.SCENE_TO_SUMMARY;
+            case "summary_to_scene":
+                return AIFeatureType.SUMMARY_TO_SCENE;
+            case "novel_compose":
+                return AIFeatureType.NOVEL_COMPOSE;
+            case "story_prediction_summary":
+                // 取消 STORY_PREDICTION_*：统一映射至通用功能
+                return AIFeatureType.SCENE_TO_SUMMARY;
+            case "story_prediction_scene":
+                return AIFeatureType.SUMMARY_TO_SCENE;
+            default:
+                try {
+                    // 兜底：尝试按照枚举名解析（要求传入大写枚举名）
+                    return AIFeatureType.valueOf(rt);
+                } catch (Exception ignore) {
+                    try {
+                        return AIFeatureType.valueOf(rt.toUpperCase());
+                    } catch (Exception e) {
+                        log.warn("无法映射请求类型: {}，默认使用AI_CHAT", requestType);
+                        return AIFeatureType.AI_CHAT;
+                    }
+                }
+        }
     }
 
  
@@ -1614,81 +1634,9 @@ public class UniversalAIServiceImpl implements UniversalAIService {
         return chapterId;
     }
 
-    /**
-     * 🚀 新增：从AIRequest的metadata中提取是否为公共模型的标识
-     */
-    private Boolean extractIsPublicModelFromMetadata(AIRequest aiRequest) {
-        if (aiRequest.getMetadata() != null) {
-            Object isPublic = aiRequest.getMetadata().get("isPublicModel");
-            if (isPublic instanceof Boolean) {
-                return (Boolean) isPublic;
-            }
-        }
-        return null;
-    }
 
-    /**
-     * 🚀 新增：统一解析 provider（兼容多种键名）
-     */
-    private String extractProviderFromMetadata(AIRequest aiRequest) {
-        if (aiRequest.getMetadata() == null) return null;
-        Object v1 = aiRequest.getMetadata().get("modelProvider");
-        if (v1 instanceof String && !((String) v1).isEmpty()) return (String) v1;
-        Object v2 = aiRequest.getMetadata().get("requestedModelProvider");
-        if (v2 instanceof String && !((String) v2).isEmpty()) return (String) v2;
-        Object v3 = aiRequest.getMetadata().get("provider");
-        if (v3 instanceof String && !((String) v3).isEmpty()) return (String) v3;
-        return null;
-    }
 
-    /**
-     * 🚀 新增：统一解析 modelId（兼容多种键名）
-     */
-    private String extractModelIdFromMetadata(AIRequest aiRequest) {
-        if (aiRequest.getMetadata() == null) return null;
-        Object v1 = aiRequest.getMetadata().get("modelId");
-        if (v1 instanceof String && !((String) v1).isEmpty()) return (String) v1;
-        Object v2 = aiRequest.getMetadata().get("requestedModelId");
-        if (v2 instanceof String && !((String) v2).isEmpty()) return (String) v2;
-        // 兼容旧字段：曾把 modelId 放在 requestedModelName
-        Object v3 = aiRequest.getMetadata().get("requestedModelName");
-        if (v3 instanceof String && !((String) v3).isEmpty()) return (String) v3;
-        // 兜底：若走到这里，尝试最后的 modelName（不推荐，但保持兼容）
-        Object v4 = aiRequest.getMetadata().get("modelName");
-        if (v4 instanceof String && !((String) v4).isEmpty()) return (String) v4;
-        return null;
-    }
 
-    /**
-     * 🚀 新增：通过数据库校验 provider + modelId 判定是否公共模型
-     * 若缺少 provider 或 modelId，则返回 false；若旧标记 isPublicModel=true 则作为兜底。
-     */
-    private Mono<Boolean> isPublicModelByDB(AIRequest aiRequest) {
-        try {
-            String publicCfgId = extractPublicModelConfigId(aiRequest);
-            if (publicCfgId == null || publicCfgId.isBlank()) {
-                return Mono.just(false);
-            }
-            return publicModelConfigService.findById(publicCfgId)
-                    .hasElement()
-                    .doOnNext(found -> log.info("公共模型数据库判定(by id): publicModelConfigId={}, isPublic={}", publicCfgId, found));
-        } catch (Exception ex) {
-            log.warn("公共模型数据库判定异常，降级为 false: {}", ex.getMessage());
-            return Mono.just(false);
-        }
-    }
-
-    /**
-     * 🚀 新增：从AIRequest的metadata中提取模型配置ID（兼容多种键名）
-     */
-    private String extractModelConfigIdFromMetadata(AIRequest aiRequest) {
-        if (aiRequest.getMetadata() == null) return null;
-        Object v1 = aiRequest.getMetadata().get("modelConfigId");
-        if (v1 instanceof String && !((String) v1).isEmpty()) return (String) v1;
-        Object v2 = aiRequest.getMetadata().get("requestedModelConfigId");
-        if (v2 instanceof String && !((String) v2).isEmpty()) return (String) v2;
-        return null;
-    }
 
     /**
      * 优先从parameters.providerSpecific与metadata中提取公共模型配置ID
@@ -1716,176 +1664,11 @@ public class UniversalAIServiceImpl implements UniversalAIService {
     /**
      * 🚀 重构：处理公共模型请求，改为基于真实token使用量的后扣费模式
      */
-    private Mono<AIResponse> handlePublicModelRequest(AIRequest aiRequest, String requestType, boolean isStream) {
-        // 优先使用公共模型配置ID进行解析与校验
-        String publicCfgId = extractPublicModelConfigId(aiRequest);
-        if (publicCfgId == null || publicCfgId.isBlank()) {
-            return Mono.error(new IllegalArgumentException("公共模型请求缺少publicModelConfigId"));
-        }
+    // 已收敛到按 configId 获取 Provider 的统一路径（公共模型逻辑下沉到装饰器层）
 
-        AIFeatureType featureType = mapRequestTypeToFeatureType(requestType);
 
-        return publicModelConfigService.findById(publicCfgId)
-                .switchIfEmpty(Mono.error(new IllegalArgumentException("指定的公共模型配置不存在: " + publicCfgId)))
-                .flatMap(publicModel -> {
-                    if (!publicModel.getEnabled()) {
-                        return Mono.error(new IllegalArgumentException("该公共模型当前不可用"));
-                    }
-                    if (!publicModel.isEnabledForFeature(featureType)) {
-                        return Mono.error(new IllegalArgumentException("该公共模型不支持当前功能: " + featureType));
-                    }
 
-                    // 标记计费上下文到parameters.providerSpecific（监听器只读此处）
-                    try {
-                        com.ainovel.server.service.billing.PublicModelBillingContext ctx =
-                                com.ainovel.server.service.billing.PublicModelBillingContext.builder()
-                                        .usedPublicModel(true)
-                                        .requiresPostStreamDeduction(true)
-                                        .streamFeatureType(featureType.toString())
-                                        .publicModelConfigId(publicCfgId)
-                                        .provider(publicModel.getProvider())
-                                        .modelId(publicModel.getModelId())
-                                        .build();
-                        com.ainovel.server.service.billing.BillingMarkerEnricher.applyTo(aiRequest, ctx);
-                    } catch (Exception ignore) {}
 
-                    // 确保下游公共服务能正确解析 provider/model：将模型名写入 aiRequest.model
-                    try {
-                        aiRequest.setModel(publicModel.getModelId());
-                        if (aiRequest.getMetadata() != null) {
-                            aiRequest.getMetadata().put("provider", publicModel.getProvider());
-                            aiRequest.getMetadata().put("modelId", publicModel.getModelId());
-                        }
-                    } catch (Exception ignore) {}
-
-                    log.info("🚀 处理公共模型请求: {}:{}, 用户: {}", publicModel.getProvider(), publicModel.getModelId(), aiRequest.getUserId());
-
-                    // 🚀 新策略：先调用AI服务，获取真实token使用量后再扣费（非流式可在本方法内扣费，保留原逻辑）
-                    return callPublicModelAPI(aiRequest, publicModel, requestType)
-                            .flatMap(aiResponse -> {
-                                AIResponse.TokenUsage tokenUsage = aiResponse.getTokenUsage();
-                                if (tokenUsage == null || tokenUsage.getPromptTokens() == null || tokenUsage.getCompletionTokens() == null) {
-                                    log.warn("AI响应中缺少token使用量信息，使用估算方式: provider={}, modelId={}", publicModel.getProvider(), publicModel.getModelId());
-                                    return fallbackToEstimatedDeduction(aiRequest, publicModel.getProvider(), publicModel.getModelId(), requestType, aiResponse, featureType);
-                                }
-
-                                log.info("获取到真实token使用量: 输入={}, 输出={}, 总计={}",
-                                        tokenUsage.getPromptTokens(), tokenUsage.getCompletionTokens(), tokenUsage.getTotalTokens());
-
-                                return deductCreditsBasedOnActualUsage(
-                                        aiRequest.getUserId(),
-                                        publicModel.getProvider(),
-                                        publicModel.getModelId(),
-                                        featureType,
-                                        tokenUsage.getPromptTokens(),
-                                        tokenUsage.getCompletionTokens()
-                                ).thenReturn(aiResponse);
-                            })
-                            .doOnSuccess(r -> log.info("公共模型请求成功完成，已按实际使用量扣费: provider={}, modelId={}", publicModel.getProvider(), publicModel.getModelId()))
-                            .doOnError(e -> log.error("公共模型请求处理失败: {}:{}, 错误: {}", publicModel.getProvider(), publicModel.getModelId(), e.getMessage()));
-                });
-    }
-
-    /**
-     * 🚀 修复：调用公共模型API - 使用专门的公共AI应用服务
-     */
-    private Mono<AIResponse> callPublicModelAPI(AIRequest aiRequest, com.ainovel.server.domain.model.PublicModelConfig publicModel, String requestType) {
-        // 获取随机可用的API Key
-        var apiKeyEntry = publicModel.getRandomValidApiKey();
-        if (apiKeyEntry == null) {
-            return Mono.error(new IllegalArgumentException("该公共模型当前无可用的API Key"));
-        }
-        
-        log.info("使用公共模型API Key: {} ({})", apiKeyEntry.getNote(), publicModel.getModelKey());
-        
-        // 🚀 修复：使用正确的公共AI应用服务，而不是查找用户私有配置
-        return publicAIApplicationService.generateContentWithPublicModel(aiRequest)
-                .doOnSuccess(response -> {
-                    // 在响应的元数据中标记使用了公共模型
-                    if (response.getMetadata() == null) {
-                        response.setMetadata(new HashMap<>());
-                    }
-                    response.getMetadata().put("usedPublicModel", true);
-                    response.getMetadata().put("publicModelProvider", publicModel.getProvider());
-                    response.getMetadata().put("publicModelId", publicModel.getModelId());
-                    
-                    log.info("公共模型生成成功: provider={}, modelId={}, contentLength={}", 
-                            publicModel.getProvider(), publicModel.getModelId(), 
-                            response.getContent() != null ? response.getContent().length() : 0);
-                })
-                .doOnError(error -> {
-                    log.error("公共模型生成失败: provider={}, modelId={}, error={}", 
-                            publicModel.getProvider(), publicModel.getModelId(), error.getMessage(), error);
-                });
-    }
-
-    /**
-     * 🚀 新增：基于真实token使用量进行积分扣费
-     */
-    private Mono<Void> deductCreditsBasedOnActualUsage(String userId, String provider, String modelId, 
-                                                      AIFeatureType featureType, int actualInputTokens, int actualOutputTokens) {
-        return creditService.deductCreditsForAI(userId, provider, modelId, featureType, actualInputTokens, actualOutputTokens)
-                .flatMap(deductionResult -> {
-                    if (!deductionResult.isSuccess()) {
-                        log.error("基于真实token使用量扣费失败: 用户={}, 模型={}:{}, 输入token={}, 输出token={}, 错误={}", 
-                                userId, provider, modelId, actualInputTokens, actualOutputTokens, deductionResult.getMessage());
-                        return Mono.error(new IllegalArgumentException("积分扣费失败: " + deductionResult.getMessage()));
-                    }
-                    
-                    log.info("✅ 基于真实token使用量扣费成功: 用户={}, 模型={}:{}, 输入token={}, 输出token={}, 扣除积分={}", 
-                            userId, provider, modelId, actualInputTokens, actualOutputTokens, deductionResult.getCreditsDeducted());
-                    return Mono.empty();
-                });
-    }
-
-    /**
-     * 🚀 新增：回退到估算扣费模式（当真实token使用量不可用时）
-     */
-    private Mono<AIResponse> fallbackToEstimatedDeduction(AIRequest aiRequest, String provider, String modelId, 
-                                                         String requestType, AIResponse aiResponse, AIFeatureType featureType) {
-        log.info("回退到估算扣费模式: provider={}, modelId={}", provider, modelId);
-        
-        return estimateTokensAndCost(aiRequest, provider, modelId, featureType)
-                .flatMap(costInfo -> {
-                    return creditService.deductCreditsForAI(
-                            aiRequest.getUserId(), 
-                            provider, 
-                            modelId, 
-                            featureType, 
-                            costInfo.inputTokens, 
-                            costInfo.outputTokens
-                    ).flatMap(deductionResult -> {
-                        if (!deductionResult.isSuccess()) {
-                            return Mono.error(new IllegalArgumentException("积分扣费失败: " + deductionResult.getMessage()));
-                        }
-                        
-                        log.info("⚠️ 使用估算方式扣费成功: 用户={}, 模型={}:{}, 估算输入token={}, 估算输出token={}, 扣除积分={}", 
-                                aiRequest.getUserId(), provider, modelId, costInfo.inputTokens, costInfo.outputTokens, deductionResult.getCreditsDeducted());
-                        // 记录交易（非流式场景由服务内记录，标注ESTIMATED）
-                        try {
-                            com.ainovel.server.domain.model.billing.CreditTransaction tx = com.ainovel.server.domain.model.billing.CreditTransaction.builder()
-                                .traceId(java.util.UUID.randomUUID().toString())
-                                .userId(aiRequest.getUserId())
-                                .provider(provider)
-                                .modelId(modelId)
-                                .featureType(featureType.name())
-                                .inputTokens(costInfo.inputTokens)
-                                .outputTokens(costInfo.outputTokens)
-                                .creditsDeducted(deductionResult.getCreditsDeducted())
-                                .status("DEDUCTED")
-                                .billingMode("ESTIMATED")
-                                .estimated(Boolean.TRUE)
-                                .build();
-                            // 直接异步保存，失败不影响主流程
-                            creditTransactionRepository
-                                .save(tx)
-                                .doOnError(err -> log.warn("保存估算交易失败: {}", err.getMessage()))
-                                .subscribe();
-                        } catch (Throwable ignored) {}
-                        return Mono.just(aiResponse);
-                    });
-                });
-    }
 
     /**
      * 🚀 新增：估算token数量和积分成本的辅助类
@@ -1945,6 +1728,7 @@ public class UniversalAIServiceImpl implements UniversalAIService {
             case TEXT_REFACTOR:
                 return (int) (inputTokens * 1.1);
             case NOVEL_GENERATION:
+            case SUMMARY_TO_SCENE:
                 return (int) (inputTokens * 2.0);
             case AI_CHAT:
                 return (int) (inputTokens * 0.8);
@@ -2713,6 +2497,32 @@ public class UniversalAIServiceImpl implements UniversalAIService {
 
         log.info("预处理去重完成，优化后选择数量: {} (原始: {})", result.size(), selections.size());
         return result;
+    }
+
+
+
+
+
+
+    /**
+     * 从AIRequest参数/元数据中提取或生成idempotencyKey
+     */
+    @SuppressWarnings("unchecked")
+    private String getOrCreateIdempotencyKey(AIRequest aiRequest) {
+        try {
+            if (aiRequest.getParameters() != null) {
+                Object psRaw = aiRequest.getParameters().get("providerSpecific");
+                if (psRaw instanceof java.util.Map<?, ?> m) {
+                    Object key = m.get(com.ainovel.server.service.billing.BillingKeys.REQUEST_IDEMPOTENCY_KEY);
+                    if (key != null) return key.toString();
+                }
+            }
+            if (aiRequest.getMetadata() != null) {
+                Object key = aiRequest.getMetadata().get(com.ainovel.server.service.billing.BillingKeys.REQUEST_IDEMPOTENCY_KEY);
+                if (key != null) return key.toString();
+            }
+        } catch (Exception ignore) {}
+        return java.util.UUID.randomUUID().toString();
     }
 
 } 

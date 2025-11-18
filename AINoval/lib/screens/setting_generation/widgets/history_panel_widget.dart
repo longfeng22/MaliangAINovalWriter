@@ -7,8 +7,17 @@ import '../../../blocs/setting_generation/setting_generation_state.dart';
 import '../../../models/setting_generation_session.dart';
 
 /// 历史面板组件
-class HistoryPanelWidget extends StatelessWidget {
+class HistoryPanelWidget extends StatefulWidget {
   const HistoryPanelWidget({Key? key}) : super(key: key);
+
+  @override
+  State<HistoryPanelWidget> createState() => _HistoryPanelWidgetState();
+}
+
+class _HistoryPanelWidgetState extends State<HistoryPanelWidget> {
+  // 多选模式状态
+  bool _isMultiSelectMode = false;
+  final Set<String> _selectedSessionIds = {};
 
   @override
   Widget build(BuildContext context) {
@@ -42,22 +51,57 @@ class HistoryPanelWidget extends StatelessWidget {
       child: Row(
         children: [
           Text(
-            '历史记录',
+            _isMultiSelectMode ? '已选 ${_selectedSessionIds.length}' : '历史记录',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w600,
             ),
           ),
           const Spacer(),
-          IconButton(
-            onPressed: () {
-              context.read<SettingGenerationBloc>().add(
-                const CreateNewSessionEvent(),
-              );
-            },
-            icon: const Icon(Icons.add_circle_outline),
-            iconSize: 20,
-            tooltip: '新建会话',
-          ),
+          if (_isMultiSelectMode) ...[
+            // 多选模式：显示批量删除和取消按钮
+            IconButton(
+              onPressed: _selectedSessionIds.isEmpty
+                  ? null
+                  : () => _handleBatchDelete(context),
+              icon: const Icon(Icons.delete_outline),
+              iconSize: 20,
+              tooltip: '批量删除',
+              color: Colors.red,
+            ),
+            IconButton(
+              onPressed: () {
+                setState(() {
+                  _isMultiSelectMode = false;
+                  _selectedSessionIds.clear();
+                });
+              },
+              icon: const Icon(Icons.close),
+              iconSize: 20,
+              tooltip: '取消',
+            ),
+          ] else ...[
+            // 普通模式：显示多选和新建按钮
+            IconButton(
+              onPressed: () {
+                setState(() {
+                  _isMultiSelectMode = true;
+                });
+              },
+              icon: const Icon(Icons.checklist),
+              iconSize: 20,
+              tooltip: '多选',
+            ),
+            IconButton(
+              onPressed: () {
+                context.read<SettingGenerationBloc>().add(
+                  const CreateNewSessionEvent(),
+                );
+              },
+              icon: const Icon(Icons.add_circle_outline),
+              iconSize: 20,
+              tooltip: '新建会话',
+            ),
+          ],
         ],
       ),
     );
@@ -140,37 +184,53 @@ class HistoryPanelWidget extends StatelessWidget {
     SettingGenerationSession session,
     bool isActive,
   ) {
+    final isSelected = _selectedSessionIds.contains(session.sessionId);
+    
     return InkWell(
       onTap: () {
-        // 判断是否为历史会话（已保存的会话）
-        final isHistorySession = session.status == SessionStatus.saved;
-        
-        final needFetch = session.rootNodes.isEmpty;
-
-        if (isHistorySession || needFetch) {
-          // saved 会话 或者 节点为空的会话，都尝试从后端拉取完整数据
-          context.read<SettingGenerationBloc>().add(
-            CreateSessionFromHistoryEvent(
-              historyId: session.sessionId,
-              userId: session.userId,
-              editReason: '查看历史设定',
-              modelConfigId: session.modelConfigId ?? 'default',
-            ),
-          );
+        if (_isMultiSelectMode) {
+          // 多选模式：切换选中状态
+          setState(() {
+            if (isSelected) {
+              _selectedSessionIds.remove(session.sessionId);
+            } else {
+              _selectedSessionIds.add(session.sessionId);
+            }
+          });
         } else {
-          // 本地已有节点数据，直接切换
-          context.read<SettingGenerationBloc>().add(
-            SelectSessionEvent(session.sessionId, isHistorySession: false),
-          );
+          // 普通模式：加载历史记录
+          // 判断是否为历史会话（已保存的会话）
+          final isHistorySession = session.status == SessionStatus.saved;
+          
+          final needFetch = session.rootNodes.isEmpty;
+
+          if (isHistorySession || needFetch) {
+            // saved 会话 或者 节点为空的会话，都尝试从后端拉取完整数据
+            context.read<SettingGenerationBloc>().add(
+              CreateSessionFromHistoryEvent(
+                historyId: session.sessionId,
+                userId: session.userId,
+                editReason: '查看历史设定',
+                modelConfigId: session.modelConfigId ?? 'default',
+              ),
+            );
+          } else {
+            // 本地已有节点数据，直接切换
+            context.read<SettingGenerationBloc>().add(
+              SelectSessionEvent(session.sessionId, isHistorySession: false),
+            );
+          }
         }
       },
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: isActive
-              ? WebTheme.getPrimaryColor(context).withOpacity(0.1)
-              : Colors.transparent,
-          border: isActive
+          color: isSelected
+              ? WebTheme.getPrimaryColor(context).withOpacity(0.2)
+              : (isActive
+                  ? WebTheme.getPrimaryColor(context).withOpacity(0.1)
+                  : Colors.transparent),
+          border: (isSelected || isActive)
               ? Border.all(
                   color: WebTheme.getPrimaryColor(context).withOpacity(0.3),
                   width: 1,
@@ -180,8 +240,21 @@ class HistoryPanelWidget extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildStatusIcon(session.status),
-            const SizedBox(width: 8),
+            if (_isMultiSelectMode) ...[
+              // 多选模式：显示复选框
+              Icon(
+                isSelected ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 20,
+                color: isSelected 
+                    ? WebTheme.getPrimaryColor(context)
+                    : Theme.of(context).textTheme.bodySmall?.color,
+              ),
+              const SizedBox(width: 8),
+            ] else ...[
+              // 普通模式：显示状态图标
+              _buildStatusIcon(session.status),
+              const SizedBox(width: 8),
+            ],
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -207,6 +280,18 @@ class HistoryPanelWidget extends StatelessWidget {
                 ],
               ),
             ),
+            if (!_isMultiSelectMode) ...[
+              // 普通模式：显示删除按钮
+              IconButton(
+                onPressed: () => _handleDeleteSingle(context, session),
+                icon: const Icon(Icons.delete_outline),
+                iconSize: 16,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                tooltip: '删除',
+                color: Colors.red.withOpacity(0.7),
+              ),
+            ],
           ],
         ),
       ),
@@ -268,5 +353,70 @@ class HistoryPanelWidget extends StatelessWidget {
     } else {
       return '${dateTime.month}/${dateTime.day} ${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
     }
+  }
+
+  /// 处理单个删除
+  void _handleDeleteSingle(BuildContext context, SettingGenerationSession session) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('确认删除'),
+        content: Text('确定要删除历史记录"${_getSessionTitle(session)}"吗？\n\n此操作不可恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              context.read<SettingGenerationBloc>().add(
+                DeleteHistoryEvent(session.sessionId),
+              );
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('历史记录已删除')),
+              );
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 处理批量删除
+  void _handleBatchDelete(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('确认批量删除'),
+        content: Text('确定要删除选中的 ${_selectedSessionIds.length} 条历史记录吗？\n\n此操作不可恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              final idsToDelete = _selectedSessionIds.toList();
+              context.read<SettingGenerationBloc>().add(
+                BatchDeleteHistoriesEvent(idsToDelete),
+              );
+              setState(() {
+                _isMultiSelectMode = false;
+                _selectedSessionIds.clear();
+              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('已删除 ${idsToDelete.length} 条历史记录')),
+              );
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
   }
 }

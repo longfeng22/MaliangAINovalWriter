@@ -49,8 +49,13 @@ public class TracingAIModelProviderDecorator implements AIModelProvider, ToolCal
         Instant startTime = Instant.now();
         
         // 1. 创建LLMTrace对象（从切面逻辑转移）
+        // 优先使用业务侧透传的idempotencyKey作为traceId，保证与预扣费记录一致
+        String requestTraceId = extractIdFromRequestOrIdempotencyKey(request);
+        if (requestTraceId == null || requestTraceId.isBlank()) {
+            requestTraceId = UUID.randomUUID().toString();
+        }
         LLMTrace trace = LLMTrace.fromRequest(
-                UUID.randomUUID().toString(),
+                requestTraceId,
                 getProviderName(),
                 getModelName(),
                 request
@@ -79,8 +84,13 @@ public class TracingAIModelProviderDecorator implements AIModelProvider, ToolCal
         Instant startTime = Instant.now();
         
         // 1. 创建LLMTrace对象（从切面逻辑转移）
+        // 优先使用业务侧透传的idempotencyKey作为traceId，保证与预扣费记录一致
+        String requestTraceId = extractIdFromRequestOrIdempotencyKey(request);
+        if (requestTraceId == null || requestTraceId.isBlank()) {
+            requestTraceId = UUID.randomUUID().toString();
+        }
         LLMTrace trace = LLMTrace.fromRequest(
-                UUID.randomUUID().toString(),
+                requestTraceId,
                 getProviderName(),
                 getModelName(),
                 request
@@ -121,7 +131,10 @@ public class TracingAIModelProviderDecorator implements AIModelProvider, ToolCal
                         trace.getPerformance().setTotalDurationMs(Duration.between(startTime, endTime).toMillis());
                         // 非流式：仅在非 LangChain4j 场景由装饰器发布，LangChain4j 交由监听器统一发布
                         if (!isLangChain4jProvider) {
+                            log.info("📤 非流式-非LangChain4j：装饰器发布事件: traceId={}, type={}", trace.getTraceId(), trace.getType());
                             publishTraceEvent(trace);
+                        } else {
+                            log.info("🔄 非流式-LangChain4j：装饰器跳过发布，交由监听器处理: traceId={}, type={}", trace.getTraceId(), trace.getType());
                         }
                     } finally {
                         // 清理trace上下文
@@ -134,7 +147,10 @@ public class TracingAIModelProviderDecorator implements AIModelProvider, ToolCal
                         trace.setErrorFromThrowable(error, endTime);
                         trace.getPerformance().setTotalDurationMs(Duration.between(startTime, endTime).toMillis());
                         if (!isLangChain4jProvider) {
+                            log.info("📤 非流式错误-非LangChain4j：装饰器发布事件: traceId={}, type={}", trace.getTraceId(), trace.getType());
                             publishTraceEvent(trace);
+                        } else {
+                            log.info("🔄 非流式错误-LangChain4j：装饰器跳过发布，交由监听器处理: traceId={}, type={}", trace.getTraceId(), trace.getType());
                         }
                     } finally {
                         // 清理trace上下文
@@ -199,8 +215,9 @@ public class TracingAIModelProviderDecorator implements AIModelProvider, ToolCal
                         }
                         trace.getPerformance().setTotalDurationMs(Duration.between(startTime, endTime).toMillis());
                         // 🚀 流式：由装饰器在完成时发布事件（Listener已提前增强tokenUsage）
+                        log.info("📤 流式请求完成：装饰器发布事件: traceId={}, type={}", trace.getTraceId(), trace.getType());
                         publishTraceEvent(trace);
-                        log.debug("流式响应完成，已发布事件: traceId={}", trace.getTraceId());
+                        log.info("✅ 流式响应完成，已发布事件: traceId={}", trace.getTraceId());
                     } finally {
                         // 🚀 由装饰器负责清理上下文
                         traceContextManager.clearTrace();
@@ -285,13 +302,43 @@ public class TracingAIModelProviderDecorator implements AIModelProvider, ToolCal
     }
 
     /**
+     * 从AIRequest中提取幂等键作为traceId（业务层通过BillingMarkerEnricher注入）
+     */
+    private String extractIdFromRequestOrIdempotencyKey(AIRequest request) {
+        try {
+            // 优先使用显式 traceId 字段
+            if (request.getTraceId() != null && !request.getTraceId().isBlank()) {
+                return request.getTraceId();
+            }
+            if (request.getParameters() != null) {
+                Object psRaw = request.getParameters().get("providerSpecific");
+                if (psRaw instanceof java.util.Map<?, ?> m) {
+                    Object key = m.get(com.ainovel.server.service.billing.BillingKeys.REQUEST_IDEMPOTENCY_KEY);
+                    if (key != null) {
+                        return key.toString();
+                    }
+                }
+            }
+            if (request.getMetadata() != null) {
+                Object key = request.getMetadata().get(com.ainovel.server.service.billing.BillingKeys.REQUEST_IDEMPOTENCY_KEY);
+                if (key != null) {
+                    return key.toString();
+                }
+            }
+        } catch (Exception ignore) {}
+        return null;
+    }
+
+    /**
      * 发布追踪事件
      * 从AIModelProviderTraceAspect.publishTraceEvent方法完整转移
      */
     private void publishTraceEvent(LLMTrace trace) {
         try {
+            log.info("🎯 装饰器即将发布LLMTraceEvent: traceId={}, type={}, isLangChain4j={}", 
+                    trace.getTraceId(), trace.getType(), isLangChain4jProvider);
             eventPublisher.publishEvent(new LLMTraceEvent(this, trace));
-            log.debug("LLM追踪事件已发布: traceId={}", trace.getTraceId());
+            log.info("🎯 装饰器已发布LLM追踪事件: traceId={}", trace.getTraceId());
         } catch (Exception e) {
             log.error("发布LLM追踪事件失败: traceId={}", trace.getTraceId(), e);
         }

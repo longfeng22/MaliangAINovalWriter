@@ -666,6 +666,14 @@ class _PresetListViewState extends State<PresetListView> {
         return Icons.timeline;
       case AIFeatureType.settingTreeGeneration:
         return Icons.account_tree;
+      case AIFeatureType.settingGenerationTool:
+        return Icons.build;
+      case AIFeatureType.storyPlotContinuation:
+        return Icons.auto_fix_high;
+      case AIFeatureType.knowledgeExtractionSetting:
+        return Icons.import_contacts;
+      case AIFeatureType.knowledgeExtractionOutline:
+        return Icons.list_alt;
     }
   }
 
@@ -694,6 +702,14 @@ class _PresetListViewState extends State<PresetListView> {
         return const Color(0xFF795548); // 棕色
       case AIFeatureType.settingTreeGeneration:
         return const Color(0xFF689F38); // 浅绿色
+      case AIFeatureType.settingGenerationTool:
+        return const Color(0xFF757575); // 灰色
+      case AIFeatureType.storyPlotContinuation:
+        return const Color(0xFF8E24AA); // 紫色系
+      case AIFeatureType.knowledgeExtractionSetting:
+        return const Color(0xFFFF6F00); // 橙色
+      case AIFeatureType.knowledgeExtractionOutline:
+        return const Color(0xFFF57C00); // 深橙
     }
   }
 

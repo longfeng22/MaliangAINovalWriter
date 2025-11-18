@@ -28,6 +28,8 @@ class TaskTranslation {
     'SCENE_BEAT_GENERATION': '场景节拍生成',
     'NOVEL_COMPOSE': '小说编排',
     'SETTING_TREE_GENERATION': '设定树生成',
+    'STORY_PREDICTION': '剧情推演',
+    'STORY_PREDICTION_SINGLE': '剧情预测',
     
     // 小说结构相关
     'CREATE_NOVEL_STRUCTURE': '创建小说结构',
@@ -45,6 +47,11 @@ class TaskTranslation {
     'IMPORT_NOVEL': '导入小说',
     'BACKUP_DATA': '数据备份',
     'RESTORE_DATA': '数据恢复',
+    
+    // 知识提取（拆书）任务
+    'KNOWLEDGE_EXTRACTION_FANQIE': '番茄小说拆书',
+    'KNOWLEDGE_EXTRACTION_TEXT': '文本拆书',
+    'KNOWLEDGE_EXTRACTION_GROUP': '知识提取组',
   };
 
   /// 任务事件类型和状态的中文映射
@@ -143,6 +150,15 @@ class TaskTranslation {
 
   /// 获取智能任务状态（优先从progress获取详细状态，再从事件类型获取）
   static String getSmartTaskStatus(Map<String, dynamic> taskEvent) {
+    // 0. 若事件类型已是终态，优先返回终态，避免被陈旧的 progress 覆盖
+    final eventType = taskEvent['type']?.toString();
+    const terminalTypes = {
+      'TASK_COMPLETED', 'TASK_FAILED', 'TASK_CANCELLED', 'TASK_DEAD_LETTER', 'TASK_COMPLETED_WITH_ERRORS'
+    };
+    if (eventType != null && terminalTypes.contains(eventType)) {
+      return getTaskStatusName(eventType);
+    }
+
     // 1. 尝试从progress.currentStep获取详细状态
     final progress = taskEvent['progress'];
     if (progress is Map<String, dynamic>) {
@@ -153,7 +169,6 @@ class TaskTranslation {
     }
     
     // 2. 使用事件类型作为状态
-    final eventType = taskEvent['type']?.toString();
     return getTaskStatusName(eventType);
   }
 

@@ -1,7 +1,6 @@
 package com.ainovel.server.controller;
 
 import com.ainovel.server.common.response.ApiResponse;
-import com.ainovel.server.common.security.CurrentUser;
 import com.ainovel.server.domain.model.AIFeatureType;
 import com.ainovel.server.domain.model.EnhancedUserPromptTemplate;
 
@@ -13,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -153,7 +153,8 @@ public class AdminPromptTemplateController {
     @Operation(summary = "创建官方模板", description = "创建新的官方认证提示词模板")
     public Mono<ResponseEntity<ApiResponse<EnhancedUserPromptTemplate>>> createOfficialTemplate(
             @Valid @RequestBody EnhancedUserPromptTemplate template,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 创建官方模板: {}", adminId, template.getName());
         
         return adminTemplateService.createOfficialTemplate(template, adminId)
@@ -170,7 +171,8 @@ public class AdminPromptTemplateController {
     public Mono<ResponseEntity<ApiResponse<EnhancedUserPromptTemplate>>> updatePublicTemplate(
             @PathVariable String templateId,
             @Valid @RequestBody EnhancedUserPromptTemplate template,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 更新公共模板: {}", adminId, templateId);
         
         return adminTemplateService.updatePublicTemplate(templateId, template, adminId)
@@ -186,7 +188,8 @@ public class AdminPromptTemplateController {
     @Operation(summary = "删除公共模板", description = "删除指定的公共模板")
     public Mono<ResponseEntity<ApiResponse<String>>> deletePublicTemplate(
             @PathVariable String templateId,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 删除公共模板: {}", adminId, templateId);
         
         return adminTemplateService.deletePublicTemplate(templateId, adminId)
@@ -206,7 +209,8 @@ public class AdminPromptTemplateController {
             @PathVariable String templateId,
             @RequestParam boolean approved,
             @RequestParam(required = false) String reviewComment,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 审核模板 {}: {}", adminId, templateId, approved ? "通过" : "拒绝");
         
         return adminTemplateService.reviewUserTemplate(templateId, approved, adminId, reviewComment)
@@ -222,7 +226,8 @@ public class AdminPromptTemplateController {
     @Operation(summary = "发布模板", description = "将模板设置为公开状态")
     public Mono<ResponseEntity<ApiResponse<EnhancedUserPromptTemplate>>> publishTemplate(
             @PathVariable String templateId,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 发布模板: {}", adminId, templateId);
         
         return adminTemplateService.publishTemplate(templateId, adminId)
@@ -238,7 +243,8 @@ public class AdminPromptTemplateController {
     @Operation(summary = "取消发布模板", description = "将模板设置为私有状态")
     public Mono<ResponseEntity<ApiResponse<EnhancedUserPromptTemplate>>> unpublishTemplate(
             @PathVariable String templateId,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 取消发布模板: {}", adminId, templateId);
         
         return adminTemplateService.unpublishTemplate(templateId, adminId)
@@ -255,7 +261,8 @@ public class AdminPromptTemplateController {
     public Mono<ResponseEntity<ApiResponse<EnhancedUserPromptTemplate>>> setVerified(
             @PathVariable String templateId,
             @RequestParam boolean verified,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 设置模板 {} 验证状态: {}", adminId, templateId, verified);
         
         return adminTemplateService.setVerified(templateId, verified, adminId)
@@ -274,7 +281,8 @@ public class AdminPromptTemplateController {
     public Mono<ResponseEntity<ApiResponse<Map<String, Object>>>> batchReview(
             @RequestBody List<String> templateIds,
             @RequestParam boolean approved,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 批量审核 {} 个模板: {}", adminId, templateIds.size(), approved ? "通过" : "拒绝");
         
         return adminTemplateService.batchReviewTemplates(templateIds, approved, adminId)
@@ -291,7 +299,8 @@ public class AdminPromptTemplateController {
     public Mono<ResponseEntity<ApiResponse<Map<String, Object>>>> batchSetVerified(
             @RequestBody List<String> templateIds,
             @RequestParam boolean verified,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 批量设置 {} 个模板验证状态: {}", adminId, templateIds.size(), verified);
         
         return adminTemplateService.batchSetVerified(templateIds, verified, adminId)
@@ -308,7 +317,8 @@ public class AdminPromptTemplateController {
     public Mono<ResponseEntity<ApiResponse<Map<String, Object>>>> batchPublish(
             @RequestBody List<String> templateIds,
             @RequestParam boolean publish,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 批量{}发布 {} 个模板", adminId, publish ? "" : "取消", templateIds.size());
         
         return adminTemplateService.batchPublishTemplates(templateIds, publish, adminId)
@@ -386,7 +396,8 @@ public class AdminPromptTemplateController {
     @Operation(summary = "导出公共模板", description = "导出指定的公共模板，如果不指定则导出全部")
     public Mono<ResponseEntity<ApiResponse<List<EnhancedUserPromptTemplate>>>> exportTemplates(
             @RequestBody(required = false) List<String> templateIds,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 导出模板", adminId);
         
         List<String> ids = templateIds != null ? templateIds : List.of();
@@ -404,7 +415,8 @@ public class AdminPromptTemplateController {
     @Operation(summary = "导入公共模板", description = "导入公共模板数据，自动设置为官方认证")
     public Mono<ResponseEntity<ApiResponse<List<EnhancedUserPromptTemplate>>>> importTemplates(
             @RequestBody List<EnhancedUserPromptTemplate> templates,
-            @CurrentUser String adminId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
+        String adminId = currentUser.getId();
         log.info("管理员 {} 导入 {} 个模板", adminId, templates.size());
         
         return adminTemplateService.importPublicTemplates(templates, adminId)

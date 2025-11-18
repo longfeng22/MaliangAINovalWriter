@@ -1,6 +1,9 @@
 package com.ainovel.server.service;
 
 import com.ainovel.server.web.dto.request.UniversalAIRequestDto;
+import com.ainovel.server.domain.model.AIRequest;
+import com.ainovel.server.domain.model.PublicModelConfig;
+import com.ainovel.server.domain.model.AIFeatureType;
 import reactor.core.publisher.Mono;
 import lombok.Data;
 import lombok.AllArgsConstructor;
@@ -18,6 +21,15 @@ public interface CostEstimationService {
      * @return 预估结果
      */
     Mono<CostEstimationResponse> estimateCost(UniversalAIRequestDto request);
+
+    /**
+     * 🚀 新增：直接基于AIRequest进行积分成本预估
+     * @param aiRequest AI请求对象
+     * @param publicModel 公共模型配置
+     * @param featureType AI功能类型
+     * @return 预估结果
+     */
+    Mono<CostEstimationResponse> estimateCostForAIRequest(AIRequest aiRequest, PublicModelConfig publicModel, AIFeatureType featureType);
 
     /**
      * 积分预估响应DTO

@@ -2,7 +2,6 @@ package com.ainovel.server.security;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,7 +9,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.ReactiveAuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Component;
@@ -59,19 +57,17 @@ public class JwtAuthenticationManager implements ReactiveAuthenticationManager {
                         log.debug("用户 {} 认证成功", username);
                         return createAuthentication(user, token);
                     })
-                    .switchIfEmpty(Mono.fromRunnable(() -> 
-                        log.debug("用户 {} 认证失败或token无效", username)));
+                    .switchIfEmpty(Mono.error(new BadCredentialsException("Invalid token or user not found")));
         } catch (ExpiredJwtException e) {
-            // JWT过期异常，抛出BadCredentialsException让Spring Security返回401
-            log.warn("JWT token已过期: {}", e.getMessage());
-            return Mono.error(new BadCredentialsException("JWT token已过期", e));
+            // JWT过期异常 - 这是预期的业务场景，不记录日志（由AOP统一记录为WARN）
+            // 直接抛出原始异常，让GlobalExceptionHandler统一处理
+            return Mono.error(e);
         } catch (JwtException e) {
-            // JWT格式错误或其他JWT相关异常
-            log.warn("JWT token格式错误: {}", e.getMessage());
-            return Mono.error(new BadCredentialsException("JWT token无效", e));
+            // JWT格式错误或其他JWT相关异常 - 业务异常，不记录详细日志
+            return Mono.error(e);
         } catch (Exception e) {
-            // 其他异常，记录日志但抛出BadCredentialsException避免500错误
-            log.error("JWT认证过程中发生异常", e);
+            // 其他未知异常，需要记录完整堆栈以便排查
+            log.error("JWT认证过程中发生未知异常: {}", e.getMessage(), e);
             return Mono.error(new BadCredentialsException("认证失败", e));
         }
     }

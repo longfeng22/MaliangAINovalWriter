@@ -415,6 +415,8 @@ class _EnhancedTemplateEditorState extends State<EnhancedTemplateEditor>
         return AIFeatureType.novelCompose;
       case 'SETTING_TREE_GENERATION':
         return AIFeatureType.settingTreeGeneration;
+      case 'STORY_PLOT_CONTINUATION':
+        return AIFeatureType.storyPlotContinuation;
       default:
         return AIFeatureType.textExpansion;
     }

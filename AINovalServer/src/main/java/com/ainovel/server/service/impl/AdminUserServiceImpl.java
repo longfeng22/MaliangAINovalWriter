@@ -51,6 +51,20 @@ public class AdminUserServiceImpl implements AdminUserService {
     
     @Override
     public Flux<User> searchUsers(String search, Pageable pageable) {
+        // 优先尝试按 ID 精确查询（如果输入看起来像 MongoDB ObjectId）
+        if (search != null && search.length() == 24 && search.matches("[0-9a-fA-F]+")) {
+            // 可能是 MongoDB ObjectId，先尝试精确查询
+            return userRepository.findById(search)
+                    .flux()
+                    .switchIfEmpty(
+                        // ID 查询失败，继续按用户名/邮箱模糊查询
+                        userRepository.findByUsernameContainingIgnoreCaseOrEmailContainingIgnoreCase(search, search)
+                                .skip(pageable.getOffset())
+                                .take(pageable.getPageSize())
+                    );
+        }
+        
+        // 普通模糊查询（用户名/邮箱）
         return userRepository.findByUsernameContainingIgnoreCaseOrEmailContainingIgnoreCase(search, search)
                 .skip(pageable.getOffset())
                 .take(pageable.getPageSize());
@@ -177,15 +191,33 @@ public class AdminUserServiceImpl implements AdminUserService {
         Criteria combined = new Criteria();
         boolean hasAny = false;
 
-        // 关键词：用户名/邮箱/手机号 模糊
+        // 关键词：ID 精确匹配 或 用户名/邮箱/手机号 模糊匹配
         if (keyword != null && !keyword.trim().isEmpty()) {
-            String like = ".*" + java.util.regex.Pattern.quote(keyword.trim()) + ".*";
-            Criteria or = new Criteria().orOperator(
-                    Criteria.where("username").regex(like, "i"),
-                    Criteria.where("email").regex(like, "i"),
-                    Criteria.where("phone").regex(like, "i")
-            );
-            combined = combined.andOperator(or);
+            String trimmedKeyword = keyword.trim();
+            
+            // 检查是否为 MongoDB ObjectId 格式（24位十六进制字符）
+            boolean isObjectId = trimmedKeyword.length() == 24 && trimmedKeyword.matches("[0-9a-fA-F]+");
+            
+            if (isObjectId) {
+                // 可能是用户 ID，添加 ID 精确匹配
+                String like = ".*" + java.util.regex.Pattern.quote(trimmedKeyword) + ".*";
+                Criteria or = new Criteria().orOperator(
+                        Criteria.where("_id").is(trimmedKeyword),  // ID 精确匹配
+                        Criteria.where("username").regex(like, "i"),
+                        Criteria.where("email").regex(like, "i"),
+                        Criteria.where("phone").regex(like, "i")
+                );
+                combined = combined.andOperator(or);
+            } else {
+                // 普通关键词，只进行模糊匹配
+                String like = ".*" + java.util.regex.Pattern.quote(trimmedKeyword) + ".*";
+                Criteria or = new Criteria().orOperator(
+                        Criteria.where("username").regex(like, "i"),
+                        Criteria.where("email").regex(like, "i"),
+                        Criteria.where("phone").regex(like, "i")
+                );
+                combined = combined.andOperator(or);
+            }
             hasAny = true;
         }
 
@@ -265,6 +297,19 @@ public class AdminUserServiceImpl implements AdminUserService {
                 .switchIfEmpty(Mono.error(new IllegalArgumentException("用户不存在: " + id)))
                 .flatMap(user -> {
                     user.setPassword(encoded);
+                    user.setUpdatedAt(LocalDateTime.now());
+                    return userRepository.save(user);
+                });
+    }
+
+    @Override
+    @Transactional
+    public Mono<User> bumpUserTokenVersion(String userId) {
+        return userRepository.findById(userId)
+                .switchIfEmpty(Mono.error(new IllegalArgumentException("用户不存在: " + userId)))
+                .flatMap(user -> {
+                    Integer v = user.getTokenVersion() == null ? 1 : user.getTokenVersion();
+                    user.setTokenVersion(v + 1);
                     user.setUpdatedAt(LocalDateTime.now());
                     return userRepository.save(user);
                 });

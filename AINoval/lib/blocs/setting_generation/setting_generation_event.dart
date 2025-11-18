@@ -68,6 +68,20 @@ class StartGenerationEvent extends SettingGenerationBlocEvent {
   final bool? usePublicTextModel;
   final String? textPhasePublicProvider;
   final String? textPhasePublicModelId;
+  // 📚 知识库集成模式
+  final String? knowledgeBaseMode;  // 'NONE', 'REUSE', 'IMITATION', 'HYBRID'
+  // 📚 知识库ID列表（用于REUSE和IMITATION模式）
+  final List<String>? knowledgeBaseIds;
+  // 📚 知识库分类列表（JSON格式，每个知识库对应一个分类列表）
+  final Map<String, List<String>>? knowledgeBaseCategories;
+  // 📚 混合模式专用：用于复用的知识库ID列表
+  final List<String>? reuseKnowledgeBaseIds;
+  // 📚 混合模式专用：用于参考的知识库ID列表
+  final List<String>? referenceKnowledgeBaseIds;
+  // 🔧 结构化输出循环模式：是否使用结构化输出（直接输出JSON，不使用工具调用）
+  final bool? useStructuredOutput;
+  // 🔧 结构化输出循环模式：最大迭代次数（默认3次）
+  final int? structuredIterations;
 
   const StartGenerationEvent({
     required this.initialPrompt,
@@ -78,6 +92,13 @@ class StartGenerationEvent extends SettingGenerationBlocEvent {
     this.usePublicTextModel,
     this.textPhasePublicProvider,
     this.textPhasePublicModelId,
+    this.knowledgeBaseMode,
+    this.knowledgeBaseIds,
+    this.knowledgeBaseCategories,
+    this.reuseKnowledgeBaseIds,
+    this.referenceKnowledgeBaseIds,
+    this.useStructuredOutput,
+    this.structuredIterations,
   });
 
   @override
@@ -90,6 +111,13 @@ class StartGenerationEvent extends SettingGenerationBlocEvent {
         usePublicTextModel,
         textPhasePublicProvider,
         textPhasePublicModelId,
+        knowledgeBaseMode,
+        knowledgeBaseIds,
+        knowledgeBaseCategories,
+        reuseKnowledgeBaseIds,
+        referenceKnowledgeBaseIds,
+        useStructuredOutput,
+        structuredIterations,
       ];
 }
 
@@ -459,6 +487,16 @@ class DeleteHistoryEvent extends SettingGenerationBlocEvent {
   List<Object?> get props => [historyId];
 }
 
+/// 批量删除历史记录事件
+class BatchDeleteHistoriesEvent extends SettingGenerationBlocEvent {
+  final List<String> historyIds;
+
+  const BatchDeleteHistoriesEvent(this.historyIds);
+
+  @override
+  List<Object?> get props => [historyIds];
+}
+
 /// 复制历史记录事件
 class CopyHistoryEvent extends SettingGenerationBlocEvent {
   final String historyId;
@@ -485,4 +523,36 @@ class RestoreHistoryToNovelEvent extends SettingGenerationBlocEvent {
 
   @override
   List<Object?> get props => [historyId, novelId];
+}
+
+/// 手动添加子节点事件
+class AddChildNodeEvent extends SettingGenerationBlocEvent {
+  final String parentNodeId;
+  final String title;
+  final String content;
+  final String type;
+  final String? novelId;
+
+  const AddChildNodeEvent({
+    required this.parentNodeId,
+    required this.title,
+    required this.content,
+    required this.type,
+    this.novelId,
+  });
+
+  @override
+  List<Object?> get props => [parentNodeId, title, content, type, novelId];
+}
+
+/// 删除节点事件
+class DeleteNodeEvent extends SettingGenerationBlocEvent {
+  final String nodeId;
+
+  const DeleteNodeEvent({
+    required this.nodeId,
+  });
+
+  @override
+  List<Object?> get props => [nodeId];
 }

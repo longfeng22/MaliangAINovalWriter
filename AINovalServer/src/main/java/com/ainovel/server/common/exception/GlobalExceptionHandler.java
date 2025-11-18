@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.support.WebExchangeBindException;
 import reactor.core.publisher.Mono;
 import org.springframework.security.authentication.BadCredentialsException;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -61,10 +63,38 @@ public class GlobalExceptionHandler {
     }
     
     /**
+     * 处理JWT过期异常
+     */
+    @ExceptionHandler(ExpiredJwtException.class)
+    public Mono<ResponseEntity<ApiResponse<?>>> handleExpiredJwtException(ExpiredJwtException e) {
+        log.warn("JWT token已过期");
+        return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.error("登录已过期，请重新登录", "TOKEN_EXPIRED")));
+    }
+    
+    /**
+     * 处理JWT格式错误异常
+     */
+    @ExceptionHandler(JwtException.class)
+    public Mono<ResponseEntity<ApiResponse<?>>> handleJwtException(JwtException e) {
+        log.warn("JWT token无效: {}", e.getClass().getSimpleName());
+        return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.error("身份认证失败，请重新登录", "INVALID_TOKEN")));
+    }
+    
+    /**
      * 处理认证失败异常（如用户名/密码错误、Token无效等）
      */
     @ExceptionHandler(BadCredentialsException.class)
     public Mono<ResponseEntity<ApiResponse<?>>> handleBadCredentials(BadCredentialsException e) {
+        // 检查是否由JWT异常引起
+        Throwable cause = e.getCause();
+        if (cause instanceof ExpiredJwtException) {
+            return handleExpiredJwtException((ExpiredJwtException) cause);
+        } else if (cause instanceof JwtException) {
+            return handleJwtException((JwtException) cause);
+        }
+        
         log.warn("认证失败: {}", e.getMessage());
         return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(ApiResponse.error("用户名或密码错误", "INVALID_CREDENTIALS")));
@@ -78,6 +108,36 @@ public class GlobalExceptionHandler {
         log.warn("积分不足: {}", e.getMessage());
         return Mono.just(ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
                 .body(ApiResponse.error(e.getMessage(), "INSUFFICIENT_CREDITS")));
+    }
+    
+    /**
+     * 处理知识库异常
+     */
+    @ExceptionHandler(KnowledgeBaseException.class)
+    public Mono<ResponseEntity<ApiResponse<?>>> handleKnowledgeBaseException(KnowledgeBaseException e) {
+        log.warn("知识库异常: {}", e.getMessage());
+        return Mono.just(ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(e.getMessage(), e.getErrorCode())));
+    }
+    
+    /**
+     * 处理知识提取异常
+     */
+    @ExceptionHandler(KnowledgeExtractionException.class)
+    public Mono<ResponseEntity<ApiResponse<?>>> handleKnowledgeExtractionException(KnowledgeExtractionException e) {
+        log.warn("知识提取异常: {}", e.getMessage());
+        return Mono.just(ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(e.getMessage(), e.getErrorCode())));
+    }
+    
+    /**
+     * 处理番茄小说异常
+     */
+    @ExceptionHandler(FanqieNovelException.class)
+    public Mono<ResponseEntity<ApiResponse<?>>> handleFanqieNovelException(FanqieNovelException e) {
+        log.warn("番茄小说异常: {}", e.getMessage());
+        return Mono.just(ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(e.getMessage(), e.getErrorCode())));
     }
     
     /**
@@ -190,9 +250,62 @@ public class GlobalExceptionHandler {
             current = current.getCause();
         }
         
-        log.error("未处理的异常", e);
+        // 🔧 优化日志输出：简化Reactor Assembly trace和已知异常
+        logExceptionConcisely(e);
+        
         return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.error("服务器内部错误，请稍后重试", "INTERNAL_ERROR")));
+    }
+    
+    /**
+     * 简洁地记录异常日志，避免冗长的Reactor Assembly trace
+     */
+    private void logExceptionConcisely(Exception e) {
+        String exceptionClass = e.getClass().getSimpleName();
+        String message = e.getMessage();
+        
+        // 检查是否是Reactor的OnAssemblyException包装
+        boolean isReactorWrapped = e.getClass().getName().contains("FluxOnAssembly") 
+                || e.getClass().getName().contains("MonoOnAssembly");
+        
+        // 对于某些预期的业务异常，只记录简短消息
+        if (e instanceof IllegalStateException || e instanceof IllegalArgumentException) {
+            log.warn("⚠️ [{}] {}", exceptionClass, message);
+            // 只打印前3层堆栈，不打印Assembly trace
+            StackTraceElement[] stackTrace = e.getStackTrace();
+            if (stackTrace != null && stackTrace.length > 0) {
+                int limit = Math.min(3, stackTrace.length);
+                StringBuilder sb = new StringBuilder("\n  调用栈（前" + limit + "层）:");
+                for (int i = 0; i < limit; i++) {
+                    sb.append("\n    at ").append(stackTrace[i]);
+                }
+                log.debug(sb.toString());
+            }
+            return;
+        }
+        
+        // 对于Reactor包装的异常，提取原始异常
+        if (isReactorWrapped) {
+            Throwable cause = e.getCause();
+            if (cause != null) {
+                log.error("❌ Reactor包装异常: {} -> 原因: {} - {}", 
+                        exceptionClass, cause.getClass().getSimpleName(), cause.getMessage());
+                // 只打印原始异常的前5层堆栈
+                StackTraceElement[] causeStack = cause.getStackTrace();
+                if (causeStack != null && causeStack.length > 0) {
+                    int limit = Math.min(5, causeStack.length);
+                    StringBuilder sb = new StringBuilder("\n  原始异常堆栈（前" + limit + "层）:");
+                    for (int i = 0; i < limit; i++) {
+                        sb.append("\n    at ").append(causeStack[i]);
+                    }
+                    log.error(sb.toString());
+                }
+                return;
+            }
+        }
+        
+        // 其他未知异常，打印完整堆栈（保持原有行为）
+        log.error("❌ 未处理的异常: {} - {}", exceptionClass, message, e);
     }
     
     /**

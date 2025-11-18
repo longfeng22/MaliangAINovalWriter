@@ -152,13 +152,17 @@ public interface UnifiedPromptAggregationService {
         private final LocalDateTime createdAt;
         private final LocalDateTime lastUsedAt;
         private final LocalDateTime updatedAt;
+        private final String reviewStatus; // 🆕 审核状态: DRAFT, PENDING, APPROVED, REJECTED
+        private final boolean hidePrompts; // 🆕 是否隐藏提示词
+        private final com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig settingGenerationConfig; // 🆕 设定生成配置
 
         public UserPromptInfo(String id, String name, String description, AIFeatureType featureType,
                             String systemPrompt, String userPrompt, List<String> tags, List<String> categories,
                             boolean isFavorite, boolean isDefault, boolean isPublic, String shareCode,
                             boolean isVerified, Long usageCount, Long favoriteCount, Double rating,
                             String authorId, Integer version, String language, LocalDateTime createdAt,
-                            LocalDateTime lastUsedAt, LocalDateTime updatedAt) {
+                            LocalDateTime lastUsedAt, LocalDateTime updatedAt, String reviewStatus, boolean hidePrompts,
+                            com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig settingGenerationConfig) {
             this.id = id;
             this.name = name;
             this.description = description;
@@ -181,6 +185,9 @@ public interface UnifiedPromptAggregationService {
             this.createdAt = createdAt;
             this.lastUsedAt = lastUsedAt;
             this.updatedAt = updatedAt;
+            this.reviewStatus = reviewStatus; // 🆕 审核状态
+            this.hidePrompts = hidePrompts; // 🆕 是否隐藏提示词
+            this.settingGenerationConfig = settingGenerationConfig; // 🆕 设定生成配置
         }
 
         // Getters
@@ -206,6 +213,9 @@ public interface UnifiedPromptAggregationService {
         public LocalDateTime getCreatedAt() { return createdAt; }
         public LocalDateTime getLastUsedAt() { return lastUsedAt; }
         public LocalDateTime getUpdatedAt() { return updatedAt; }
+        public String getReviewStatus() { return reviewStatus; } // 🆕 审核状态getter
+        public boolean isHidePrompts() { return hidePrompts; } // 🆕 是否隐藏提示词getter
+        public com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig getSettingGenerationConfig() { return settingGenerationConfig; } // 🆕 设定生成配置getter
     }
 
     /**

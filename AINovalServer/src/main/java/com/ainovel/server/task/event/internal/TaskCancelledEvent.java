@@ -5,15 +5,21 @@ package com.ainovel.server.task.event.internal;
  */
 public class TaskCancelledEvent extends TaskApplicationEvent {
 
+    private final String parentTaskId;
+
     /**
      * 创建任务取消事件
-     * 
-     * @param source 事件源
-     * @param taskId 任务ID
-     * @param taskType 任务类型
-     * @param userId 用户ID
      */
     public TaskCancelledEvent(Object source, String taskId, String taskType, String userId) {
-        super(source, taskId, taskType, userId);
+        this(source, taskId, taskType, userId, null);
     }
-} 
+
+    public TaskCancelledEvent(Object source, String taskId, String taskType, String userId, String parentTaskId) {
+        super(source, taskId, taskType, userId);
+        this.parentTaskId = parentTaskId;
+    }
+
+    public String getParentTaskId() {
+        return parentTaskId;
+    }
+}

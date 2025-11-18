@@ -1,17 +1,15 @@
 import 'package:ainoval/blocs/ai_config/ai_config_bloc.dart';
 // import 'package:ainoval/models/ai_model_group.dart';
 import 'package:ainoval/models/user_ai_model_config_model.dart';
-import 'package:ainoval/screens/settings/widgets/custom_model_dialog.dart';
+import 'package:ainoval/models/ai_model_group.dart';
 import 'package:ainoval/screens/settings/widgets/model_group_list.dart';
 import 'package:ainoval/screens/settings/widgets/provider_list.dart';
 import 'package:ainoval/screens/settings/widgets/searchable_model_dropdown.dart';
 import 'package:ainoval/widgets/common/top_toast.dart';
-import 'package:ainoval/utils/logger.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter/foundation.dart';
 // Removed import causing linter error
-// import 'package:ai_config_repository/ai_config_repository.dart';
 // Placeholder for localization, replace with your actual import
 // import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 
@@ -53,6 +51,7 @@ class _AiConfigFormState extends State<AiConfigForm> {
 
   List<String> _providers = [];
   List<String> _models = [];
+  String _modelSearch = '';
 
   // 校验错误状态
   bool _providerError = false;
@@ -172,8 +171,16 @@ class _AiConfigFormState extends State<AiConfigForm> {
       hasError = true;
     }
 
-    // 在添加模式下校验模型选择
-    if (!_isEditMode && _selectedModel == null) {
+    // 在添加模式下校验模型选择（允许直接使用输入框文本）
+    String? modelCandidate = _selectedModel;
+    if (modelCandidate == null || modelCandidate.trim().isEmpty) {
+      if (_modelSearch.trim().isNotEmpty) {
+        modelCandidate = _modelSearch.trim();
+        // 同步为选中模型，避免后续被清空
+        _selectedModel = modelCandidate;
+      }
+    }
+    if (!_isEditMode && (modelCandidate == null || modelCandidate.trim().isEmpty)) {
       setState(() {
         _modelError = true;
         _modelErrorText = '请选择一个模型';
@@ -193,11 +200,11 @@ class _AiConfigFormState extends State<AiConfigForm> {
     }
 
     // 检查重复的已验证配置（仅在添加模式）
-    if (!_isEditMode && _selectedProvider != null && _selectedModel != null) {
+    if (!_isEditMode && _selectedProvider != null && modelCandidate != null && modelCandidate.trim().isNotEmpty) {
       final existingConfigs = context.read<AiConfigBloc>().state.configs;
       final isDuplicateValidated = existingConfigs.any((config) =>
           config.provider == _selectedProvider &&
-          config.modelName == _selectedModel &&
+          config.modelName == modelCandidate &&
           config.isValidated);
 
       if (isDuplicateValidated) {
@@ -242,10 +249,10 @@ class _AiConfigFormState extends State<AiConfigForm> {
         bloc.add(AddAiConfig(
           userId: widget.userId,
           provider: _selectedProvider!,
-          modelName: _selectedModel!,
+          modelName: modelCandidate!,
           apiKey: apiKey ?? "", // Backend likely expects non-null, pass empty string
           alias: _aliasController.text.trim().isEmpty
-              ? _selectedModel // Default alias to model name if empty
+              ? modelCandidate // Default alias to model name if empty
               : _aliasController.text.trim(),
           apiEndpoint: _apiEndpointController.text.trim(),
         ));
@@ -258,66 +265,18 @@ class _AiConfigFormState extends State<AiConfigForm> {
   void _handleModelSelected(String model) {
     setState(() {
       _selectedModel = model;
-      // 清除模型选择错误状态
+      // 回填到搜索输入由受控 value 完成
       _modelError = false;
       _modelErrorText = null;
-      // 设置别名默认为模型名称
       if (_aliasController.text.isEmpty) {
         _aliasController.text = model;
       }
+      // 同步搜索关键字，确保下方列表过滤一致
+      _modelSearch = model;
     });
   }
 
-  // 处理自定义模型添加
-  void _handleAddCustomModel() {
-    if (_selectedProvider == null) return;
-    
-    showDialog(
-      context: context,
-      builder: (context) => CustomModelDialog(
-        providerName: _selectedProvider!,
-        onConfirm: (modelName, modelAlias, apiEndpoint) async {
-          // 检查 API 密钥
-          final apiKey = _apiKeyController.text.trim();
-          if (apiKey.isEmpty) {
-            TopToast.warning(context, '请先输入 API 密钥再添加自定义模型');
-            return;
-          }
-
-          // 立即保存配置到后端
-          try {
-            AppLogger.i('AiConfigForm', '开始添加自定义模型: $_selectedProvider/$modelName');
-            
-            // 显示加载状态
-            setState(() {
-              _isSaving = true;
-            });
-            
-            // 触发添加自定义模型并验证事件
-            context.read<AiConfigBloc>().add(AddCustomModelAndValidate(
-              userId: widget.userId, 
-              provider: _selectedProvider!,
-              modelName: modelName,
-              apiKey: apiKey,
-              alias: modelAlias,
-              apiEndpoint: apiEndpoint?.isEmpty == true ? null : apiEndpoint,
-            ));
-            
-            // 显示成功提示
-            TopToast.info(context, '自定义模型 $modelName 已添加，正在验证连接...');
-            
-          } catch (e) {
-            AppLogger.e('AiConfigForm', '添加自定义模型失败', e);
-            setState(() {
-              _isSaving = false;
-            });
-            
-            TopToast.error(context, '添加自定义模型失败: ${e.toString()}');
-          }
-        },
-      ),
-    );
-  }
+  // 旧的“添加自定义模型”对话框流程已取消，改为在上方搜索框直接输入并选择
 
   // 检查是否存在已验证的相同模型
   // 重复校验逻辑由提交阶段处理
@@ -484,17 +443,15 @@ class _AiConfigFormState extends State<AiConfigForm> {
         // --- Model Loading & List Update ---
         if (state.selectedProviderForModels == _selectedProvider) {
            if (_isLoadingModels &&
-               (state.modelsForProvider.isNotEmpty ||
+               (state.modelsForProviderInfo.isNotEmpty ||
                    state.errorMessage != null)) {
              _isLoadingModels = false;
              needsSetState = true;
            }
-           if (!listEquals(_models, state.modelsForProvider)) {
-             _models = state.modelsForProvider;
-             // If models updated (e.g., after API test), re-validate selected model
-             if (!_models.contains(_selectedModel)) {
-               _selectedModel = null;
-             }
+           final List<String> nextModels = state.modelsForProviderInfo.map((m) => m.id).toList();
+           if (!listEquals(_models, nextModels)) {
+             _models = nextModels;
+             // 保留用户输入的自定义模型选择，即使不在列表中
              needsSetState = true;
            }
          } else if (_isLoadingModels) {
@@ -671,7 +628,23 @@ class _AiConfigFormState extends State<AiConfigForm> {
                                       child: SearchableModelDropdown(
                                         models: _models,
                                         onModelSelected: _handleModelSelected,
-                                        hintText: '搜索可用模型',
+                                        hintText: '输入模型ID或搜索模型',
+                                        value: _selectedModel,
+                                        onCreateCustom: (customName) async {
+                                          // 仅设置为已选模型，走统一的“添加”提交流程，避免双重提交
+                                          setState(() {
+                                            _selectedModel = customName;
+                                            _modelError = false;
+                                            _modelErrorText = null;
+                                            if (_aliasController.text.isEmpty) {
+                                              _aliasController.text = customName;
+                                            }
+                                          });
+                                          TopToast.info(context, '已选择模型: $customName');
+                                        },
+                                        onSearchChanged: (kw) {
+                                          setState(() { _modelSearch = kw.trim(); });
+                                        },
                                       ),
                                     ),
                                     // 模型选择错误提示
@@ -690,18 +663,7 @@ class _AiConfigFormState extends State<AiConfigForm> {
                                 ),
                               ),
 
-                            // 已选模型显示（仅添加模式）
-                            if (!_isEditMode && _selectedModel != null)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: Text(
-                                  '已选模型: $_selectedModel',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: Theme.of(context).colorScheme.primary,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
+                            // 取消“已选模型: xxx”的提示展示，改为直接回填输入框
                             
                             // 模型显示（仅编辑模式）
                             if (_isEditMode && _selectedModel != null)
@@ -1103,17 +1065,7 @@ class _AiConfigFormState extends State<AiConfigForm> {
                                                 onPressed: _directFetchModels,
                                               ),
                                               const SizedBox(width: 4),
-                                              // 添加自定义模型按钮
-                                              TextButton.icon(
-                                                icon: const Icon(Icons.add, size: 14),
-                                                label: const Text('添加自定义模型', style: TextStyle(fontSize: 12)),
-                                                style: TextButton.styleFrom(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                                  minimumSize: const Size(0, 30),
-                                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                                ),
-                                                onPressed: _handleAddCustomModel,
-                                              ),
+                                              // 移除单独“添加自定义模型”按钮，改为在搜索框中直接添加
                                             ],
                                           ),
                                         ],
@@ -1151,14 +1103,29 @@ class _AiConfigFormState extends State<AiConfigForm> {
 
                                             // Check if model groups are available
                                             if (modelGroup != null && modelGroup.groups.isNotEmpty) {
+                                                // 按搜索关键字对分组内模型进行过滤（前端过滤）
+                                                final List<ModelPrefixGroup> filteredGroups = modelGroup.groups.map((g) {
+                                                  final filteredInfos = _modelSearch.isEmpty
+                                                    ? g.modelsInfo
+                                                    : g.modelsInfo.where((info) {
+                                                        final id = info.id.toLowerCase();
+                                                        final name = info.name.toLowerCase();
+                                                        final kw = _modelSearch.toLowerCase();
+                                                        return id.contains(kw) || name.contains(kw);
+                                                      }).toList();
+                                                  return ModelPrefixGroup(prefix: g.prefix, modelsInfo: filteredInfos);
+                                                }).where((gg) => gg.modelsInfo.isNotEmpty).toList();
+
+                                                final filteredGroup = AIModelGroup(provider: modelGroup.provider, groups: filteredGroups);
+
                                                 return SingleChildScrollView(
                                                    child: Padding(
                                                      padding: const EdgeInsets.symmetric(vertical: 8.0),
                                                      child: ModelGroupList(
-                                                       modelGroup: modelGroup,
+                                                       modelGroup: filteredGroup,
                                                        onModelSelected: _handleModelSelected,
                                                        selectedModel: _selectedModel,
-                                                       verifiedModels: verifiedModels, // 传递已验证模型列表
+                                                       verifiedModels: verifiedModels,
                                                      ),
                                                    ),
                                                  );
@@ -1195,11 +1162,10 @@ class _AiConfigFormState extends State<AiConfigForm> {
                                                           textAlign: TextAlign.center, 
                                                           style: TextStyle(fontSize: 13, color: Theme.of(context).hintColor)
                                                         ),
-                                                        const SizedBox(height: 16),
-                                                        FilledButton.icon(
-                                                          icon: const Icon(Icons.add, size: 16),
-                                                          label: const Text('添加自定义模型'),
-                                                          onPressed: _handleAddCustomModel,
+                                                        const SizedBox(height: 8),
+                                                        Text(
+                                                          '提示：可在上方搜索框直接输入模型名称并添加',
+                                                          style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor.withOpacity(0.8)),
                                                         ),
                                                       ],
                                                     ),
@@ -1262,21 +1228,6 @@ class _AiConfigFormState extends State<AiConfigForm> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      // 调试按钮
-                      if (!kReleaseMode) // 只在调试模式显示
-                        TextButton(
-                          onPressed: () {
-                            final configs = context.read<AiConfigBloc>().state.providerDefaultConfigs;
-                            print('⚠️ 当前所有提供商默认配置:');
-                            configs.forEach((provider, config) {
-                              print('⚠️ 提供商=$provider, configId=${config.id}, hasApiKey=${config.apiKey != null}');
-                            });
-                          },
-                          child: const Text('打印配置', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                        ),
-                        
-                      const Spacer(),
-                      
                       OutlinedButton(
                         onPressed: _isSaving ? null : widget.onCancel,
                         style: OutlinedButton.styleFrom(

@@ -270,9 +270,31 @@ public class UserAIModelConfigServiceImpl implements UserAIModelConfigService {
                     return configRepository.save(config);
                 })
                 .onErrorResume(e -> {
-                    log.error("验证配置时 AI Service 调用出错: userId={}, provider={}, model={}, error={}", config.getUserId(), config.getProvider(), config.getModelName(), e.getMessage());
+                    log.error("验证配置时 AI Service 调用出错: userId={}, provider={}, model={}, error={}", config.getUserId(), config.getProvider(), config.getModelName(), e.getMessage(), e);
                     config.setIsValidated(false);
-                    config.setValidationError("验证过程中发生错误: " + e.getMessage());
+                    
+                    // 提供更详细的错误信息
+                    String errorMessage = e.getMessage();
+                    if (errorMessage == null || errorMessage.trim().isEmpty()) {
+                        errorMessage = "验证过程中发生未知错误";
+                    }
+                    
+                    // 针对常见错误提供更友好的错误信息
+                    if (errorMessage.contains("401") || errorMessage.contains("Unauthorized")) {
+                        errorMessage = "API Key无效或已过期，请检查密钥是否正确";
+                    } else if (errorMessage.contains("403") || errorMessage.contains("Forbidden")) {
+                        errorMessage = "API Key权限不足，请检查密钥权限设置";
+                    } else if (errorMessage.contains("404") || errorMessage.contains("Not Found")) {
+                        errorMessage = "API端点不存在或模型不可用，请检查端点URL和模型名称";
+                    } else if (errorMessage.contains("timeout") || errorMessage.contains("timed out")) {
+                        errorMessage = "请求超时，请检查网络连接或API端点是否可达";
+                    } else if (errorMessage.contains("Connection refused") || errorMessage.contains("UnknownHostException")) {
+                        errorMessage = "无法连接到API端点，请检查网络连接和端点URL";
+                    } else if (errorMessage.contains("SSL") || errorMessage.contains("certificate")) {
+                        errorMessage = "SSL证书验证失败，请检查端点的SSL配置";
+                    }
+                    
+                    config.setValidationError(errorMessage);
                     config.setUpdatedAt(LocalDateTime.now());
                     return configRepository.save(config);
                 });

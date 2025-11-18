@@ -60,32 +60,6 @@ class ProviderList extends StatelessWidget {
               },
             ),
           ),
-          
-          // 底部添加按钮
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: SizedBox(
-              width: double.infinity,
-              height: 32,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  // 添加新提供商的逻辑
-                },
-                icon: const Icon(Icons.add, size: 16),
-                label: const Text('添加', style: TextStyle(fontSize: 12)),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 0),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  side: BorderSide(
-                    color: theme.colorScheme.outline.withOpacity(0.3),
-                    width: 0.5,
-                  ),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );

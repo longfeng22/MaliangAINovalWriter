@@ -36,6 +36,26 @@ AdminDashboardStats _$AdminDashboardStatsFromJson(Map<String, dynamic> json) =>
               (v) => (v as List<dynamic>)
                   .map((e) => ActivityItem.fromJson(e as Map<String, dynamic>))
                   .toList()),
+          dailyLoginData: $checkedConvert(
+              'dailyLoginData',
+              (v) => (v as List<dynamic>)
+                  .map((e) => ChartData.fromJson(e as Map<String, dynamic>))
+                  .toList()),
+          dailyRegistrationData: $checkedConvert(
+              'dailyRegistrationData',
+              (v) => (v as List<dynamic>)
+                  .map((e) => ChartData.fromJson(e as Map<String, dynamic>))
+                  .toList()),
+          userNovelStats: $checkedConvert(
+              'userNovelStats',
+              (v) => (v as List<dynamic>)
+                  .map(
+                      (e) => UserNovelStats.fromJson(e as Map<String, dynamic>))
+                  .toList()),
+          newUsersToday:
+              $checkedConvert('newUsersToday', (v) => (v as num).toInt()),
+          loginsToday:
+              $checkedConvert('loginsToday', (v) => (v as num).toInt()),
         );
         return val;
       },
@@ -53,6 +73,12 @@ Map<String, dynamic> _$AdminDashboardStatsToJson(
       'requestsData': instance.requestsData.map((e) => e.toJson()).toList(),
       'recentActivities':
           instance.recentActivities.map((e) => e.toJson()).toList(),
+      'dailyLoginData': instance.dailyLoginData.map((e) => e.toJson()).toList(),
+      'dailyRegistrationData':
+          instance.dailyRegistrationData.map((e) => e.toJson()).toList(),
+      'userNovelStats': instance.userNovelStats.map((e) => e.toJson()).toList(),
+      'newUsersToday': instance.newUsersToday,
+      'loginsToday': instance.loginsToday,
     };
 
 ChartData _$ChartDataFromJson(Map<String, dynamic> json) => $checkedCreate(
@@ -278,5 +304,40 @@ Map<String, dynamic> _$AdminSystemConfigToJson(AdminSystemConfig instance) {
   writeNotNull('configGroup', instance.configGroup);
   val['enabled'] = instance.enabled;
   val['readOnly'] = instance.readOnly;
+  return val;
+}
+
+UserNovelStats _$UserNovelStatsFromJson(Map<String, dynamic> json) =>
+    $checkedCreate(
+      'UserNovelStats',
+      json,
+      ($checkedConvert) {
+        final val = UserNovelStats(
+          userId: $checkedConvert('userId', (v) => v as String),
+          username: $checkedConvert('username', (v) => v as String),
+          displayName: $checkedConvert('displayName', (v) => v as String?),
+          novelCount: $checkedConvert('novelCount', (v) => (v as num).toInt()),
+          lastCreatedAt: $checkedConvert(
+              'lastCreatedAt', (v) => DateTime.parse(v as String)),
+        );
+        return val;
+      },
+    );
+
+Map<String, dynamic> _$UserNovelStatsToJson(UserNovelStats instance) {
+  final val = <String, dynamic>{
+    'userId': instance.userId,
+    'username': instance.username,
+  };
+
+  void writeNotNull(String key, dynamic value) {
+    if (value != null) {
+      val[key] = value;
+    }
+  }
+
+  writeNotNull('displayName', instance.displayName);
+  val['novelCount'] = instance.novelCount;
+  val['lastCreatedAt'] = instance.lastCreatedAt.toIso8601String();
   return val;
 }

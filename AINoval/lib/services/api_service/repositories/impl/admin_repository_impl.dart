@@ -4,9 +4,11 @@ import '../../../../models/admin/admin_auth_models.dart';
 import '../../../../models/public_model_config.dart';
 import '../../../../models/preset_models.dart';
 import '../../../../models/prompt_models.dart';
+import '../../../../models/model_pricing.dart';
 import '../../base/api_client.dart';
 import '../../base/api_exception.dart';
 import '../../../../utils/logger.dart';
+import 'package:dio/dio.dart' show Options;
 
 class AdminRepositoryImpl {
   final ApiClient _apiClient;
@@ -38,7 +40,14 @@ class AdminRepositoryImpl {
   Future<AdminDashboardStats> getDashboardStats() async {
     try {
       AppLogger.d(_tag, '获取管理员仪表板统计数据');
-      final response = await _apiClient.get('/admin/dashboard/stats');
+      // 仪表盘数据查询较为复杂，需要更长的超时时间
+      final response = await _apiClient.get(
+        '/admin/dashboard/stats',
+        options: Options(
+          receiveTimeout: const Duration(minutes: 2), // 设置2分钟超时
+          sendTimeout: const Duration(seconds: 60),
+        ),
+      );
       if (response is Map<String, dynamic> && response.containsKey('data')) {
         return AdminDashboardStats.fromJson(response['data']);
       } else if (response is Map<String, dynamic>) {
@@ -471,6 +480,17 @@ class AdminRepositoryImpl {
       await _apiClient.post('/admin/users/$userId/roles', data: {'roleId': roleId});
     } catch (e) {
       AppLogger.e(_tag, '为用户分配角色失败', e);
+      rethrow;
+    }
+  }
+
+  /// 强制用户下线：tokenVersion +1
+  Future<void> bumpUserTokenVersion(String userId) async {
+    try {
+      AppLogger.d(_tag, '🔒 强制用户下线: userId=$userId (tokenVersion+1)');
+      await _apiClient.post('/admin/users/$userId/token-version/bump');
+    } catch (e) {
+      AppLogger.e(_tag, '强制用户下线失败', e);
       rethrow;
     }
   }
@@ -1660,6 +1680,34 @@ class AdminRepositoryImpl {
     }
   }
 
+  /// 获取所有用户模板（包括私有和公共）
+  Future<List<EnhancedUserPromptTemplate>> getAllUserEnhancedTemplates({
+    int page = 0,
+    int size = 20,
+    String? search,
+  }) async {
+    try {
+      AppLogger.d(_tag, '🔍 获取所有用户增强模板: page=$page, size=$size, search=$search');
+      
+      String path = '/admin/prompt-templates/all-user?page=$page&size=$size';
+      if (search != null && search.isNotEmpty) {
+        path += '&search=${Uri.encodeQueryComponent(search)}';
+      }
+      
+      final response = await _apiClient.get(path);
+      
+      if (response is List) {
+        AppLogger.d(_tag, '✅ 获取所有用户增强模板成功: ${response.length} 个');
+        return response.map((json) => EnhancedUserPromptTemplate.fromJson(json)).toList();
+      } else {
+        throw ApiException(-1, '用户增强模板响应格式错误');
+      }
+    } catch (e) {
+      AppLogger.e(_tag, '❌ 获取所有用户增强模板失败', e);
+      rethrow;
+    }
+  }
+
   /// 设置增强模板验证状态
   Future<EnhancedUserPromptTemplate> setEnhancedTemplateVerified(
     String templateId,
@@ -1922,6 +1970,182 @@ class AdminRepositoryImpl {
       }
     } catch (e) {
       AppLogger.e(_tag, '❌ 导入增强模板失败', e);
+      rethrow;
+    }
+  }
+
+  // ========== 模型定价管理方法 ==========
+
+  /// 检查模型定价是否存在
+  Future<PricingCheckResult> checkModelPricing(String provider, String modelId) async {
+    try {
+      AppLogger.d(_tag, '🔍 检查模型定价: provider=$provider, modelId=$modelId');
+      
+      final response = await _apiClient.get('/pricing/check/$provider/$modelId');
+      
+      dynamic rawData;
+      if (response is Map<String, dynamic>) {
+        if (response.containsKey('data')) {
+          rawData = response['data'];
+        } else if (response.containsKey('success') && response['success'] == true) {
+          rawData = response['data'] ?? response;
+        } else {
+          rawData = response;
+        }
+      } else {
+        rawData = response;
+      }
+      
+      if (rawData is Map<String, dynamic>) {
+        AppLogger.d(_tag, '✅ 检查模型定价成功: provider=$provider, modelId=$modelId');
+        return PricingCheckResult.fromJson(rawData);
+      } else {
+        throw ApiException(-1, '检查模型定价响应格式错误');
+      }
+    } catch (e) {
+      AppLogger.e(_tag, '❌ 检查模型定价失败', e);
+      rethrow;
+    }
+  }
+
+  /// 获取所有模型定价信息
+  Future<List<ModelPricing>> getAllModelPricing() async {
+    try {
+      AppLogger.d(_tag, '📋 获取所有模型定价');
+      
+      final response = await _apiClient.get('/pricing');
+      
+      dynamic rawData;
+      if (response is Map<String, dynamic>) {
+        if (response.containsKey('data')) {
+          rawData = response['data'];
+        } else if (response.containsKey('success') && response['success'] == true) {
+          rawData = response['data'] ?? response;
+        } else {
+          rawData = response;
+        }
+      } else {
+        rawData = response;
+      }
+      
+      if (rawData is List) {
+        AppLogger.d(_tag, '✅ 获取所有模型定价成功: count=${rawData.length}');
+        return rawData.map((json) => ModelPricing.fromJson(json)).toList();
+      } else {
+        throw ApiException(-1, '获取所有模型定价响应格式错误');
+      }
+    } catch (e) {
+      AppLogger.e(_tag, '❌ 获取所有模型定价失败', e);
+      rethrow;
+    }
+  }
+
+  /// 根据提供商获取模型定价
+  Future<List<ModelPricing>> getModelPricingByProvider(String provider) async {
+    try {
+      AppLogger.d(_tag, '📋 获取提供商模型定价: provider=$provider');
+      
+      final response = await _apiClient.get('/pricing/provider/$provider');
+      
+      dynamic rawData;
+      if (response is Map<String, dynamic>) {
+        if (response.containsKey('data')) {
+          rawData = response['data'];
+        } else if (response.containsKey('success') && response['success'] == true) {
+          rawData = response['data'] ?? response;
+        } else {
+          rawData = response;
+        }
+      } else {
+        rawData = response;
+      }
+      
+      if (rawData is List) {
+        AppLogger.d(_tag, '✅ 获取提供商模型定价成功: provider=$provider, count=${rawData.length}');
+        return rawData.map((json) => ModelPricing.fromJson(json)).toList();
+      } else {
+        throw ApiException(-1, '获取提供商模型定价响应格式错误');
+      }
+    } catch (e) {
+      AppLogger.e(_tag, '❌ 获取提供商模型定价失败', e);
+      rethrow;
+    }
+  }
+
+  /// 创建模型定价
+  Future<ModelPricing> createModelPricing(CreatePricingRequest request) async {
+    try {
+      AppLogger.d(_tag, '➕ 创建模型定价: provider=${request.provider}, modelId=${request.modelId}');
+      
+      final response = await _apiClient.post('/pricing/create-for-model', data: request.toJson());
+      
+      dynamic rawData;
+      if (response is Map<String, dynamic>) {
+        if (response.containsKey('data')) {
+          rawData = response['data'];
+        } else if (response.containsKey('success') && response['success'] == true) {
+          rawData = response['data'] ?? response;
+        } else {
+          rawData = response;
+        }
+      } else {
+        rawData = response;
+      }
+      
+      if (rawData is Map<String, dynamic>) {
+        AppLogger.d(_tag, '✅ 创建模型定价成功: provider=${request.provider}, modelId=${request.modelId}');
+        return ModelPricing.fromJson(rawData);
+      } else {
+        throw ApiException(-1, '创建模型定价响应格式错误');
+      }
+    } catch (e) {
+      AppLogger.e(_tag, '❌ 创建模型定价失败', e);
+      rethrow;
+    }
+  }
+
+  /// 更新模型定价
+  Future<ModelPricing> updateModelPricing(ModelPricing pricing) async {
+    try {
+      AppLogger.d(_tag, '🔄 更新模型定价: provider=${pricing.provider}, modelId=${pricing.modelId}');
+      
+      final response = await _apiClient.put('/pricing', data: pricing.toJson());
+      
+      dynamic rawData;
+      if (response is Map<String, dynamic>) {
+        if (response.containsKey('data')) {
+          rawData = response['data'];
+        } else if (response.containsKey('success') && response['success'] == true) {
+          rawData = response['data'] ?? response;
+        } else {
+          rawData = response;
+        }
+      } else {
+        rawData = response;
+      }
+      
+      if (rawData is Map<String, dynamic>) {
+        AppLogger.d(_tag, '✅ 更新模型定价成功: provider=${pricing.provider}, modelId=${pricing.modelId}');
+        return ModelPricing.fromJson(rawData);
+      } else {
+        throw ApiException(-1, '更新模型定价响应格式错误');
+      }
+    } catch (e) {
+      AppLogger.e(_tag, '❌ 更新模型定价失败', e);
+      rethrow;
+    }
+  }
+
+  /// 删除模型定价
+  Future<void> deleteModelPricing(String provider, String modelId) async {
+    try {
+      AppLogger.d(_tag, '🗑️ 删除模型定价: provider=$provider, modelId=$modelId');
+      
+      await _apiClient.delete('/pricing/provider/$provider/model/$modelId');
+      
+      AppLogger.d(_tag, '✅ 删除模型定价成功: provider=$provider, modelId=$modelId');
+    } catch (e) {
+      AppLogger.e(_tag, '❌ 删除模型定价失败', e);
       rethrow;
     }
   }

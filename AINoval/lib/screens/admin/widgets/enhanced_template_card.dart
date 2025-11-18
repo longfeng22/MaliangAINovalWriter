@@ -8,6 +8,7 @@ class EnhancedTemplateCard extends StatelessWidget {
   final EnhancedUserPromptTemplate template;
   final bool isSelected;
   final bool batchMode;
+  final bool showUserInfo; // 是否显示用户信息（用户模板模式）
   final VoidCallback? onTap;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
@@ -24,6 +25,7 @@ class EnhancedTemplateCard extends StatelessWidget {
     required this.template,
     this.isSelected = false,
     this.batchMode = false,
+    this.showUserInfo = false,
     this.onTap,
     this.onEdit,
     this.onDelete,
@@ -182,6 +184,24 @@ class EnhancedTemplateCard extends StatelessWidget {
               ),
             ),
           ),
+        if (!template.isPublic)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            margin: const EdgeInsets.only(left: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.grey),
+            ),
+            child: const Text(
+              '私有',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -195,11 +215,20 @@ class EnhancedTemplateCard extends StatelessWidget {
         _buildInfoItem(Icons.language, '语言', template.language ?? 'zh'),
         if (template.tags.isNotEmpty)
           _buildInfoItem(Icons.label, '标签', template.tags.take(3).join(', ')),
+        if (showUserInfo && template.userId.isNotEmpty)
+          _buildInfoItem(Icons.account_circle, '用户ID', _truncateUserId(template.userId)),
         _buildInfoItem(Icons.person, '作者', template.authorId ?? '未知'),
         if (template.version != null)
           _buildInfoItem(Icons.history, '版本', template.version.toString()),
       ],
     );
+  }
+  
+  String _truncateUserId(String userId) {
+    if (userId.length > 12) {
+      return '${userId.substring(0, 8)}...';
+    }
+    return userId;
   }
 
   Widget _buildInfoItem(IconData icon, String label, String value) {

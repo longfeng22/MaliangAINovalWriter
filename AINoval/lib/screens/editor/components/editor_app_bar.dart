@@ -92,9 +92,8 @@ class EditorAppBar extends StatelessWidget implements PreferredSizeWidget { // �
     // It can be active if any of its sub-panels are active
     final bool isAnyAIPanelActive = isAIGenerationActive || 
                                   isAISummaryActive || 
-                                  isAIContinueWritingActive;
-                                  // 暂时注释掉AI生成设定的激活状态 - 待正式上线
-                                  // || isAISettingGenerationActive;
+                                  isAIContinueWritingActive ||
+                                  isAISettingGenerationActive;
 
     return AppBar(
       titleSpacing: 0,
@@ -168,14 +167,14 @@ class EditorAppBar extends StatelessWidget implements PreferredSizeWidget { // �
                       ),
 
                       // 剧情推演按钮
-                      _buildNavButton(
+/*                       _buildNavButton(
                         context: context,
                         icon: Icons.device_hub_outlined, // Changed icon for better distinction
                         label: '剧情推演',
                         isActive: isNextOutlineActive,
                         onPressed: onNextOutlinePressed ?? () {},
                         showLabel: showLabels,
-                      ),
+                      ), */
 
                       // 聊天按钮
                       _buildNavButton(
@@ -336,11 +335,9 @@ class EditorAppBar extends StatelessWidget implements PreferredSizeWidget { // �
           onAISummaryPressed?.call();
         } else if (value == 'continue-writing') {
           onAutoContinueWritingPressed?.call();
-        } 
-        // 暂时注释掉AI生成设定功能的处理 - 待正式上线
-        // else if (value == 'setting-generation') {
-        //   onAISettingGenerationPressed?.call();
-        // }
+        } else if (value == 'setting-generation') {
+          onAISettingGenerationPressed?.call();
+        }
       },
       itemBuilder: (context) => [
         PopupMenuItem<String>(
@@ -397,25 +394,24 @@ class EditorAppBar extends StatelessWidget implements PreferredSizeWidget { // �
             ],
           ),
         ),
-        // 暂时注释掉AI生成设定功能 - 待正式上线
-        // PopupMenuItem<String>(
-        //   value: 'setting-generation',
-        //   child: Row(
-        //     children: [
-        //       Icon(
-        //         Icons.auto_fix_high_outlined,
-        //         color: isAISettingGenerationActive ? WebTheme.getPrimaryColor(context) : null,
-        //       ),
-        //       const SizedBox(width: 8),
-        //       Text(
-        //         'AI生成设定',
-        //         style: TextStyle(
-        //           color: isAISettingGenerationActive ? WebTheme.getPrimaryColor(context) : null,
-        //         ),
-        //       ),
-        //     ],
-        //   ),
-        // ),
+        PopupMenuItem<String>(
+          value: 'setting-generation',
+          child: Row(
+            children: [
+              Icon(
+                Icons.auto_fix_high_outlined,
+                color: isAISettingGenerationActive ? WebTheme.getPrimaryColor(context) : null,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'AI生成设定',
+                style: TextStyle(
+                  color: isAISettingGenerationActive ? WebTheme.getPrimaryColor(context) : null,
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
       child: showLabel
           ? TextButton.icon(

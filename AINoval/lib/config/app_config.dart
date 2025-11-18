@@ -17,6 +17,14 @@ class AppConfig {
   /// 私有构造函数，防止实例化
   AppConfig._();
   
+  /// 🔧 客户端版本号（用于版本检查和强制刷新）
+  /// 格式：major.minor.patch
+  /// 每次发布新版本时需要更新此版本号
+  static const String clientVersion = '1.5.3';
+  
+  /// 🔧 版本号更新日期（用于日志追踪）
+  static const String clientVersionDate = '2025-10-16';
+  
   /// 当前环境
   static Environment _environment = kDebugMode ? Environment.development : Environment.production;
   

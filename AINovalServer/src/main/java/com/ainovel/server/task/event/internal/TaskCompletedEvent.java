@@ -6,6 +6,7 @@ package com.ainovel.server.task.event.internal;
 public class TaskCompletedEvent extends TaskApplicationEvent {
     
     private final Object result;
+    private final String parentTaskId;
     
     /**
      * 创建任务完成事件
@@ -17,8 +18,13 @@ public class TaskCompletedEvent extends TaskApplicationEvent {
      * @param result 任务结果
      */
     public TaskCompletedEvent(Object source, String taskId, String taskType, String userId, Object result) {
+        this(source, taskId, taskType, userId, null, result);
+    }
+    
+    public TaskCompletedEvent(Object source, String taskId, String taskType, String userId, String parentTaskId, Object result) {
         super(source, taskId, taskType, userId);
         this.result = result;
+        this.parentTaskId = parentTaskId;
     }
     
     /**
@@ -28,5 +34,9 @@ public class TaskCompletedEvent extends TaskApplicationEvent {
      */
     public Object getResult() {
         return result;
+    }
+    
+    public String getParentTaskId() {
+        return parentTaskId;
     }
 } 

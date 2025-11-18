@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:ainoval/config/app_config.dart';
 import 'package:ainoval/services/api_service/base/api_client.dart';
@@ -62,9 +63,9 @@ class SyncService {
 
   /// 设置自动同步
   void _setupAutoSync() {
-    AppLogger.i('SyncService', '设置自动同步定时器，每5分钟同步一次');
+    AppLogger.i('SyncService', '设置自动同步定时器，每10分钟同步一次');
     _autoSyncTimer?.cancel();
-    _autoSyncTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
+    _autoSyncTimer = Timer.periodic(const Duration(minutes: 10), (_) async {
       if (_currentState.isOnline) {
         // 检查当前小说ID是否设置
         final currentNovelId = await localStorageService.getCurrentNovelId();
@@ -72,8 +73,15 @@ class SyncService {
           AppLogger.w('SyncService', '自动同步触发，但无当前小说ID，跳过');
           return;
         }
-        
-        AppLogger.d('SyncService', '自动同步触发，当前小说ID: $currentNovelId');
+
+        // 仅在存在待同步项时触发同步
+        final hasPending = await _hasAnyPendingSyncForCurrentNovel(currentNovelId);
+        if (!hasPending) {
+          AppLogger.i('SyncService', '自动同步触发，但无待同步内容，跳过');
+          return;
+        }
+
+        AppLogger.d('SyncService', '自动同步触发，当前小说ID: $currentNovelId，存在待同步内容，开始同步');
         syncAll();
       }
     });
@@ -88,14 +96,66 @@ class SyncService {
     // Trigger sync only when coming back online
     if (isOnline && wasOffline) {
       // 检查当前小说ID是否设置后再同步
-      localStorageService.getCurrentNovelId().then((currentNovelId) {
+      localStorageService.getCurrentNovelId().then((currentNovelId) async {
         if (currentNovelId != null) {
-          AppLogger.i('SyncService', '网络恢复，开始同步数据，当前小说ID: $currentNovelId');
-          syncAll(); // syncAll will now also handle pending messages
+          final hasPending = await _hasAnyPendingSyncForCurrentNovel(currentNovelId);
+          if (hasPending) {
+            AppLogger.i('SyncService', '网络恢复，检测到待同步内容，开始同步。当前小说ID: $currentNovelId');
+            syncAll(); // syncAll will now also handle pending messages
+          } else {
+            AppLogger.i('SyncService', '网络恢复，但无待同步内容，跳过同步');
+          }
         } else {
           AppLogger.w('SyncService', '网络恢复，但无当前小说ID，不执行自动同步');
         }
       });
+    }
+  }
+
+  /// 检查当前小说是否存在任何待同步项（小说/场景/编辑器/聊天会话/待发送消息）
+  Future<bool> _hasAnyPendingSyncForCurrentNovel(String currentNovelId) async {
+    try {
+      // novel 级同步
+      final novelSyncList = await localStorageService.getSyncList('novel');
+      if (novelSyncList.contains(currentNovelId)) return true;
+
+      // scene 级同步（键格式: novelId_actId_chapterId_sceneId）
+      final sceneSyncList = await localStorageService.getSyncList('scene');
+      final hasScenePending = sceneSyncList.any((sceneKey) {
+        final parts = sceneKey.split('_');
+        return parts.length == 4 && parts[0] == currentNovelId;
+      });
+      if (hasScenePending) return true;
+
+      // editor 级同步（键格式: novelId_chapterId 或兼容旧格式）
+      final editorSyncList = await localStorageService.getSyncList('editor');
+      final hasEditorPending = editorSyncList.any((contentKey) {
+        final parts = contentKey.split('_');
+        return parts.isNotEmpty && parts[0] == currentNovelId;
+      });
+      if (hasEditorPending) return true;
+
+      // 聊天会话元数据（需要过滤 novelId）
+      final chatSessionsToSync = await localStorageService.getSessionsToSync();
+      final hasChatPending = chatSessionsToSync.any((session) {
+        final metadata = (session as dynamic).metadata as Map<String, dynamic>?;
+        return metadata != null && metadata['novelId'] == currentNovelId;
+      });
+      if (hasChatPending) return true;
+
+      // 待发送消息（过滤 novelId）
+      final pendingMessages = await localStorageService.getPendingMessages();
+      final hasPendingMessages = pendingMessages.any((msg) {
+        final metadata = msg['metadata'] as Map<String, dynamic>?;
+        return metadata != null && metadata['novelId'] == currentNovelId;
+      });
+      if (hasPendingMessages) return true;
+
+      return false;
+    } catch (e, st) {
+      AppLogger.e('SyncService', '检测待同步项时出错', e, st);
+      // 出错时保守起见返回 true，避免错过同步
+      return true;
     }
   }
 
@@ -248,38 +308,9 @@ class SyncService {
                 .toList(),
           },
         };
-        
-        // 组织场景数据，按章节分组
-        Map<String, List<Map<String, dynamic>>> scenesByChapter = {};
-        for (final act in localNovel.acts) {
-          for (final chapter in act.chapters) {
-            if (chapter.scenes.isNotEmpty) {
-              scenesByChapter[chapter.id] = chapter.scenes
-                  .map((scene) => {
-                        'id': scene.id,
-                        'novelId': localNovel.id,
-                        'chapterId': chapter.id,
-                        'content': scene.content,
-                        'summary': scene.summary.content,
-                        'updatedAt': scene.lastEdited.toIso8601String(),
-                        'version': scene.version,
-                        'title': '',
-                        'sequence': 0,
-                        'sceneType': 'NORMAL',
-                      })
-                  .toList();
-            }
-          }
-        }
-        
-        // 组装完整的请求数据
-        final novelWithScenesJson = {
-          'novel': backendNovelJson,
-          'scenesByChapter': scenesByChapter,
-        };
 
-        // 调用updateNovelWithScenes接口
-        await apiService.updateNovelWithScenes(novelWithScenesJson);
+        // 仅同步小说元数据/结构，避免一次性上传场景大包
+        await apiService.updateNovel(backendNovelJson);
 
         await localStorageService.clearSyncFlagByType('novel', novelId);
         AppLogger.d('SyncService', '小说同步完成: $novelId');
@@ -303,44 +334,111 @@ class SyncService {
       final syncList = await localStorageService.getSyncList('scene');
       AppLogger.d('SyncService', '需要同步的场景数量: ${syncList.length}');
 
-      // 筛选出当前小说的场景
-      final scenesToSync = syncList.where((sceneKey) {
+      // 按章节分组：key = novelId_actId_chapterId, value = List<sceneKey>
+      final Map<String, List<String>> chapterGroups = {};
+      for (final sceneKey in syncList) {
         final parts = sceneKey.split('_');
-        return parts.length == 4 && parts[0] == currentNovelId;
-      }).toList();
+        if (parts.length == 4 && parts[0] == currentNovelId) {
+          final chapterKey = '${parts[0]}_${parts[1]}_${parts[2]}';
+          (chapterGroups[chapterKey] ??= []).add(sceneKey);
+        }
+      }
 
-      AppLogger.d('SyncService', '当前小说的场景需要同步: ${scenesToSync.length} (当前小说ID: $currentNovelId)');
-      
-      if (scenesToSync.isEmpty) {
+      if (chapterGroups.isEmpty) {
         AppLogger.i('SyncService', '当前小说没有场景需要同步，跳过');
         return;
       }
 
-      for (final sceneKey in scenesToSync) {
-        final parts = sceneKey.split('_');
-        if (parts.length != 4) {
-          AppLogger.w('SyncService', '无效的场景键格式: $sceneKey');
-          continue;
-        }
+      const int maxScenesPerBatch = 15; // 每批最多场景数
+      const int maxBatchBytes = 800 * 1024; // 每批最大字节数 ~800KB
 
+      for (final entry in chapterGroups.entries) {
+        final chapterKey = entry.key; // novelId_actId_chapterId
+        final sceneKeys = entry.value;
+        final parts = chapterKey.split('_');
         final novelId = parts[0];
         final actId = parts[1];
         final chapterId = parts[2];
-        final sceneId = parts[3];
 
-        final localScene = await localStorageService.getSceneContent(
-            novelId, actId, chapterId, sceneId);
-        if (localScene == null) {
-          AppLogger.w('SyncService', '本地场景不存在: $sceneKey');
-          continue;
+        AppLogger.i('SyncService', '开始按章节分批同步场景: novelId=$novelId, actId=$actId, chapterId=$chapterId, 场景数=${sceneKeys.length}');
+
+        // 准备所有场景的数据对象
+        final List<Map<String, dynamic>> allScenePayloads = [];
+        final Map<String, String> sceneKeyById = {};
+
+        for (final sceneKey in sceneKeys) {
+          final keyParts = sceneKey.split('_');
+          final sceneId = keyParts[3];
+          final localScene = await localStorageService.getSceneContent(novelId, actId, chapterId, sceneId);
+          if (localScene == null) {
+            AppLogger.w('SyncService', '本地场景不存在: $sceneKey');
+            continue;
+          }
+
+          // 构建payload（与 /novels/upsert-chapter-scenes-batch 兼容）
+          final payload = {
+            'id': sceneId,
+            'novelId': novelId,
+            'chapterId': chapterId,
+            'content': localScene.content,
+            'summary': localScene.summary.content,
+            'wordCount': localScene.wordCount,
+            'title': (localScene.title.isNotEmpty ? localScene.title : '场景 $sceneId'),
+          };
+          allScenePayloads.add(payload);
+          sceneKeyById[sceneId] = sceneKey;
         }
 
-        AppLogger.i('SyncService', '同步场景: $sceneKey');
-        final sceneData = localScene.toJson();
-        await apiService.updateScene(sceneData);
+        // 根据阈值切片并发送
+        List<Map<String, dynamic>> currentBatch = [];
+        int batchIndex = 0;
 
-        await localStorageService.clearSyncFlagByType('scene', sceneKey);
-        AppLogger.d('SyncService', '场景同步完成: $sceneKey');
+        Future<void> flushBatch() async {
+          if (currentBatch.isEmpty) return;
+          final batchData = {
+            'novelId': novelId,
+            'chapterId': chapterId,
+            'scenes': currentBatch,
+          };
+          final estimatedBytes = utf8.encode(jsonEncode(batchData)).length;
+          AppLogger.d('SyncService', '发送批次: chapter=$chapterId, 批次索引=$batchIndex, 场景数=${currentBatch.length}, 估算体积=${estimatedBytes}B');
+          try {
+            await apiService.post('/novels/upsert-chapter-scenes-batch', data: batchData);
+            // 清理对应的scene同步标记
+            for (final s in currentBatch) {
+              final sid = s['id'] as String;
+              final skey = sceneKeyById[sid];
+              if (skey != null) {
+                await localStorageService.clearSyncFlagByType('scene', skey);
+              }
+            }
+            AppLogger.i('SyncService', '批次同步完成: chapter=$chapterId, 批次索引=$batchIndex, 场景数=${currentBatch.length}');
+          } catch (e, st) {
+            AppLogger.e('SyncService', '批次同步失败: chapter=$chapterId, 批次索引=$batchIndex', e, st);
+            // 失败时保留同步标记，以便下次重试
+          }
+          currentBatch = [];
+          batchIndex += 1;
+        }
+
+        for (final scenePayload in allScenePayloads) {
+          // 尝试将当前场景加入批次，若超过阈值则先发送已有批次
+          final tentativeBatch = [...currentBatch, scenePayload];
+          final tentativeData = {
+            'novelId': novelId,
+            'chapterId': chapterId,
+            'scenes': tentativeBatch,
+          };
+          final estimatedBytes = utf8.encode(jsonEncode(tentativeData)).length;
+
+          if (tentativeBatch.length > maxScenesPerBatch || estimatedBytes > maxBatchBytes) {
+            await flushBatch();
+          }
+          currentBatch.add(scenePayload);
+        }
+
+        // 发送最后一批
+        await flushBatch();
       }
     } catch (e, stackTrace) {
       AppLogger.e('SyncService', '同步场景内容失败', e, stackTrace);
@@ -633,37 +731,8 @@ class SyncService {
         },
       };
       
-      // 组织场景数据，按章节分组
-      Map<String, List<Map<String, dynamic>>> scenesByChapter = {};
-      for (final act in localNovel.acts) {
-        for (final chapter in act.chapters) {
-          if (chapter.scenes.isNotEmpty) {
-            scenesByChapter[chapter.id] = chapter.scenes
-                .map((scene) => {
-                      'id': scene.id,
-                      'novelId': localNovel.id,
-                      'chapterId': chapter.id,
-                      'content': scene.content,
-                      'summary': scene.summary.content,
-                      'updatedAt': scene.lastEdited.toIso8601String(),
-                      'version': scene.version,
-                      'title': '',
-                      'sequence': 0,
-                      'sceneType': 'NORMAL',
-                    })
-                .toList();
-          }
-        }
-      }
-      
-      // 组装完整的请求数据
-      final novelWithScenesJson = {
-        'novel': backendNovelJson,
-        'scenesByChapter': scenesByChapter,
-      };
-
-      // 调用updateNovelWithScenes接口
-      await apiService.updateNovelWithScenes(novelWithScenesJson);
+      // 仅同步小说元数据/结构
+      await apiService.updateNovel(backendNovelJson);
 
       // 标记为已同步
       await localStorageService.clearSyncFlagByType('novel', novelId);

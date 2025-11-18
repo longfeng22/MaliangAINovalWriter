@@ -291,10 +291,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           }
           target ??= publicState.models.first;
 
-          // 将公共模型映射为临时的用户模型配置，使用 public_ 前缀
+          // 将公共模型映射为临时的用户模型配置（不拼接public_前缀）
           if (target != null) {
             selectedModel = UserAIModelConfigModel.fromJson({
-              'id': 'public_${target.id}',
+              'id': target.id, // 直接使用公共模型ID，不拼接前缀
               'userId': _userId,
               'alias': target.displayName,
               'modelName': target.modelId,
@@ -336,11 +336,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         // 如为公共模型，补充必要的元数据，确保后端走公共模型计费与路由
         Map<String, dynamic> updatedMeta = Map<String, dynamic>.from(chatConfig.metadata);
         final String selId = selectedModel.id;
-        if (selId.startsWith('public_')) {
-          final String publicId = selId.substring('public_'.length);
+        
+        // 🚀 通过 PublicModelsBloc 检查是否是公共模型（不再依赖前缀判断）
+        bool isPublicModel = false;
+        final publicState = _publicModelsBloc.state;
+        if (publicState is PublicModelsLoaded) {
+          isPublicModel = publicState.models.any((m) => m.id == selId);
+        }
+        
+        if (isPublicModel) {
           updatedMeta['isPublicModel'] = true;
-          updatedMeta['publicModelId'] = publicId;
-          updatedMeta['publicModelConfigId'] = publicId;
+          updatedMeta['publicModelId'] = selId;
+          updatedMeta['publicModelConfigId'] = selId;
         } else {
           updatedMeta['isPublicModel'] = false;
           updatedMeta.remove('publicModelId');
@@ -350,7 +357,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           modelConfig: selectedModel,
           metadata: updatedMeta,
         );
-        AppLogger.i('ChatBloc', '已将选择的模型设置到会话配置: modelId=${selectedModel.id}, modelName=${selectedModel.modelName}');
+        AppLogger.i('ChatBloc', '已将选择的模型设置到会话配置: modelId=${selectedModel.id}, modelName=${selectedModel.modelName}, isPublic=$isPublicModel');
       }
       
       // 将配置存储到两层映射中（无论是从缓存获取还是新创建的）
@@ -885,11 +892,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       // 🚀 构建用于发送的配置，将用户消息内容填充到 prompt 字段
       UniversalAIRequest? configToSend;
       if (chatConfig != null) {
+        // 🚀 优先使用 chatConfig 中的模型（已通过 _onUpdateChatModel 更新）
+        // 只有当 chatConfig 中没有模型时才使用 initialState.selectedModel 作为回退
+        final modelToUse = chatConfig.modelConfig ?? initialState.selectedModel;
         configToSend = chatConfig.copyWith(
           prompt: userContent, // 将当前用户输入填充到prompt字段
-          modelConfig: initialState.selectedModel, // 使用当前选中的模型
+          modelConfig: modelToUse, // 使用配置中的模型或当前选中的模型
         );
-        AppLogger.i('ChatBloc', '使用聊天配置: ${configToSend.requestType.value}');
+        AppLogger.i('ChatBloc', '使用聊天配置: ${configToSend.requestType.value}, 模型: ${modelToUse?.id} (${modelToUse?.modelName})');
       } else {
         AppLogger.i('ChatBloc', '没有聊天配置，使用默认设置');
       }
@@ -925,9 +935,45 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           }
           // --- State is valid, proceed ---
 
-          // 如果途中收到取消请求，则忽略后续 chunk，不再更新 UI
+          // 🚀 如果途中收到取消请求，停止生成并更新状态
           if (_cancelRequested) {
-            return currentState; // 不做任何修改，维持现状
+            AppLogger.w('ChatBloc', 'onData检测到取消请求，停止流式生成并终止流处理');
+            
+            // 将当前streaming消息标记为已发送
+            final latestMessages = List<ChatMessage>.from(currentState.messages);
+            final aiMessageIndex = latestMessages.indexWhere((msg) => msg.id == placeholderId);
+            
+            if (aiMessageIndex != -1) {
+              if (contentBuffer.toString().isNotEmpty) {
+                latestMessages[aiMessageIndex] = ChatMessage(
+                  sender: MessageSender.ai,
+                  id: placeholderId,
+                  role: initialRole,
+                  content: contentBuffer.toString(), // 保留已生成的内容
+                  timestamp: DateTime.now(),
+                  status: MessageStatus.sent, // 标记为已发送（已停止）
+                  sessionId: currentSessionId,
+                  userId: _userId,
+                  novelId: currentState.session.novelId,
+                  metadata: latestMessages[aiMessageIndex].metadata,
+                  actions: latestMessages[aiMessageIndex].actions,
+                );
+              }
+              
+              // 先emit停止生成的状态
+              if (!emit.isDone) {
+                emit(currentState.copyWith(
+                  messages: latestMessages,
+                  isGenerating: false, // 🚀 关键：停止生成状态
+                  clearError: true,
+                ));
+              }
+            }
+            
+            // 重置取消标志并抛出异常终止流处理
+            _cancelRequested = false;
+            AppLogger.i('ChatBloc', '已取消生成，抛出CancelledException终止流');
+            throw Exception('User cancelled streaming');
           }
 
           // 🚀 如果收到的是完整消息（DELIVERED状态），直接处理为最终消息
@@ -1091,6 +1137,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       // - Initial repository.streamMessage call
       // - Errors re-thrown from the stream's `onError` that emit.forEach catches
       // - The StateErrors thrown in `onData` if state changes or placeholder is lost
+      // - 🚀 User cancellation exceptions
+      
+      // 🚀 检查是否为用户取消操作
+      final isCancellation = error.toString().contains('User cancelled streaming');
+      
+      if (isCancellation) {
+        AppLogger.i('ChatBloc', '流处理因用户取消而终止（正常）');
+        // 用户取消不是错误，不需要emit错误状态
+        // 状态已经在onData中更新为isGenerating=false
+        return;
+      }
+      
       AppLogger.e(
           'ChatBloc',
           'Error during _handleStreamedResponse processing loop',
@@ -1196,9 +1254,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           );
           
           if (publicModel != null) {
-            // 🚀 为公共模型创建临时的UserAIModelConfigModel
+            // 🚀 为公共模型创建临时的UserAIModelConfigModel（不拼接public_前缀）
             newSelectedModel = UserAIModelConfigModel.fromJson({
-              'id': 'public_${publicModel.id}', // 使用前缀标识公共模型
+              'id': publicModel.id, // 直接使用公共模型ID，不拼接前缀
               'userId': _userId,
               'alias': publicModel.displayName,
               'modelName': publicModel.modelId,
@@ -1236,49 +1294,93 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         return;
       }
 
-      try {
-        // 2. Update the backend session
-        await repository.updateSession(
-            userId: _userId,
-            sessionId: event.sessionId,
-            updates: {'selectedModelConfigId': event.modelConfigId},
-            novelId: currentState.session.novelId);
+      // 🚀 仅更新前端状态和内存配置，不立即发送后端请求
+      // 模型配置会在下次发送消息时通过 config 参数传递给后端
+      
+      // 1. Update the session object in the state (仅本地状态)
+      final updatedSession = currentState.session.copyWith(
+        selectedModelConfigId: event.modelConfigId,
+        lastUpdatedAt: DateTime.now(),
+      );
 
-        // 3. Update the session object in the state
-        final updatedSession = currentState.session.copyWith(
-          selectedModelConfigId: event.modelConfigId,
-          lastUpdatedAt: DateTime.now(),
-        );
-
-        // 4. 🚀 更新会话配置中的模型信息
-        final novelId = currentState.session.novelId;
-        if (novelId != null) {
-          final currentConfig = _sessionConfigs[novelId]?[event.sessionId];
-          if (currentConfig != null) {
-            final updatedConfig = currentConfig.copyWith(modelConfig: newSelectedModel);
-            _sessionConfigs[novelId] ??= {};
-            _sessionConfigs[novelId]![event.sessionId] = updatedConfig;
-            AppLogger.i('ChatBloc', '已更新会话配置中的模型: novelId=$novelId, sessionId=${event.sessionId}, modelId=${newSelectedModel.id}');
+      // 2. 🚀 更新会话配置中的模型信息和元数据
+      final novelId = currentState.session.novelId;
+      if (novelId != null) {
+        final currentConfig = _sessionConfigs[novelId]?[event.sessionId];
+        if (currentConfig != null) {
+          // 更新模型配置
+          Map<String, dynamic> updatedMeta = Map<String, dynamic>.from(currentConfig.metadata);
+          final String selId = newSelectedModel.id;
+          
+          // 🚀 通过 PublicModelsBloc 检查是否是公共模型
+          bool isPublicModel = false;
+          final publicState = _publicModelsBloc.state;
+          if (publicState is PublicModelsLoaded) {
+            isPublicModel = publicState.models.any((m) => m.id == selId);
           }
+          
+          // 更新元数据中的公共模型标记
+          if (isPublicModel) {
+            updatedMeta['isPublicModel'] = true;
+            updatedMeta['publicModelId'] = selId;
+            updatedMeta['publicModelConfigId'] = selId;
+          } else {
+            updatedMeta['isPublicModel'] = false;
+            updatedMeta.remove('publicModelId');
+            updatedMeta.remove('publicModelConfigId');
+          }
+          
+          final updatedConfig = currentConfig.copyWith(
+            modelConfig: newSelectedModel,
+            metadata: updatedMeta,
+          );
+          _sessionConfigs[novelId] ??= {};
+          _sessionConfigs[novelId]![event.sessionId] = updatedConfig;
+          AppLogger.i('ChatBloc', '已更新会话配置中的模型和元数据: novelId=$novelId, sessionId=${event.sessionId}, modelId=${newSelectedModel.id}, isPublic=$isPublicModel');
+        } else {
+          // 如果配置不存在，创建一个新的默认配置
+          AppLogger.w('ChatBloc', '会话配置不存在，创建新配置并设置模型: novelId=$novelId, sessionId=${event.sessionId}');
+          final defaultConfig = _createDefaultChatConfig(currentState.session);
+          
+          // 设置模型和元数据
+          Map<String, dynamic> updatedMeta = Map<String, dynamic>.from(defaultConfig.metadata);
+          final String selId = newSelectedModel.id;
+          
+          // 检查是否是公共模型
+          bool isPublicModel = false;
+          final publicState = _publicModelsBloc.state;
+          if (publicState is PublicModelsLoaded) {
+            isPublicModel = publicState.models.any((m) => m.id == selId);
+          }
+          
+          if (isPublicModel) {
+            updatedMeta['isPublicModel'] = true;
+            updatedMeta['publicModelId'] = selId;
+            updatedMeta['publicModelConfigId'] = selId;
+          } else {
+            updatedMeta['isPublicModel'] = false;
+          }
+          
+          final configWithModel = defaultConfig.copyWith(
+            modelConfig: newSelectedModel,
+            metadata: updatedMeta,
+          );
+          _sessionConfigs[novelId] ??= {};
+          _sessionConfigs[novelId]![event.sessionId] = configWithModel;
+          AppLogger.i('ChatBloc', '已创建新配置并设置模型: novelId=$novelId, sessionId=${event.sessionId}, modelId=${newSelectedModel.id}, isPublic=$isPublicModel');
         }
-
-        // 5. Emit the new state with updated session and selectedModel
-        emit(currentState.copyWith(
-          session: updatedSession,
-          selectedModel: newSelectedModel,
-          clearError: true,
-          configUpdateTimestamp: DateTime.now(), // 🚀 触发UI重建
-        ));
-        AppLogger.i('ChatBloc',
-            '_onUpdateChatModel successful for session ${event.sessionId}, new model ${event.modelConfigId}');
-      } catch (e, stackTrace) {
-        AppLogger.e('ChatBloc',
-            '_onUpdateChatModel failed to update repository', e, stackTrace);
-        emit(currentState.copyWith(
-          error: '更新模型失败: ${_formatApiError(e, "更新模型失败")}',
-          clearError: false,
-        ));
       }
+
+      // 3. Emit the new state with updated session and selectedModel
+      emit(currentState.copyWith(
+        session: updatedSession,
+        selectedModel: newSelectedModel,
+        clearError: true,
+        configUpdateTimestamp: DateTime.now(), // 🚀 触发UI重建
+      ));
+      AppLogger.i('ChatBloc',
+          '_onUpdateChatModel successful for session ${event.sessionId}, new model ${event.modelConfigId} (本地更新，不发送后端请求)');
+
     } else {
       AppLogger.w('ChatBloc',
           '_onUpdateChatModel called with non-matching state or session ID.');

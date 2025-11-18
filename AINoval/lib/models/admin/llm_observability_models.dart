@@ -31,6 +31,7 @@ class LLMTrace extends Equatable {
   final String model;
   final String? userId;
   final String? sessionId;
+  final String? businessType; // ✅ 业务类型（用于分类和过滤）
   @JsonKey(name: 'createdAt')
   @TimestampConverter()
   final DateTime timestamp;
@@ -66,6 +67,7 @@ class LLMTrace extends Equatable {
     required this.model,
     this.userId,
     this.sessionId,
+    this.businessType,
     required this.timestamp,
     required this.request,
     this.response,
@@ -81,7 +83,7 @@ class LLMTrace extends Equatable {
   Map<String, dynamic> toJson() => _$LLMTraceToJson(this);
   
   @override
-  List<Object?> get props => [id, traceId, provider, model, userId, sessionId, timestamp, request, response, performance, error, toolCalls, metadata, status, isStreaming];
+  List<Object?> get props => [id, traceId, provider, model, userId, sessionId, businessType, timestamp, request, response, performance, error, toolCalls, metadata, status, isStreaming];
 }
 
 /// LLM请求信息

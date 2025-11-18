@@ -81,8 +81,8 @@ public class TaskContextImpl<P> implements TaskContext<P> {
             return Mono.empty();
         }
         
-        // 发布进度更新事件
-        eventPublisher.publishEvent(new TaskProgressEvent(this, taskId, progressData));
+        // 发布进度更新事件（包含更多上下文）
+        eventPublisher.publishEvent(new TaskProgressEvent(this, taskId, taskType, userId, parentTaskId, progressData));
         
         // 更新数据库中的进度
         return taskStateService.recordProgress(taskId, progressData);

@@ -388,7 +388,10 @@ public class UnifiedPromptAggregationServiceImpl implements UnifiedPromptAggrega
                 template.getLanguage(),
                 createdAt,
                 lastUsedAt,
-                updatedAt
+                updatedAt,
+                template.getReviewStatus(), // 🆕 添加审核状态
+                template.getHidePrompts() != null ? template.getHidePrompts() : false, // 🆕 添加隐藏提示词
+                template.getSettingGenerationConfig() // 🆕 添加设定生成配置
         );
         
         log.info("✅ 转换完成: id={}, name={}, result.isDefault={}", 

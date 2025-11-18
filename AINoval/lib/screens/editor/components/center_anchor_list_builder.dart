@@ -11,6 +11,7 @@ enum EditorItemType {
   addChapterButton,
   addActButton,
   actFooter,
+  storyPredictionButton,
 }
 
 /// 编辑器项目数据类
@@ -374,7 +375,19 @@ class CenterAnchorListBuilder {
     final items = <EditorItem>[];
 
     if (chapter.scenes.isEmpty) {
-      // 空章节：添加"添加场景"按钮
+      // 空章节：添加剧情推演按钮和"添加场景"按钮
+      items.add(EditorItem(
+        type: EditorItemType.storyPredictionButton,
+        id: 'story_prediction_${chapter.id}',
+        act: act,
+        chapter: chapter,
+        actIndex: actIndex + 1,
+        chapterIndex: chapterIndex + 1,
+        isLastInChapter: true,
+        isLastInAct: chapterIndex == act.chapters.length - 1,
+        isLastInNovel: actIndex == novel.acts.length - 1 && chapterIndex == act.chapters.length - 1,
+      ));
+      
       items.add(EditorItem(
         type: EditorItemType.addSceneButton,
         id: 'add_scene_${chapter.id}',
@@ -406,8 +419,22 @@ class CenterAnchorListBuilder {
           isLastInNovel: actIndex == novel.acts.length - 1 && chapterIndex == act.chapters.length - 1 && isLastScene,
         ));
         
-        // 在最后一个场景后添加"添加场景"按钮
+        // 在最后一个场景后添加剧情推演按钮和"添加场景"按钮
         if (isLastScene) {
+          // 添加剧情推演按钮
+          items.add(EditorItem(
+            type: EditorItemType.storyPredictionButton,
+            id: 'story_prediction_${chapter.id}',
+            act: act,
+            chapter: chapter,
+            actIndex: actIndex + 1,
+            chapterIndex: chapterIndex + 1,
+            isLastInChapter: true,
+            isLastInAct: chapterIndex == act.chapters.length - 1,
+            isLastInNovel: actIndex == novel.acts.length - 1 && chapterIndex == act.chapters.length - 1,
+          ));
+          
+          // 添加"添加场景"按钮
           items.add(EditorItem(
             type: EditorItemType.addSceneButton,
             id: 'add_scene_after_${scene.id}',

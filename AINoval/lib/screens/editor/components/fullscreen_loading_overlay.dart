@@ -73,8 +73,8 @@ class _FullscreenLoadingOverlayState extends State<FullscreenLoadingOverlay>
       child: Material(
         color: Colors.transparent,
         child: Container(
-          // 使用白色背景，配合阴阳太极风格
-          color: widget.backgroundColor ?? Colors.white,
+          // 动态背景：暗黑用纯黑，亮色用白；允许外部覆盖
+          color: widget.backgroundColor ?? (Theme.of(context).brightness == Brightness.dark ? const Color(0xFF000000) : Colors.white),
           child: Stack(
             children: [
               // 阴阳太极背景图案
@@ -163,8 +163,8 @@ class _FullscreenLoadingOverlayState extends State<FullscreenLoadingOverlay>
           return Transform.rotate(
             angle: _taichiController.value * 2 * math.pi * 0.05, // 缓慢旋转
             child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
+              decoration: BoxDecoration(
+                color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF000000) : Colors.white,
               ),
               child: CustomPaint(
                 painter: TaichiBackgroundPainter(_taichiController.value),

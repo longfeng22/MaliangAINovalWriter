@@ -240,6 +240,7 @@ public class BillingCompensationService {
             case TEXT_REFACTOR:
                 return (int) (inputTokens * 1.1);
             case NOVEL_GENERATION:
+            case SUMMARY_TO_SCENE:
                 return (int) (inputTokens * 2.0);
             case AI_CHAT:
                 return (int) (inputTokens * 0.8);

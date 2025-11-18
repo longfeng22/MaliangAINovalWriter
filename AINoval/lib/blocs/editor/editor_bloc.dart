@@ -2846,8 +2846,26 @@ class EditorBloc extends Bloc<EditorEvent, EditorState> {
         '执行无感刷新，来源: ${event.source}, 保持活动场景: ${event.preserveActiveScene}');
     
     try {
-      // 重新加载小说数据
-      final novel = await repository.getNovelWithAllScenes(novelId);
+      // 重新加载小说数据（使用分页/局部而非全量）
+      // 以当前活动章节或 lastEditedChapterId 作为中心进行分页拉取，避免全量接口
+      String? centerChapterId = currentState.activeChapterId ?? currentState.novel.lastEditedChapterId;
+      if (centerChapterId == null) {
+        // 兜底：取首章
+        if (currentState.novel.acts.isNotEmpty && currentState.novel.acts.first.chapters.isNotEmpty) {
+          centerChapterId = currentState.novel.acts.first.chapters.first.id;
+        }
+      }
+
+      if (centerChapterId == null) {
+        AppLogger.w('EditorBloc/_onRefreshEditorData', '无法确定分页中心章节，跳过刷新');
+        return;
+      }
+
+      final novel = await repository.getNovelWithPaginatedScenes(
+        novelId,
+        centerChapterId,
+        chaptersLimit: 5,
+      );
       
       if (novel == null) {
         AppLogger.w('EditorBloc/_onRefreshEditorData', '刷新数据失败，无法加载小说');

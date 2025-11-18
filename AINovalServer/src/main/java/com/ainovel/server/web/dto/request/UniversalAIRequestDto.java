@@ -55,6 +55,16 @@ public class UniversalAIRequestDto {
     private String modelConfigId;
 
     /**
+     * 模型名称（用于积分预估）
+     */
+    private String modelName;
+
+    /**
+     * 模型提供商（用于积分预估）
+     */
+    private String modelProvider;
+
+    /**
      * 用户输入的提示内容
      */
     private String prompt;
@@ -90,6 +100,11 @@ public class UniversalAIRequestDto {
     private String settingSessionId;
 
     /**
+     * 历史消息（用于对话式AI请求，如迭代优化）
+     */
+    private List<MessageDto> historicalMessages;
+
+    /**
      * 上下文选择DTO
      */
     @Data
@@ -101,5 +116,24 @@ public class UniversalAIRequestDto {
         private String title;
         private String type;
         private Map<String, Object> metadata;
+    }
+
+    /**
+     * 消息DTO（用于对话式AI请求）
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class MessageDto {
+        /**
+         * 消息角色：system, user, assistant
+         */
+        private String role;
+        
+        /**
+         * 消息内容
+         */
+        private String content;
     }
 } 

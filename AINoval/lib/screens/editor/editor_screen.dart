@@ -111,11 +111,15 @@ class _EditorScreenState extends State<EditorScreen> with SingleTickerProviderSt
         if (state is AuthUnauthenticated) {
           // 确保在widget仍然挂载时执行导航
           if (mounted) {
-            // 使用pushAndRemoveUntil清除导航栈并导航到登录页面
-            // Navigator.of(context).pushAndRemoveUntil(
-            //   MaterialPageRoute(builder: (context) => const LoginScreen()),
-            //   (route) => false, // 清除所有现有路由
-            // );
+            // 使用pushNamedAndRemoveUntil清除导航栈并返回根路由（主页会按未登录态渲染）
+            try {
+              Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+            } catch (_) {
+              // 回退方案：尽力返回到第一个路由
+              try {
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              } catch (_) {}
+            }
           }
         }
       },
@@ -123,7 +127,8 @@ class _EditorScreenState extends State<EditorScreen> with SingleTickerProviderSt
         providers: [
           RepositoryProvider<NovelSettingRepository>(
             create: (context) => NovelSettingRepositoryImpl(
-              apiClient: ApiClient(),
+              // 复用全局提供的 ApiClient，确保401时能触发统一的登出逻辑
+              apiClient: context.read<ApiClient>(),
             ),
           ),
         ],

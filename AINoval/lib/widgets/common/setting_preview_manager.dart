@@ -327,8 +327,8 @@ class _UniversalSettingPreviewCardState extends State<_UniversalSettingPreviewCa
     
     // 计算新位置
     final screenSize = MediaQuery.of(context).size;
-    const cardHeight = 220.0;
-    const cardWidth = 340.0;
+    const cardHeight = 320.0; // 🎯 与build中保持一致
+    const cardWidth = 420.0; // 🎯 与build中保持一致
     const topMargin = 16.0;
     const bottomMargin = 16.0;
     
@@ -555,8 +555,8 @@ class _UniversalSettingPreviewCardState extends State<_UniversalSettingPreviewCa
     final screenSize = MediaQuery.of(context).size;
 
     // 🎨 使用通用卡片组件 - 应用全局样式和主题
-    const cardWidth = 340.0;
-    const cardHeight = 220.0;
+    const cardWidth = 420.0; // 🎯 增大宽度：从340改为420
+    const cardHeight = 320.0; // 🎯 增大高度：从220改为320
 
     return AnimatedBuilder(
       animation: Listenable.merge([_animationController, _positionController]),
@@ -704,34 +704,55 @@ class _UniversalSettingPreviewCardState extends State<_UniversalSettingPreviewCa
     );
   }
 
-  /// 构建头部区域
+  /// 构建头部区域 - 🎯 优化版本，更美观的布局
   Widget _buildHeader() {
     return Container(
       padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            WebTheme.getPrimaryColor(context).withOpacity(0.03),
+            WebTheme.getSurfaceColor(context),
+          ],
+        ),
+      ),
       child: Row(
         children: [
-          // 设定图片或类型图标
+          // 🎯 设定图片或类型图标 - 更大更醒目
           Container(
-            width: 52,
-            height: 52,
+            width: 60, // 🎯 增大：从52改为60
+            height: 60, // 🎯 增大：从52改为60
             decoration: BoxDecoration(
-              color: WebTheme.grey100,
-              borderRadius: BorderRadius.circular(8),
+              color: WebTheme.isDarkMode(context) 
+                  ? WebTheme.darkGrey100 
+                  : WebTheme.grey100,
+              borderRadius: BorderRadius.circular(12), // 🎯 增大圆角：从8改为12
               border: Border.all(
-                color: WebTheme.grey300,
-                width: 1,
+                color: WebTheme.isDarkMode(context)
+                    ? WebTheme.darkGrey300
+                    : WebTheme.grey300,
+                width: 1.5, // 🎯 增加边框宽度
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: WebTheme.getShadowColor(context, opacity: 0.08),
+                  offset: const Offset(0, 2),
+                  blurRadius: 8,
+                ),
+              ],
             ),
             child: _settingItem!.imageUrl != null && _settingItem!.imageUrl!.isNotEmpty
                 ? ClipRRect(
-                    borderRadius: BorderRadius.circular(7),
+                    borderRadius: BorderRadius.circular(11),
                     child: Image.network(
                       _settingItem!.imageUrl!,
                       fit: BoxFit.cover,
                       errorBuilder: (context, error, stackTrace) {
                         return Icon(
                           _getTypeIcon(),
-                          size: 26,
+                          size: 30, // 🎯 增大图标：从26改为30
                           color: WebTheme.getTextColor(context),
                         );
                       },
@@ -739,7 +760,7 @@ class _UniversalSettingPreviewCardState extends State<_UniversalSettingPreviewCa
                   )
                 : Icon(
                     _getTypeIcon(),
-                    size: 26,
+                    size: 30, // 🎯 增大图标：从26改为30
                     color: WebTheme.getTextColor(context),
                   ),
           ),
@@ -751,94 +772,136 @@ class _UniversalSettingPreviewCardState extends State<_UniversalSettingPreviewCa
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 设定名称（可点击）
+                // 🎯 设定名称（可点击）- 改进交互提示
                 GestureDetector(
                   onTap: _handleTitleTap,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
-                    child: Text(
-                      _settingItem!.name,
-                      style: WebTheme.getAlignedTextStyle(
-                        baseStyle: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: WebTheme.getTextColor(context),
-                          decoration: TextDecoration.underline,
-                          decorationColor: WebTheme.getTextColor(context).withOpacity(0.4),
-                          decorationThickness: 1.2,
+                    child: Container(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Text(
+                        _settingItem!.name,
+                        style: WebTheme.getAlignedTextStyle(
+                          baseStyle: TextStyle(
+                            fontSize: 18, // 🎯 增大字号：从17改为18
+                            fontWeight: FontWeight.w700, // 🎯 加粗：从w600改为w700
+                            color: WebTheme.getTextColor(context),
+                            decoration: TextDecoration.underline,
+                            decorationColor: WebTheme.getPrimaryColor(context).withOpacity(0.5),
+                            decorationThickness: 1.5, // 🎯 加粗下划线：从1.2改为1.5
+                          ),
                         ),
+                        maxLines: 2, // 🎯 增加显示行数：从1改为2
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ),
 
-                const SizedBox(height: 6),
+                const SizedBox(height: 8), // 🎯 增加间距：从6改为8
 
-                // 类型和设定组
-                Row(
+                // 🎯 类型和设定组 - 改进视觉样式
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
                   children: [
                     // 设定类型
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), // 🎯 增加padding
                       decoration: BoxDecoration(
-                        color: WebTheme.getTextColor(context).withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        _getTypeDisplayName(),
-                        style: WebTheme.getAlignedTextStyle(
-                          baseStyle: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: WebTheme.getTextColor(context),
-                          ),
+                        gradient: LinearGradient(
+                          colors: [
+                            WebTheme.getPrimaryColor(context).withOpacity(0.15),
+                            WebTheme.getPrimaryColor(context).withOpacity(0.08),
+                          ],
                         ),
+                        borderRadius: BorderRadius.circular(6), // 🎯 增大圆角
+                        border: Border.all(
+                          color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _getTypeIcon(),
+                            size: 12,
+                            color: WebTheme.getPrimaryColor(context),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _getTypeDisplayName(),
+                            style: WebTheme.getAlignedTextStyle(
+                              baseStyle: TextStyle(
+                                fontSize: 12, // 🎯 增大字号：从11改为12
+                                fontWeight: FontWeight.w600,
+                                color: WebTheme.getPrimaryColor(context),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
 
-                    if (_settingGroup != null) ...[
-                      const SizedBox(width: 10),
+                    if (_settingGroup != null)
                       // 设定组
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), // 🎯 增加padding
                         decoration: BoxDecoration(
                           color: WebTheme.getSecondaryTextColor(context).withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(5),
-                        ),
-                        child: Text(
-                          _settingGroup!.name,
-                          style: WebTheme.getAlignedTextStyle(
-                            baseStyle: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              color: WebTheme.getSecondaryTextColor(context),
-                            ),
+                          borderRadius: BorderRadius.circular(6), // 🎯 增大圆角
+                          border: Border.all(
+                            color: WebTheme.getSecondaryTextColor(context).withOpacity(0.15),
+                            width: 1,
                           ),
                         ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.folder_outlined,
+                              size: 12,
+                              color: WebTheme.getSecondaryTextColor(context),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _settingGroup!.name,
+                              style: WebTheme.getAlignedTextStyle(
+                                baseStyle: TextStyle(
+                                  fontSize: 12, // 🎯 增大字号：从11改为12
+                                  fontWeight: FontWeight.w500,
+                                  color: WebTheme.getSecondaryTextColor(context),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
                   ],
                 ),
               ],
             ),
           ),
 
-          // 关闭按钮
+          const SizedBox(width: 8),
+
+          // 🎯 关闭按钮 - 改进交互体验
           GestureDetector(
             onTap: _close,
             child: MouseRegion(
               cursor: SystemMouseCursors.click,
               child: Container(
-                padding: const EdgeInsets.all(6),
+                padding: const EdgeInsets.all(8), // 🎯 增大点击区域：从6改为8
                 decoration: BoxDecoration(
-                  color: Colors.transparent,
-                  borderRadius: BorderRadius.circular(4),
+                  color: WebTheme.isDarkMode(context)
+                      ? Colors.white.withOpacity(0.05)
+                      : Colors.black.withOpacity(0.03),
+                  borderRadius: BorderRadius.circular(6),
                 ),
                 child: Icon(
-                  Icons.close,
-                  size: 18,
+                  Icons.close_rounded, // 🎯 使用圆角图标
+                  size: 20, // 🎯 增大图标：从18改为20
                   color: WebTheme.getSecondaryTextColor(context),
                 ),
               ),
@@ -849,77 +912,104 @@ class _UniversalSettingPreviewCardState extends State<_UniversalSettingPreviewCa
     );
   }
 
-  /// 构建内容区域
+  /// 构建内容区域 - 🎯 优化版本，使用滚动视图，完整显示文本
   Widget _buildContent() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+    // 获取要显示的文本内容和标签
+    String contentText = '';
+    String contentLabel = '';
+    
+    if (_settingItem!.description != null && _settingItem!.description!.isNotEmpty) {
+      contentText = _settingItem!.description!;
+      contentLabel = '描述';
+    } else if (_settingItem!.content != null && _settingItem!.content!.isNotEmpty) {
+      contentText = _settingItem!.content!;
+      contentLabel = '内容';
+    }
+    
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
         children: [
-          // 描述内容
-          if (_settingItem!.description != null && _settingItem!.description!.isNotEmpty) ...[
-            Text(
-              '描述',
-              style: WebTheme.getAlignedTextStyle(
-                baseStyle: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: WebTheme.getTextColor(context),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Flexible(
-              child: Text(
-                _settingItem!.description!,
-                style: WebTheme.getAlignedTextStyle(
-                  baseStyle: TextStyle(
-                    fontSize: 13,
-                    height: 1.5,
-                    color: WebTheme.getSecondaryTextColor(context),
+          // 内容标签
+          if (contentText.isNotEmpty) ...[
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: WebTheme.getPrimaryColor(context).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    contentLabel,
+                    style: WebTheme.getAlignedTextStyle(
+                      baseStyle: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: WebTheme.getPrimaryColor(context),
+                      ),
+                    ),
                   ),
                 ),
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
-              ),
+              ],
             ),
-          ] else if (_settingItem!.content != null && _settingItem!.content!.isNotEmpty) ...[
-            Text(
-              '内容',
-              style: WebTheme.getAlignedTextStyle(
-                baseStyle: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: WebTheme.getTextColor(context),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Flexible(
-              child: Text(
-                _settingItem!.content!,
-                style: WebTheme.getAlignedTextStyle(
-                  baseStyle: TextStyle(
-                    fontSize: 13,
-                    height: 1.5,
-                    color: WebTheme.getSecondaryTextColor(context),
+            const SizedBox(height: 12),
+            // 🎯 可滚动的内容区域 - 关键改进
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: WebTheme.isDarkMode(context) 
+                      ? WebTheme.darkGrey50.withOpacity(0.5)
+                      : WebTheme.grey50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: WebTheme.isDarkMode(context)
+                        ? WebTheme.darkGrey200
+                        : WebTheme.grey200,
+                    width: 1,
                   ),
                 ),
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: SelectableText(
+                    contentText,
+                    style: WebTheme.getAlignedTextStyle(
+                      baseStyle: TextStyle(
+                        fontSize: 14, // 🎯 增大字号：从13改为14
+                        height: 1.6, // 🎯 增加行高：从1.5改为1.6
+                        color: WebTheme.getTextColor(context),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ] else ...[
-            Center(
-              child: Text(
-                '暂无描述',
-                style: WebTheme.getAlignedTextStyle(
-                  baseStyle: TextStyle(
-                    fontSize: 13,
-                    color: WebTheme.getSecondaryTextColor(context).withOpacity(0.6),
-                    fontStyle: FontStyle.italic,
-                  ),
+            // 空状态
+            Expanded(
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.description_outlined,
+                      size: 48,
+                      color: WebTheme.getSecondaryTextColor(context).withOpacity(0.3),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '暂无描述',
+                      style: WebTheme.getAlignedTextStyle(
+                        baseStyle: TextStyle(
+                          fontSize: 14,
+                          color: WebTheme.getSecondaryTextColor(context).withOpacity(0.6),
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -927,17 +1017,37 @@ class _UniversalSettingPreviewCardState extends State<_UniversalSettingPreviewCa
 
           const SizedBox(height: 12),
 
-          // 提示文本
-          Center(
-            child: Text(
-              '点击标题查看详情',
-              style: WebTheme.getAlignedTextStyle(
-                baseStyle: TextStyle(
-                  fontSize: 11,
-                  color: WebTheme.getSecondaryTextColor(context).withOpacity(0.7),
-                  fontStyle: FontStyle.italic,
-                ),
+          // 🎯 底部操作提示 - 更醒目的样式
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: WebTheme.getPrimaryColor(context).withOpacity(0.05),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
+                width: 1,
               ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.touch_app,
+                  size: 14,
+                  color: WebTheme.getPrimaryColor(context),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '点击标题查看完整详情',
+                  style: WebTheme.getAlignedTextStyle(
+                    baseStyle: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: WebTheme.getPrimaryColor(context),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],

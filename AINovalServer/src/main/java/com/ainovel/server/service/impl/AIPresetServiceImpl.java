@@ -169,6 +169,8 @@ public class AIPresetServiceImpl implements AIPresetService {
                     return "你是一位专业的小说创作助手，擅长生成引人入胜的故事内容。";
                 case SCENE_TO_SUMMARY:
                     return "你是一位专业的场景摘要助手，擅长分析场景内容并生成准确的摘要。";
+                case SUMMARY_TO_SCENE:
+                    return "你是一位专业的场景创作助手，擅长根据摘要生成详细的场景内容。";
                 default:
                     return "你是一位专业的AI助手，可以帮助用户完成各种文本处理任务。";
             }

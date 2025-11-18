@@ -574,8 +574,9 @@ class WebTheme {
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: p.primary,
-          foregroundColor: darkGrey50,
+          // 暗色模式下主按钮使用黑底白字
+          backgroundColor: black,
+          foregroundColor: white,
           elevation: 0,
           shadowColor: Colors.transparent,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -590,6 +591,8 @@ class WebTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
+          // 明确透明背景，避免出现白底
+          backgroundColor: Colors.transparent,
           foregroundColor: p.textPrimary,
           side: BorderSide.none,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -614,8 +617,9 @@ class WebTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: p.primary,
-          foregroundColor: darkGrey50,
+          // 与 Elevated 保持一致：黑底白字
+          backgroundColor: black,
+          foregroundColor: white,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
@@ -749,7 +753,7 @@ class WebTheme {
     final isDark = WebTheme.isDarkMode(context);
     final p = _getPalette(context);
     return ElevatedButton.styleFrom(
-      backgroundColor: p.primary,
+      backgroundColor: isDark ? black : p.primary,
       foregroundColor: white,
       elevation: 2,
       shadowColor: isDark ? black.withValues(alpha: 0.4) : grey300.withValues(alpha: 0.3),
@@ -769,7 +773,7 @@ class WebTheme {
     final isDark = WebTheme.isDarkMode(context);
     final p = _getPalette(context);
     return ElevatedButton.styleFrom(
-      backgroundColor: p.primary,
+      backgroundColor: isDark ? black : p.primary,
       foregroundColor: white,
       elevation: 3,
       shadowColor: isDark ? black.withValues(alpha: 0.4) : grey300.withValues(alpha: 0.4),
@@ -786,7 +790,8 @@ class WebTheme {
     final isDark = WebTheme.isDarkMode(context);
     final p = _getPalette(context);
     return OutlinedButton.styleFrom(
-      foregroundColor: isDark ? darkGrey800 : p.textPrimary,
+      backgroundColor: Colors.transparent,
+      foregroundColor: p.textPrimary,
       side: BorderSide(
         color: isDark ? darkGrey400 : p.border,
         width: 1.5,

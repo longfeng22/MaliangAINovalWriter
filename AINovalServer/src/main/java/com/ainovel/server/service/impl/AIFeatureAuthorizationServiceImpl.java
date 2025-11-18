@@ -124,9 +124,10 @@ public class AIFeatureAuthorizationServiceImpl implements AIFeatureAuthorization
             case NOVEL_GENERATION -> PermissionConstants.FEATURE_NOVEL_GENERATION;
             case PROFESSIONAL_FICTION_CONTINUATION -> PermissionConstants.FEATURE_PROFESSIONAL_FICTION_CONTINUATION;
             case SCENE_BEAT_GENERATION -> PermissionConstants.FEATURE_SCENE_BEAT_GENERATION;
-                case SETTING_TREE_GENERATION -> PermissionConstants.FEATURE_SETTING_TREE_GENERATION;
-                case NOVEL_COMPOSE -> PermissionConstants.FEATURE_NOVEL_COMPOSE;
-
+            case SETTING_TREE_GENERATION -> PermissionConstants.FEATURE_SETTING_TREE_GENERATION;
+            case SETTING_GENERATION_TOOL -> PermissionConstants.FEATURE_SETTING_TREE_GENERATION;
+            case NOVEL_COMPOSE -> PermissionConstants.FEATURE_NOVEL_COMPOSE;
+            default -> { throw new IllegalArgumentException("Unsupported feature type: " + featureType); }
         };
     }
     

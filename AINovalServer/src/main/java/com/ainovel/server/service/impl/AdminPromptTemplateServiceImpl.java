@@ -2,6 +2,7 @@ package com.ainovel.server.service.impl;
 
 import com.ainovel.server.domain.model.AIFeatureType;
 import com.ainovel.server.domain.model.EnhancedUserPromptTemplate;
+import com.ainovel.server.domain.model.ReviewStatusConstants;
 import com.ainovel.server.repository.EnhancedUserPromptTemplateRepository;
 import com.ainovel.server.service.AdminPromptTemplateService;
 import lombok.extern.slf4j.Slf4j;
@@ -43,11 +44,12 @@ public class AdminPromptTemplateServiceImpl implements AdminPromptTemplateServic
     
     @Override
     public Flux<EnhancedUserPromptTemplate> findPendingTemplates() {
-        log.debug("获取待审核的模板");
-        return templateRepository.findByIsPublicTrue()
-                .filter(template -> !template.getIsVerified())
-                .filter(template -> template.getAuthorId() != null && !template.getAuthorId().isEmpty())
-                .doOnNext(template -> log.debug("找到待审核模板: {} (作者: {})", template.getName(), template.getAuthorId()));
+        log.debug("获取所有待审核的模板");
+        // 🔧 修复：使用统一的 reviewStatus 字段，而不是旧的 isVerified 逻辑
+        return templateRepository.findAll()
+                .filter(template -> ReviewStatusConstants.PENDING.equals(template.getReviewStatus()))
+                .doOnNext(template -> log.debug("找到待审核模板: {} (作者: {}, 类型: {}, 状态: {})", 
+                        template.getName(), template.getAuthorId(), template.getFeatureType(), template.getReviewStatus()));
     }
     
     @Override
@@ -213,15 +215,19 @@ public class AdminPromptTemplateServiceImpl implements AdminPromptTemplateServic
                         template.setIsPublic(true);
                         template.setIsVerified(true);
                         template.setSharedAt(LocalDateTime.now());
+                        template.setReviewStatus(ReviewStatusConstants.APPROVED);
                         log.info("模板审核通过，设置为公开验证模板: {}", template.getName());
                     } else {
                         template.setIsPublic(false);
                         template.setIsVerified(false);
+                        template.setReviewStatus(ReviewStatusConstants.REJECTED);
                         log.info("模板审核拒绝，设置为私有模板: {}", template.getName());
                     }
                     
+                    template.setReviewerId(adminId);
+                    template.setReviewComment(reviewComment);
+                    template.setReviewedAt(LocalDateTime.now());
                     template.setUpdatedAt(LocalDateTime.now());
-                    // TODO: 添加审核记录字段存储 reviewComment
                     
                     return templateRepository.save(template);
                 })

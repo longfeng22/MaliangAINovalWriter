@@ -8,5 +8,6 @@ abstract class NovelAIRepository {
     required List<String> settingTypes,
     required int maxSettingsPerType,
     required String additionalInstructions,
+    required String modelConfigId, // 模型配置ID，后端自己查询已有设定
   });
 } 

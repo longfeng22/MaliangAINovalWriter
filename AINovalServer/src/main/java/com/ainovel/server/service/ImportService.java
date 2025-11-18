@@ -7,9 +7,12 @@ import com.ainovel.server.web.dto.ImportStatus;
 import com.ainovel.server.web.dto.ImportPreviewRequest;
 import com.ainovel.server.web.dto.ImportPreviewResponse;
 import com.ainovel.server.web.dto.ImportConfirmRequest;
+import com.ainovel.server.web.dto.ChapterDetailDto;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.util.List;
 
 /**
  * 小说导入服务接口 负责处理小说文件导入、解析和存储，以及通过SSE推送状态更新
@@ -77,4 +80,33 @@ public interface ImportService {
      * @return 清理操作的Mono
      */
     Mono<Void> cleanupPreviewSession(String previewSessionId);
+    
+    /**
+     * 从预览会话获取完整文本内容
+     * 用于知识库拆书功能
+     *
+     * @param previewSessionId 预览会话ID
+     * @param chapterLimit 章节限制（null表示整本，否则为前N章）
+     * @return 完整的小说文本内容（包含标题和所有章节）
+     */
+    Mono<String> getFullContentFromPreviewSession(String previewSessionId, Integer chapterLimit);
+    
+    /**
+     * 从预览会话获取总章节数
+     *
+     * @param previewSessionId 预览会话ID
+     * @return 总章节数
+     */
+    Mono<Integer> getTotalChapterCountFromPreviewSession(String previewSessionId);
+    
+    /**
+     * 从预览会话获取章节详情列表
+     * 用于知识库拆书功能，获取每个章节的完整信息
+     *
+     * @param previewSessionId 预览会话ID
+     * @param chapterLimit 章节限制（null表示整本，否则为前N章）
+     * @return 章节详情列表
+     */
+    Mono<List<ChapterDetailDto>> getChapterDetailsFromPreviewSession(
+            String previewSessionId, Integer chapterLimit);
 }

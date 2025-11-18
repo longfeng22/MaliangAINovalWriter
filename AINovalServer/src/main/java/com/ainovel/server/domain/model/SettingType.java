@@ -37,6 +37,15 @@ public enum SettingType {
     POLITICS("POLITICS", "政治"),
     ECONOMY("ECONOMY", "经济"),
     GEOGRAPHY("GEOGRAPHY", "地理"),
+    
+    // —— 细分的提取类型 ——
+    NARRATIVE_STYLE("NARRATIVE_STYLE", "叙事方式"),
+    WORD_USAGE_FEATURE("WORD_USAGE_FEATURE", "用词特点"),
+    WRITING_STYLE_FEATURE("WRITING_STYLE_FEATURE", "文风特点"),
+    CORE_CONFLICT_SETTING("CORE_CONFLICT_SETTING", "核心冲突"),
+    SUSPENSE_ELEMENT("SUSPENSE_ELEMENT", "悬念设计"),
+    PACING("PACING", "故事节奏"),
+    
     OTHER("OTHER", "其他");
 
     private final String value;

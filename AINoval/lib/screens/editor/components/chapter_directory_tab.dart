@@ -12,6 +12,10 @@ import 'dart:async'; // Import for StreamSubscription
 import 'package:ainoval/utils/event_bus.dart'; // Import EventBus and the event
 import 'package:ainoval/widgets/common/app_search_field.dart';
 import 'package:flutter/rendering.dart'; // Import for AutomaticKeepAliveClientMixin
+// 🎯 拖放功能
+import 'package:ainoval/models/context_drag_data.dart';
+import 'package:ainoval/models/context_selection_models.dart';
+import 'package:ainoval/widgets/common/draggable_context_item.dart';
 
 // 🚀 数据类，用于ListView.builder
 class _ActItemData {
@@ -175,7 +179,8 @@ class _SceneItemContent extends StatelessWidget {
         ? '(无摘要)' 
         : scene.summary.content;
 
-    return Container(
+    // 🎯 构建场景UI
+    final sceneWidget = Container(
       color: Colors.transparent, // 🚀 移除活跃状态颜色变化
       child: Material(
         color: Colors.transparent,
@@ -254,6 +259,33 @@ class _SceneItemContent extends StatelessWidget {
         ),
       ),
     );
+    
+    // 🎯 包装为可拖动的上下文项
+    if (scene.id.isNotEmpty) {
+      final dragData = ContextDragData(
+        id: 'scene_${scene.id}', // 添加前缀以标识类型
+        type: ContextSelectionType.scenes,
+        title: scene.title.isNotEmpty ? scene.title : 'Scene ${index + 1}',
+        subtitle: summaryText.length > 50 
+            ? '${summaryText.substring(0, 50)}...' 
+            : summaryText,
+        metadata: {
+          'sceneId': scene.id,
+          'wordCount': scene.wordCount,
+        },
+      );
+      
+      return DraggableContextItem(
+        data: dragData,
+        enableDrag: true,
+        onDragStarted: () {
+          AppLogger.d('ChapterDirectoryTab', '🎯 开始拖动场景: ${scene.title}');
+        },
+        child: sceneWidget,
+      );
+    }
+    
+    return sceneWidget;
   }
 
   // 格式化时间戳为友好格式
@@ -272,32 +304,6 @@ class _SceneItemContent extends StatelessWidget {
     } else {
       return '刚刚';
     }
-  }
-}
-
-class _LoadingScenesWidget extends StatelessWidget {
-  const _LoadingScenesWidget();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(12.0),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(strokeWidth: 2),
-            const SizedBox(height: 8),
-            Text('加载场景信息...', 
-              style: TextStyle(
-                fontSize: 11,
-                color: WebTheme.getSecondaryTextColor(context),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
@@ -359,16 +365,8 @@ class _ChapterItemState extends State<_ChapterItem> {
       ).toList();
     }
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 0, vertical: 1),
-      decoration: BoxDecoration(
-        color: WebTheme.getSurfaceColor(context), // 🚀 修复：使用动态表面色
-        border: Border.all(color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Material(
+    // 🎯 构建章节标题行
+    final chapterHeader = Material(
             color: Colors.transparent,
             child: InkWell(
               splashColor: WebTheme.getPrimaryColor(context).withOpacity(0.1),
@@ -450,7 +448,40 @@ class _ChapterItemState extends State<_ChapterItem> {
                 ),
               ),
             ),
-          ),
+          );
+    
+    // 🎯 包装章节标题为可拖动的
+    final draggableHeader = widget.chapter.id.isNotEmpty
+        ? DraggableContextItem(
+            data: ContextDragData(
+              id: 'chapter_${widget.chapter.id}',
+              type: ContextSelectionType.chapters,
+              title: '第${widget.chapterNumberInAct}章：${widget.chapter.title}',
+              subtitle: '${widget.chapter.scenes.length}个场景',
+              metadata: {
+                'chapterId': widget.chapter.id,
+                'actId': widget.act.id,
+                'sceneCount': widget.chapter.scenes.length,
+              },
+            ),
+            enableDrag: true,
+            onDragStarted: () {
+              AppLogger.d('ChapterDirectoryTab', '🎯 开始拖动章节: ${widget.chapter.title}');
+            },
+            child: chapterHeader,
+          )
+        : chapterHeader;
+    
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 0, vertical: 1),
+      decoration: BoxDecoration(
+        color: WebTheme.getSurfaceColor(context), // 🚀 修复：使用动态表面色
+        border: Border.all(color: WebTheme.isDarkMode(context) ? WebTheme.darkGrey200 : WebTheme.grey200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          draggableHeader,
           // 🚀 优化：只有展开时才构建场景列表
           if (isChapterExpandedForScenes)
             _buildScenesList(
@@ -471,7 +502,7 @@ class _ChapterItemState extends State<_ChapterItem> {
     List<novel_models.Scene> scenesToDisplay,
   ) {
     if (chapter.scenes.isEmpty) {
-      return const _LoadingScenesWidget();
+      return const _NoScenesWidget();
     }
 
     if (scenesToDisplay.isEmpty && searchText.isNotEmpty) {
@@ -572,14 +603,31 @@ class _ChapterDirectoryTabState extends State<ChapterDirectoryTab>
 
       // Listen for novel structure updates from the EventBus
       _novelStructureUpdatedSubscription = EventBus.instance.on<NovelStructureUpdatedEvent>().listen((event) {
-        if (mounted && event.novelId == widget.novel.id) {
-          AppLogger.i('ChapterDirectoryTab', 
-            'Received NovelStructureUpdatedEvent for current novel (ID: ${widget.novel.id}, Type: ${event.updateType}). Reloading sidebar structure.');
-          // To avoid potential race conditions or build errors if SidebarBloc is already processing,
-          // add a small delay or check its state before adding the event.
-          // For simplicity now, just add the event.
-          sidebarBloc.add(LoadNovelStructure(widget.novel.id));
+        if (!mounted || event.novelId != widget.novel.id) return;
+
+        // 仅在初始化阶段用全量加载；其余使用增量更新，避免重复全量请求
+        if (event.updateType == 'CHAPTER_ADDED') {
+          sidebarBloc.add(ApplyIncrementalStructureUpdate(
+            novelId: widget.novel.id,
+            actId: event.data['actId']?.toString(),
+            chapterId: event.data['chapterId']?.toString(),
+            chapterTitle: 'AI生成章节',
+          ));
+          return;
         }
+        if (event.updateType == 'SCENE_ADDED') {
+          sidebarBloc.add(ApplyIncrementalStructureUpdate(
+            novelId: widget.novel.id,
+            chapterId: event.data['chapterId']?.toString(),
+            sceneId: event.data['sceneId']?.toString(),
+          ));
+          return;
+        }
+
+        // 其他类型保留原逻辑（如遇到需要可再细化）
+        AppLogger.i('ChapterDirectoryTab', 
+          'Received NovelStructureUpdatedEvent: ${event.updateType}, using full reload as fallback');
+        sidebarBloc.add(LoadNovelStructure(widget.novel.id));
       });
       
       // 使用日志记录当前状态

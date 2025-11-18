@@ -2,6 +2,10 @@ package com.ainovel.server.config;
 
 import com.ainovel.server.task.dto.continuecontent.ContinueWritingContentParameters;
 import com.ainovel.server.task.dto.continuecontent.GenerateSingleChapterParameters;
+import com.ainovel.server.task.dto.knowledge.KnowledgeExtractionParameters;
+import com.ainovel.server.task.dto.knowledge.KnowledgeExtractionResult;
+import com.ainovel.server.task.dto.knowledge.KnowledgeExtractionGroupParameters;
+import com.ainovel.server.task.dto.knowledge.KnowledgeExtractionGroupResult;
 import com.ainovel.server.task.dto.scenegeneration.GenerateSceneParameters;
 import com.ainovel.server.task.dto.scenegeneration.GenerateSceneResult;
 import com.ainovel.server.task.dto.summarygeneration.GenerateSummaryParameters;
@@ -86,6 +90,20 @@ public class TaskConversionConfig {
         // parameterTypeMap.put("GENERATE_CHAPTER_CONTENT", GenerateChapterContentParameters.class);
         // resultTypeMap.put("GENERATE_CHAPTER_CONTENT", GenerateChapterContentResult.class);
         
+        // 剧情推演单次子任务（参数以Map透传）
+        parameterTypeMap.put("STORY_PREDICTION_SINGLE", java.util.Map.class);
+
+        // ✅ 知识提取任务（拆书功能）
+        parameterTypeMap.put("KNOWLEDGE_EXTRACTION_FANQIE", KnowledgeExtractionParameters.class);
+        resultTypeMap.put("KNOWLEDGE_EXTRACTION_FANQIE", KnowledgeExtractionResult.class);
+        
+        parameterTypeMap.put("KNOWLEDGE_EXTRACTION_TEXT", KnowledgeExtractionParameters.class);
+        resultTypeMap.put("KNOWLEDGE_EXTRACTION_TEXT", KnowledgeExtractionResult.class);
+        
+        // ✅ 知识提取组任务（子任务）
+        parameterTypeMap.put("KNOWLEDGE_EXTRACTION_GROUP", KnowledgeExtractionGroupParameters.class);
+        resultTypeMap.put("KNOWLEDGE_EXTRACTION_GROUP", KnowledgeExtractionGroupResult.class);
+
         // 确保添加了所有实际使用的任务类型的映射
         log.info("TaskConversionConfig 初始化完成，已注册参数类型映射: {}", parameterTypeMap.keySet());
         log.info("TaskConversionConfig 初始化完成，已注册结果类型映射: {}", resultTypeMap.keySet());

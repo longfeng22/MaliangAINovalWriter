@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../models/admin/admin_models.dart';
@@ -128,10 +131,7 @@ class UserManagementTable extends StatelessWidget {
                           color: isDark ? Colors.white70 : const Color(0xFF64748B),
                         ),
                         onPressed: () {
-                          // TODO: 实现导出功能
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('导出功能开发中...')),
-                          );
+                          _exportUserData(context);
                         },
                         tooltip: '导出数据',
                         visualDensity: VisualDensity.compact,
@@ -1015,6 +1015,20 @@ class UserManagementTable extends StatelessWidget {
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             itemBuilder: (context) => [
               PopupMenuItem(
+                value: 'bump_token_version',
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.no_accounts,
+                      size: 18,
+                      color: isDark ? Colors.white70 : const Color(0xFF64748B),
+                    ),
+                    const SizedBox(width: 12),
+                    const Text('强制下线(版本+1)'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
                 value: 'toggle_status',
                 child: Row(
                   children: [
@@ -1165,6 +1179,9 @@ class UserManagementTable extends StatelessWidget {
 
   void _handleMenuAction(BuildContext context, AdminUser user, String action) {
     switch (action) {
+      case 'bump_token_version':
+        _bumpTokenVersion(context, user);
+        break;
       case 'toggle_status':
         final newStatus = user.accountStatus == 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
         context.read<AdminBloc>().add(UpdateUserStatus(
@@ -1181,6 +1198,33 @@ class UserManagementTable extends StatelessWidget {
       case 'view_details':
         _showUserDetailsDialog(context, user);
         break;
+    }
+  }
+
+  void _bumpTokenVersion(BuildContext context, AdminUser user) async {
+    try {
+      // 直接调用已存在的AdminBloc或使用ApiClient; 这里走Bloc扩展事件更合适
+      context.read<AdminBloc>().add(BumpUserTokenVersion(userId: user.id));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.info, color: Colors.white),
+              const SizedBox(width: 8),
+              Text('已请求让 ${user.username} 下线 (tokenVersion+1)')
+            ],
+          ),
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('操作失败: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -1289,6 +1333,103 @@ class UserManagementTable extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// 导出用户数据
+  static void _exportUserData(BuildContext context) {
+    final table = context.findAncestorWidgetOfExactType<UserManagementTable>();
+    if (table == null) return;
+
+    try {
+      // 准备CSV数据
+      final csvData = _generateUserCSV(table.users);
+      
+      if (kIsWeb) {
+        // Web平台使用浏览器下载
+        _downloadCSVForWeb(csvData, 'user_data.csv');
+      } else {
+        // 移动端保存到本地
+        _saveCSVToDevice(context, csvData, 'user_data.csv');
+      }
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('用户数据导出成功！'),
+          backgroundColor: Color(0xFF10B981),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('导出失败：$e'),
+          backgroundColor: const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  /// 生成用户数据的CSV格式
+  static String _generateUserCSV(List<AdminUser> users) {
+    final buffer = StringBuffer();
+    
+    // CSV头部
+    buffer.writeln('ID,用户名,邮箱,角色,积分,状态,创建时间,最后登录');
+    
+    // 数据行
+    for (final user in users) {
+      final row = [
+        user.id,
+        user.username,
+        user.email,
+        (user.roles.isNotEmpty ? user.roles.join('|') : 'User'),
+        (user.credits).toString(),
+        user.accountStatus,
+        (user.createdAt?.toIso8601String() ?? ''),
+        (user.updatedAt?.toIso8601String() ?? ''),
+      ];
+      
+      // 转义包含逗号的字段
+      final escapedRow = row.map((field) {
+        final fieldStr = (field).toString();
+        if (fieldStr.contains(',') || fieldStr.contains('"') || fieldStr.contains('\n')) {
+          return '"${fieldStr.replaceAll('"', '""')}"';
+        }
+        return fieldStr;
+      }).join(',');
+      
+      buffer.writeln(escapedRow);
+    }
+    
+    return buffer.toString();
+  }
+
+  /// Web平台下载CSV
+  static void _downloadCSVForWeb(String csvData, String fileName) {
+    if (kIsWeb) {
+      
+      final bytes = utf8.encode(csvData);
+      final blob = html.Blob([bytes], 'text/csv');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      
+      final anchor = html.AnchorElement(href: url)
+        ..setAttribute('download', fileName)
+        ..style.display = 'none';
+      
+      html.document.body!.children.add(anchor);
+      anchor.click();
+      html.document.body!.children.remove(anchor);
+      
+      html.Url.revokeObjectUrl(url);
+    }
+  }
+
+  /// 移动端保存CSV到设备
+  static Future<void> _saveCSVToDevice(BuildContext context, String csvData, String fileName) async {
+    // 这里可以使用path_provider和其他移动端文件操作库
+    // 由于当前主要关注Web实现，这里简化处理
+    throw UnimplementedError('移动端文件保存功能尚未实现');
   }
 } 
 

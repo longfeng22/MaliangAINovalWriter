@@ -22,6 +22,7 @@ class GenerateSettingsRequested extends AISettingGenerationEvent {
   final List<String> settingTypes; // Values from SettingType enum
   final int maxSettingsPerType;
   final String additionalInstructions;
+  final String modelConfigId; // 模型配置ID
 
   const GenerateSettingsRequested({
     required this.novelId,
@@ -30,6 +31,7 @@ class GenerateSettingsRequested extends AISettingGenerationEvent {
     required this.settingTypes,
     required this.maxSettingsPerType,
     required this.additionalInstructions,
+    required this.modelConfigId,
   });
 
   @override
@@ -40,6 +42,7 @@ class GenerateSettingsRequested extends AISettingGenerationEvent {
         settingTypes,
         maxSettingsPerType,
         additionalInstructions,
+        modelConfigId,
       ];
 }
 

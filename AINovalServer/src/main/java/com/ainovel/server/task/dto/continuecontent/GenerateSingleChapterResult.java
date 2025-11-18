@@ -27,5 +27,16 @@ public class GenerateSingleChapterResult implements Serializable {
     private boolean contentGenerated;
     private boolean contentPersisted;
     private int chapterIndex;
+    
+    /**
+     * 生成摘要使用的模型名称
+     */
+    private String summaryModelName;
+    
+    /**
+     * 生成内容使用的模型名称
+     */
+    private String contentModelName;
+    
     // Optional: Add content snippet if needed, but might be large
 } 

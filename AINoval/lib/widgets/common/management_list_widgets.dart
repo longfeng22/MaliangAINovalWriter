@@ -92,23 +92,28 @@ class ManagementTypeChip extends StatelessWidget {
     final isDark = WebTheme.isDarkMode(context);
     Color backgroundColor;
     Color textColor;
+    String displayText;
 
     switch (type) {
       case 'System':
         backgroundColor = isDark ? const Color(0xFF2C3E50) : const Color(0xFFE3F2FD);
         textColor = isDark ? const Color(0xFF74B9FF) : const Color(0xFF1565C0);
+        displayText = '系统';
         break;
       case 'Public':
         backgroundColor = isDark ? const Color(0xFF2D5016) : const Color(0xFFE8F5E8);
         textColor = isDark ? const Color(0xFF81C784) : const Color(0xFF2E7D32);
+        displayText = '公开';
         break;
       case 'Custom':
         backgroundColor = isDark ? const Color(0xFF4A2C2A) : const Color(0xFFF3E5F5);
         textColor = isDark ? const Color(0xFFBA68C8) : const Color(0xFF7B1FA2);
+        displayText = '自定义';
         break;
       default:
         backgroundColor = isDark ? WebTheme.darkGrey200 : WebTheme.grey100;
         textColor = WebTheme.getSecondaryTextColor(context);
+        displayText = type;
     }
 
     return Container(
@@ -118,7 +123,7 @@ class ManagementTypeChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(3),
       ),
       child: Text(
-        type,
+        displayText,
         style: WebTheme.labelSmall.copyWith(
           fontSize: 9,
           fontWeight: FontWeight.w500,

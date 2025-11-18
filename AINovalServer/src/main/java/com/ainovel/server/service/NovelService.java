@@ -9,7 +9,6 @@ import com.ainovel.server.domain.model.Novel.Act;
 import com.ainovel.server.domain.model.Novel.Chapter;
 import com.ainovel.server.domain.model.NovelSceneContent;
 import com.ainovel.server.domain.model.Scene;
-import com.ainovel.server.domain.model.Setting;
 import com.ainovel.server.web.dto.CreatedChapterInfo;
 import com.ainovel.server.web.dto.NovelWithScenesDto;
 import com.ainovel.server.web.dto.NovelWithSummariesDto;
@@ -152,13 +151,6 @@ public interface NovelService {
      */
     Flux<Character> getNovelCharacters(String novelId);
 
-    /**
-     * 获取小说的所有设定
-     *
-     * @param novelId 小说ID
-     * @return 设定列表
-     */
-    Flux<Setting> getNovelSettings(String novelId);
 
     /**
      * 更新小说最后编辑的章节
@@ -385,6 +377,27 @@ public interface NovelService {
      */
     Mono<Map<String, Object>> addChapterWithScene(String novelId, String actId, 
             String chapterTitle, String sceneTitle, String sceneSummary, String sceneContent);
+
+    /**
+     * 原子化添加章节和场景，并插入到指定章节之后
+     *
+     * @param novelId             小说ID
+     * @param actId               卷ID（用于限定插入位置所属卷）
+     * @param insertAfterChapterId 要插入在其后的章节ID（同一卷内）。若为空或未找到，则追加到卷末尾
+     * @param chapterTitle        新章节标题
+     * @param sceneTitle          新场景标题
+     * @param sceneSummary        新场景摘要
+     * @param sceneContent        新场景内容
+     * @return 包含新创建章节和场景信息的Map
+     */
+    Mono<Map<String, Object>> addChapterWithSceneAt(
+            String novelId,
+            String actId,
+            String insertAfterChapterId,
+            String chapterTitle,
+            String sceneTitle,
+            String sceneSummary,
+            String sceneContent);
 
     /**
      * 细粒度删除卷 - 只提供ID，不传整个结构

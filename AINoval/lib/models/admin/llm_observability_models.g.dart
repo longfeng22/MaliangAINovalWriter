@@ -17,6 +17,7 @@ LLMTrace _$LLMTraceFromJson(Map<String, dynamic> json) => $checkedCreate(
           model: $checkedConvert('model', (v) => v as String),
           userId: $checkedConvert('userId', (v) => v as String?),
           sessionId: $checkedConvert('sessionId', (v) => v as String?),
+          businessType: $checkedConvert('businessType', (v) => v as String?),
           timestamp: $checkedConvert(
               'createdAt', (v) => const TimestampConverter().fromJson(v)),
           request: $checkedConvert(
@@ -72,6 +73,7 @@ Map<String, dynamic> _$LLMTraceToJson(LLMTrace instance) {
 
   writeNotNull('userId', instance.userId);
   writeNotNull('sessionId', instance.sessionId);
+  writeNotNull('businessType', instance.businessType);
   writeNotNull(
       'createdAt', const TimestampConverter().toJson(instance.timestamp));
   val['request'] = instance.request.toJson();

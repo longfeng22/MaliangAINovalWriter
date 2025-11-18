@@ -91,6 +91,7 @@ class _ChatInputState extends State<ChatInput> {
   Future<void> _loadPresets() async {
     if (_isLoadingPresets) return;
     
+    if (!mounted) return;
     setState(() {
       _isLoadingPresets = true;
     });
@@ -101,6 +102,7 @@ class _ChatInputState extends State<ChatInput> {
       // 直接获取AI_CHAT类型的预设
       final chatPresets = await presetService.getUserPresets(featureType: 'AI_CHAT');
       
+      if (!mounted) return;
       setState(() {
         _availablePresets = chatPresets;
         _isLoadingPresets = false;
@@ -108,6 +110,7 @@ class _ChatInputState extends State<ChatInput> {
       
       AppLogger.i('ChatInput', '加载了 ${_availablePresets.length} 个聊天预设');
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoadingPresets = false;
       });

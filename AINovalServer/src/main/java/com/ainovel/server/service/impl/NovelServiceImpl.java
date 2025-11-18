@@ -28,7 +28,6 @@ import com.ainovel.server.domain.model.Novel.Act;
 import com.ainovel.server.domain.model.Novel.Chapter;
 import com.ainovel.server.domain.model.Novel.Structure;
 import com.ainovel.server.domain.model.Scene;
-import com.ainovel.server.domain.model.Setting;
 import com.ainovel.server.repository.NovelRepository;
 import com.ainovel.server.repository.SceneRepository;
 import com.ainovel.server.service.NovelService;
@@ -363,12 +362,6 @@ public class NovelServiceImpl implements NovelService {
         return Flux.empty();
     }
 
-    @Override
-    public Flux<Setting> getNovelSettings(String novelId) {
-        // 暂时返回空结果，后续实现
-        log.info("获取小说设定列表: {}", novelId);
-        return Flux.empty();
-    }
 
     @Override
     public Mono<Novel> updateLastEditedChapter(String novelId, String chapterId) {
@@ -939,16 +932,16 @@ public class NovelServiceImpl implements NovelService {
         return novelRepository.findById(novelId)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException("小说", novelId)))
                 .flatMap(novel -> {
-                    // 获取所有章节ID
-                    List<String> allChapterIds = new ArrayList<>();
+                    // 获取所有章节，建立章节ID到Chapter对象的映射
+                    Map<String, Novel.Chapter> chapterMap = new HashMap<>();
                     for (Novel.Act act : novel.getStructure().getActs()) {
                         for (Novel.Chapter chapter : act.getChapters()) {
-                            allChapterIds.add(chapter.getId());
+                            chapterMap.put(chapter.getId(), chapter);
                         }
                     }
 
                     // 如果没有章节，直接返回只有小说信息的DTO
-                    if (allChapterIds.isEmpty()) {
+                    if (chapterMap.isEmpty()) {
                         return Mono.just(NovelWithSummariesDto.builder()
                                 .novel(novel)
                                 .sceneSummariesByChapter(new HashMap<>())
@@ -976,6 +969,34 @@ public class NovelServiceImpl implements NovelService {
                                 // 按章节ID分组
                                 Map<String, List<SceneSummaryDto>> summariesByChapter = summaries.stream()
                                         .collect(Collectors.groupingBy(SceneSummaryDto::getChapterId));
+
+                                // ✅ 新旧版本兼容：为没有Scene的章节使用Chapter.description作为fallback
+                                for (Map.Entry<String, Novel.Chapter> entry : chapterMap.entrySet()) {
+                                    String chapterId = entry.getKey();
+                                    Novel.Chapter chapter = entry.getValue();
+                                    
+                                    // 如果该章节没有Scene，或者Scene的summary为空
+                                    List<SceneSummaryDto> chapterScenes = summariesByChapter.get(chapterId);
+                                    boolean needsFallback = chapterScenes == null || chapterScenes.isEmpty() ||
+                                            chapterScenes.stream().allMatch(s -> s.getSummary() == null || s.getSummary().isEmpty());
+                                    
+                                    if (needsFallback && chapter.getDescription() != null && !chapter.getDescription().isEmpty()) {
+                                        // 使用Chapter.description创建一个虚拟的SceneSummaryDto
+                                        SceneSummaryDto fallbackSummary = SceneSummaryDto.builder()
+                                                .id("fallback_" + chapterId) // 虚拟ID，标记为fallback
+                                                .novelId(novelId)
+                                                .chapterId(chapterId)
+                                                .title(chapter.getTitle())
+                                                .summary(chapter.getDescription()) // ✅ 使用Chapter.description
+                                                .sequence(1)
+                                                .wordCount(0)
+                                                .updatedAt(novel.getUpdatedAt())
+                                                .build();
+                                        
+                                        summariesByChapter.put(chapterId, List.of(fallbackSummary));
+                                        log.debug("章节 {} 使用Chapter.description作为摘要fallback", chapter.getTitle());
+                                    }
+                                }
 
                                 // 构建并返回DTO
                                 return NovelWithSummariesDto.builder()
@@ -1599,8 +1620,20 @@ public class NovelServiceImpl implements NovelService {
                     String finalContent;
                     int wordCount;
                     if (sceneContent != null && !sceneContent.trim().isEmpty()) {
-                        finalContent = sceneContent;
-                        wordCount = sceneContent.length();
+                        // 🔥 关键修复：检查content是否已经是Quill Delta JSON格式
+                        if (com.ainovel.server.common.util.RichTextUtil.isQuillDeltaJson(sceneContent)) {
+                            // 已经是Quill格式，直接使用
+                            finalContent = sceneContent;
+                            log.debug("addChapterWithScene: 场景内容已经是Quill Delta JSON格式，直接使用");
+                        } else {
+                            // 纯文本格式，需要转换为Quill格式
+                            finalContent = com.ainovel.server.common.util.RichTextUtil.plainTextToDeltaJson(sceneContent);
+                            log.info("addChapterWithScene: 场景内容是纯文本，已转换为Quill Delta JSON格式。原始长度: {}, 转换后长度: {}", 
+                                    sceneContent.length(), finalContent.length());
+                        }
+                        // 计算实际的纯文本字数（不包括JSON格式字符）
+                        String plainText = com.ainovel.server.common.util.RichTextUtil.deltaJsonToPlainText(finalContent);
+                        wordCount = plainText.length();
                     } else {
                         finalContent = "[{\"insert\":\"\\n\"}]"; // 标准空Quill格式
                         wordCount = 0;
@@ -1648,6 +1681,116 @@ public class NovelServiceImpl implements NovelService {
                         novelId, result.get("chapterId"), result.get("sceneId")))
                 .doOnError(e -> log.error("原子化创建章节和场景失败: novelId={}, actId={}, error={}", 
                         novelId, actId, e.getMessage()));
+    }
+
+    @Override
+    @Transactional
+    public Mono<Map<String, Object>> addChapterWithSceneAt(
+            String novelId,
+            String actId,
+            String insertAfterChapterId,
+            String chapterTitle,
+            String sceneTitle,
+            String sceneSummary,
+            String sceneContent) {
+        return novelRepository.findById(novelId)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException("小说", novelId)))
+                .flatMap(novel -> {
+                    Structure structure = novel.getStructure();
+                    if (structure == null || structure.getActs() == null) {
+                        return Mono.error(new ResourceNotFoundException("小说结构不存在", novelId));
+                    }
+
+                    Act targetAct = null;
+                    for (Act act : structure.getActs()) {
+                        if (act.getId().equals(actId)) {
+                            targetAct = act;
+                            break;
+                        }
+                    }
+                    if (targetAct == null) {
+                        return Mono.error(new ResourceNotFoundException("卷", actId));
+                    }
+                    if (targetAct.getChapters() == null) {
+                        targetAct.setChapters(new ArrayList<>());
+                    }
+
+                    // 计算插入位置：默认末尾；若提供了 insertAfterChapterId 且存在，则插入在其后
+                    int insertIndex = targetAct.getChapters().size();
+                    if (insertAfterChapterId != null && !insertAfterChapterId.isBlank()) {
+                        for (int i = 0; i < targetAct.getChapters().size(); i++) {
+                            if (insertAfterChapterId.equals(targetAct.getChapters().get(i).getId())) {
+                                insertIndex = Math.min(i + 1, targetAct.getChapters().size());
+                                break;
+                            }
+                        }
+                    }
+
+                    // 创建新章节
+                    String chapterId = UUID.randomUUID().toString();
+                    Chapter newChapter = Chapter.builder()
+                            .id(chapterId)
+                            .title(chapterTitle)
+                            .sceneIds(new ArrayList<>())
+                            .build();
+                    targetAct.getChapters().add(insertIndex, newChapter);
+
+                    // 创建新场景
+                    String sceneId = UUID.randomUUID().toString();
+                    String finalContent;
+                    int wordCount;
+                    if (sceneContent != null && !sceneContent.trim().isEmpty()) {
+                        // 🔥 关键修复：检查content是否已经是Quill Delta JSON格式
+                        if (com.ainovel.server.common.util.RichTextUtil.isQuillDeltaJson(sceneContent)) {
+                            // 已经是Quill格式，直接使用
+                            finalContent = sceneContent;
+                            log.debug("addChapterWithSceneAt: 场景内容已经是Quill Delta JSON格式，直接使用");
+                        } else {
+                            // 纯文本格式，需要转换为Quill格式
+                            finalContent = com.ainovel.server.common.util.RichTextUtil.plainTextToDeltaJson(sceneContent);
+                            log.info("addChapterWithSceneAt: 场景内容是纯文本，已转换为Quill Delta JSON格式。原始长度: {}, 转换后长度: {}", 
+                                    sceneContent.length(), finalContent.length());
+                        }
+                        // 计算实际的纯文本字数（不包括JSON格式字符）
+                        String plainText = com.ainovel.server.common.util.RichTextUtil.deltaJsonToPlainText(finalContent);
+                        wordCount = plainText.length();
+                    } else {
+                        finalContent = "[{\"insert\":\"\\n\"}]";
+                        wordCount = 0;
+                    }
+
+                    Scene newScene = Scene.builder()
+                            .id(sceneId)
+                            .novelId(novelId)
+                            .chapterId(chapterId)
+                            .title(sceneTitle)
+                            .content(finalContent)
+                            .summary(sceneSummary != null ? sceneSummary : "")
+                            .wordCount(wordCount)
+                            .sequence(1)
+                            .version(1)
+                            .createdAt(LocalDateTime.now())
+                            .updatedAt(LocalDateTime.now())
+                            .build();
+                    newChapter.getSceneIds().add(sceneId);
+
+                    novel.setUpdatedAt(LocalDateTime.now());
+
+                    return novelRepository.save(novel)
+                            .then(sceneRepository.save(newScene))
+                            .then(Mono.fromCallable(() -> {
+                                Map<String, Object> result = new HashMap<>();
+                                result.put("chapterId", chapterId);
+                                result.put("chapter", newChapter);
+                                result.put("sceneId", sceneId);
+                                result.put("scene", newScene);
+                                return result;
+                            }));
+                })
+                .doOnSuccess(result -> log.info("成功原子化插入章节与场景: novelId={}, actId={}, afterChapterId={}, newChapterId={}, sceneId={}",
+                        novelId, actId, insertAfterChapterId, result.get("chapterId"), result.get("sceneId")))
+                .doOnError(e -> log.error("原子化插入章节与场景失败: novelId={}, actId={}, afterChapterId={}, error={}",
+                        novelId, actId, insertAfterChapterId, e.getMessage()));
     }
     
     @Override

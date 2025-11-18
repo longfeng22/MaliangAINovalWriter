@@ -1,7 +1,5 @@
 package com.ainovel.server.repository;
 
-import java.util.List;
-
 import org.springframework.data.mongodb.repository.ReactiveMongoRepository;
 import org.springframework.data.mongodb.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -115,4 +113,29 @@ public interface ModelPricingRepository extends ReactiveMongoRepository<ModelPri
      */
     @Query("{ 'active': true, 'maxContextTokens': { $gte: ?0, $lte: ?1 } }")
     Flux<ModelPricing> findByTokenRange(Integer minTokens, Integer maxTokens);
+    
+    /**
+     * 根据模型ID查找相同模型ID的所有定价信息（跨提供商）
+     * 
+     * @param modelId 模型ID
+     * @return 定价信息列表
+     */
+    Flux<ModelPricing> findByModelIdAndActiveTrue(String modelId);
+    
+    /**
+     * 根据模型名称查找定价信息
+     * 
+     * @param modelName 模型名称
+     * @return 定价信息列表
+     */
+    Flux<ModelPricing> findByModelNameAndActiveTrue(String modelName);
+    
+    /**
+     * 根据模型ID前缀查找定价信息
+     * 
+     * @param modelIdPrefix 模型ID前缀
+     * @return 定价信息列表
+     */
+    @Query("{ 'active': true, 'modelId': { $regex: '^?0', $options: 'i' } }")
+    Flux<ModelPricing> findByModelIdStartingWithIgnoreCase(String modelIdPrefix);
 }

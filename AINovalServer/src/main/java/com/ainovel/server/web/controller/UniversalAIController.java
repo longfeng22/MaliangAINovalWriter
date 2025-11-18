@@ -160,8 +160,11 @@ public class UniversalAIController {
                     logger.error("流式响应失败 - 类型: {}, 错误: {}",
                             request.getRequestType(), error.getMessage(), error);
                     try {
+                        // 将余额不足等计费错误显式映射为 PAYMENT_REQUIRED，前端可精准识别
+                        String code = (error.getMessage() != null && error.getMessage().contains("积分余额不足"))
+                                ? "PAYMENT_REQUIRED" : "INTERNAL_SERVER_ERROR";
                         String errJson = objectMapper.writeValueAsString(
-                                new com.ainovel.server.web.dto.ErrorResponse("INTERNAL_SERVER_ERROR", error.getMessage())
+                                new com.ainovel.server.web.dto.ErrorResponse(code, error.getMessage())
                         );
                         return Flux.just(
                                 ServerSentEvent.<String>builder()

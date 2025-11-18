@@ -36,6 +36,7 @@ import 'package:ainoval/models/unified_ai_model.dart';
 import 'package:ainoval/screens/editor/widgets/ai_generation_toolbar.dart';
 import 'package:ainoval/utils/ai_generated_content_processor.dart';
 import 'package:ainoval/screens/editor/components/expansion_dialog.dart';
+import 'package:ainoval/screens/editor/components/story_prediction_dialog.dart';
 import 'package:ainoval/components/editable_title.dart';
 import 'package:ainoval/screens/editor/widgets/menu_builder.dart';
 
@@ -84,6 +85,7 @@ enum EditorItemType {
   addChapterButton,
   addActButton,
   actFooter,
+  storyPredictionButton,
 }
 
 /// 编辑器项目数据类 (本地版本，兼容原有代码)
@@ -314,6 +316,8 @@ class EditorMainAreaState extends State<EditorMainArea> {
         return EditorItemType.addActButton;
       case anchor.EditorItemType.actFooter:
         return EditorItemType.actFooter;
+      case anchor.EditorItemType.storyPredictionButton:
+        return EditorItemType.storyPredictionButton;
     }
   }
 
@@ -546,6 +550,8 @@ class EditorMainAreaState extends State<EditorMainArea> {
         return _buildAddActButton(item);
       case EditorItemType.actFooter:
         return _buildActFooter(item);
+      case EditorItemType.storyPredictionButton:
+        return _buildStoryPredictionButton(item);
     }
   }
   
@@ -1083,6 +1089,47 @@ class EditorMainAreaState extends State<EditorMainArea> {
       ),
     );
   }
+  
+  /// 🚀 新增：构建剧情推演按钮（暂时隐藏）
+  Widget _buildStoryPredictionButton(EditorItem item) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: OutlinedButton.icon(
+          onPressed: () => _showStoryPredictionDialog(item.chapter!),
+          icon: Icon(
+            Icons.auto_stories,
+            size: 18,
+            color: WebTheme.isDarkMode(context) 
+              ? Colors.deepPurple[300] 
+              : Colors.deepPurple[700],
+          ),
+          label: Text(
+            '剧情推演',
+            style: TextStyle(
+              fontSize: 14,
+              color: WebTheme.isDarkMode(context) 
+                ? Colors.deepPurple[300] 
+                : Colors.deepPurple[700],
+            ),
+          ),
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            side: BorderSide(
+              color: WebTheme.isDarkMode(context) 
+                ? Colors.deepPurple[300]! 
+                : Colors.deepPurple[700]!,
+              width: 1.5,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+      ),
+    );
+    
+  }
 
   /// 🚀 新增：添加新场景
   void _addNewScene(String actId, String chapterId) {
@@ -1095,6 +1142,37 @@ class EditorMainAreaState extends State<EditorMainArea> {
       chapterId: chapterId,
       sceneId: newSceneId,
     ));
+  }
+  
+  /// 🚀 新增：显示剧情推演对话框
+  void _showStoryPredictionDialog(novel_models.Chapter chapter) {
+    AppLogger.i('EditorMainArea', '显示剧情推演对话框：chapterId=${chapter.id}');
+    
+    // 🚀 修复：使用新的便捷函数，传递完整的小说数据
+    showStoryPredictionDialog(
+      context,
+      novelId: widget.editorBloc.novelId,
+      chapter: chapter,
+      novel: _fullNovel,
+      settings: _settings,
+      settingGroups: _settingGroups,
+      snippets: _snippets,
+      onCancel: () {
+        AppLogger.i('EditorMainArea', '取消剧情推演');
+      },
+      onGenerate: (config) {
+        AppLogger.i('EditorMainArea', '开始生成剧情推演: $config');
+        Navigator.of(context).pop();
+        
+        // TODO: 处理剧情推演生成请求
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('剧情推演生成功能开发中...'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      },
+    );
   }
 
   /// 🚀 新增：添加新章节

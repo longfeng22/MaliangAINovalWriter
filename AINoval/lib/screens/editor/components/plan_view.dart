@@ -621,7 +621,7 @@ class _AddSceneButton extends StatelessWidget {
         ),
         onPressed: () {
           editorBloc.add(editor.AddNewScene(
-            novelId: '',
+            novelId: editorBloc.novelId,
             actId: actId,
             chapterId: chapterId,
             sceneId: 'scene_${DateTime.now().millisecondsSinceEpoch}',
@@ -661,7 +661,7 @@ class _AddChapterCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           onTap: () {
             editorBloc.add(editor.AddNewChapter(
-              novelId: '',
+              novelId: editorBloc.novelId,
               actId: actId,
             ));
           },

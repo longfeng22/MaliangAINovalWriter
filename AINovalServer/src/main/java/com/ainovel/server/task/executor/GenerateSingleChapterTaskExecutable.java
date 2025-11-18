@@ -314,6 +314,8 @@ public class GenerateSingleChapterTaskExecutable implements BackgroundTaskExecut
                 .totalChapters(currentParams.getTotalChapters())
                 .aiConfigIdSummary(currentParams.getAiConfigIdSummary())
                 .aiConfigIdContent(currentParams.getAiConfigIdContent())
+                .summaryPublicModelConfigId(currentParams.getSummaryPublicModelConfigId())
+                .contentPublicModelConfigId(currentParams.getContentPublicModelConfigId())
                 .currentContext(nextContext)
                 .writingStyle(currentParams.getWritingStyle())
                 .requiresReview(currentParams.isRequiresReview())

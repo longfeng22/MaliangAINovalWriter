@@ -12,6 +12,46 @@ class TaskEventCache {
 
   final StreamController<void> _updates = StreamController<void>.broadcast();
   Stream<void> get updates => _updates.stream;
+  
+  // 🔧 事件去重：记录最近处理的事件，防止重复处理
+  final Map<String, int> _recentEventHashes = <String, int>{};
+  static const int _dedupWindowMs = 2000; // 2秒内相同事件视为重复
+  
+  /// 生成事件指纹
+  String _generateEventHash(String type, String taskId, int? ts) {
+    // 使用type+taskId+时间戳的组合作为指纹
+    // 时间戳向下取整到秒，避免毫秒级差异
+    final tsSecond = ts != null ? (ts / 1000).floor() : 0;
+    return '$type:$taskId:$tsSecond';
+  }
+  
+  /// 检查事件是否为重复事件
+  bool _isDuplicateEvent(String type, String taskId, int? ts) {
+    final hash = _generateEventHash(type, taskId, ts);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final lastProcessTime = _recentEventHashes[hash];
+    
+    if (lastProcessTime != null && (now - lastProcessTime) < _dedupWindowMs) {
+      return true; // 重复事件
+    }
+    
+    // 记录处理时间
+    _recentEventHashes[hash] = now;
+    
+    // 清理过期记录（保持Map大小可控）
+    if (_recentEventHashes.length > 500) {
+      _cleanupExpiredDedup(now);
+    }
+    
+    return false;
+  }
+  
+  /// 清理过期的去重记录
+  void _cleanupExpiredDedup(int now) {
+    _recentEventHashes.removeWhere((key, value) => 
+      (now - value) > _dedupWindowMs * 5 // 保留5倍窗口期
+    );
+  }
 
   /// 供 UI 初始化时获取当前聚合快照
   TaskEventSnapshot getSnapshot() {
@@ -27,6 +67,15 @@ class TaskEventCache {
     for (final task in historyTasks) {
       final String taskId = (task['taskId'] ?? '').toString();
       if (taskId.isEmpty) continue;
+      
+      // 排除拆书任务类型
+      final taskType = (task['taskType'] ?? '').toString();
+      const bookExtractionTypes = [
+        'KNOWLEDGE_EXTRACTION_FANQIE', 
+        'KNOWLEDGE_EXTRACTION_TEXT', 
+        'KNOWLEDGE_EXTRACTION_GROUP'
+      ];
+      if (bookExtractionTypes.contains(taskType)) continue;
       
       final String? parentId = (task['parentTaskId'])?.toString();
       
@@ -56,6 +105,22 @@ class TaskEventCache {
     if (type == 'HEARTBEAT') return;
     final String taskId = (ev['taskId'] ?? '').toString();
     if (taskId.isEmpty) return;
+
+    // 排除拆书任务类型（不缓存）
+    final taskType = (ev['taskType'] ?? '').toString();
+    const bookExtractionTypes = [
+      'KNOWLEDGE_EXTRACTION_FANQIE', 
+      'KNOWLEDGE_EXTRACTION_TEXT', 
+      'KNOWLEDGE_EXTRACTION_GROUP'
+    ];
+    if (bookExtractionTypes.contains(taskType)) return;
+    
+    // 🔧 事件去重：检查是否为重复事件
+    final int? eventTs = ev['ts'] as int?;
+    if (_isDuplicateEvent(type, taskId, eventTs)) {
+      // print('[TaskEventCache] 跳过重复事件: type=$type taskId=$taskId');
+      return;
+    }
 
     final String? parentId = (ev['parentTaskId'] ?? ev['parentId'])?.toString();
     final int nowTs = DateTime.now().millisecondsSinceEpoch;

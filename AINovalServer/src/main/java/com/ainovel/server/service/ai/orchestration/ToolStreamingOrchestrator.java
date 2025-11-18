@@ -92,6 +92,8 @@ public class ToolStreamingOrchestrator {
         }
         config.put("toolContextId", contextId);
         config.putIfAbsent("requestType", "TOOL_ORCHESTRATION");
+        // 🚀 特殊标记：工具编排链路不计费
+        config.put(com.ainovel.server.service.billing.BillingKeys.SKIP_BILLING_FOR_TOOL_ORCHESTRATION, "true");
 
         // 工具编排阶段：不做扣费标记注入（仅透传公共模型ID用于日志观测，真正扣费在文本流阶段完成）
         try {

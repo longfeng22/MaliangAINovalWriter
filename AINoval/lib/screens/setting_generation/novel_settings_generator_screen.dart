@@ -22,6 +22,8 @@ import 'package:ainoval/widgets/common/top_toast.dart';
 import 'package:ainoval/blocs/ai_config/ai_config_bloc.dart';
 import 'package:ainoval/models/compose_preview.dart';
 import 'package:ainoval/utils/web_theme.dart';
+// 📚 知识库集成
+import 'package:ainoval/models/knowledge_base_integration_mode.dart';
 
 /// 小说设定生成器主屏幕
 class NovelSettingsGeneratorScreen extends StatefulWidget {
@@ -31,6 +33,11 @@ class NovelSettingsGeneratorScreen extends StatefulWidget {
   final String? selectedStrategy; // 预选择的策略
   final bool autoStart; // 是否自动开始生成
   final bool autoLoadFirstHistory; // 是否自动加载第一条历史记录
+  // 📚 知识库集成参数
+  final KnowledgeBaseIntegrationMode? initialKnowledgeBaseMode;
+  final List<SelectedKnowledgeBaseItem>? initialSelectedKnowledgeBases;
+  // 📚 混合模式专用：用于参考的知识库（用于区分复用和参考）
+  final List<SelectedKnowledgeBaseItem>? initialReferenceKnowledgeBases;
 
   const NovelSettingsGeneratorScreen({
     Key? key,
@@ -40,6 +47,9 @@ class NovelSettingsGeneratorScreen extends StatefulWidget {
     this.selectedStrategy,
     this.autoStart = false,
     this.autoLoadFirstHistory = false,
+    this.initialKnowledgeBaseMode,
+    this.initialSelectedKnowledgeBases,
+    this.initialReferenceKnowledgeBases,
   }) : super(key: key);
 
   @override
@@ -142,8 +152,12 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
     } catch (_) {}
     
     // 如果设置了自动开始或自动加载历史，这里直接触发
-    if (widget.autoStart == true && (widget.initialPrompt?.trim().isNotEmpty ?? false)) {
-      // 保持中间为“设定”面板，仅后台自动开始生成
+    // 📚 复用模式允许空提示词
+    final shouldAutoStart = widget.autoStart == true && 
+        ((widget.initialPrompt?.trim().isNotEmpty ?? false) || 
+         widget.initialKnowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse);
+    if (shouldAutoStart) {
+      // 保持中间为"设定"面板，仅后台自动开始生成
       _autoStartGeneration();
     }
     if (widget.autoLoadFirstHistory == true) {
@@ -199,9 +213,13 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
         if (currentState is SettingGenerationReady ||
             currentState is SettingGenerationInProgress ||
             currentState is SettingGenerationCompleted) {
-          // 使用自身 widget 参数
-          if (widget.initialPrompt == null || widget.initialPrompt!.trim().isEmpty) return;
-          final initialPrompt = widget.initialPrompt!.trim();
+          // 📚 复用模式允许空提示词
+          final isReuseMode = widget.initialKnowledgeBaseMode == KnowledgeBaseIntegrationMode.reuse;
+          final hasPrompt = widget.initialPrompt != null && widget.initialPrompt!.trim().isNotEmpty;
+          
+          if (!isReuseMode && !hasPrompt) return; // 非复用模式需要提示词
+          
+          final initialPrompt = widget.initialPrompt?.trim() ?? '';
 
           final strategies = currentState is SettingGenerationReady
               ? currentState.strategies
@@ -254,6 +272,58 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
             final String? publicProvider = usePublic ? selected.provider : null;
             final String? publicModelId = usePublic ? selected.modelId : null;
 
+            // 📚 构建知识库参数
+            final knowledgeBaseMode = widget.initialKnowledgeBaseMode?.name.toUpperCase();
+            List<String>? knowledgeBaseIds;
+            List<String>? reuseKnowledgeBaseIds;
+            List<String>? referenceKnowledgeBaseIds;
+            Map<String, List<String>>? knowledgeBaseCategories;
+            
+            // 📚 混合模式：分别处理复用和参考列表
+            if (widget.initialKnowledgeBaseMode == KnowledgeBaseIntegrationMode.hybrid) {
+              if (widget.initialSelectedKnowledgeBases != null && 
+                  widget.initialSelectedKnowledgeBases!.isNotEmpty) {
+                reuseKnowledgeBaseIds = widget.initialSelectedKnowledgeBases!
+                    .map((item) => item.knowledgeBaseId)
+                    .toList();
+              }
+              
+              if (widget.initialReferenceKnowledgeBases != null && 
+                  widget.initialReferenceKnowledgeBases!.isNotEmpty) {
+                referenceKnowledgeBaseIds = widget.initialReferenceKnowledgeBases!
+                    .map((item) => item.knowledgeBaseId)
+                    .toList();
+              }
+              
+              // 合并分类
+              knowledgeBaseCategories = {};
+              if (widget.initialSelectedKnowledgeBases != null) {
+                for (var item in widget.initialSelectedKnowledgeBases!) {
+                  knowledgeBaseCategories[item.knowledgeBaseId] = 
+                      item.selectedCategories.map((cat) => cat.value).toList();
+                }
+              }
+              if (widget.initialReferenceKnowledgeBases != null) {
+                for (var item in widget.initialReferenceKnowledgeBases!) {
+                  knowledgeBaseCategories[item.knowledgeBaseId] = 
+                      item.selectedCategories.map((cat) => cat.value).toList();
+                }
+              }
+            } else {
+              // 📚 复用或仿写模式：使用通用的knowledgeBaseIds
+              knowledgeBaseIds = widget.initialSelectedKnowledgeBases
+                  ?.map((item) => item.knowledgeBaseId)
+                  .toList();
+              knowledgeBaseCategories = widget.initialSelectedKnowledgeBases != null
+                  ? Map<String, List<String>>.fromEntries(
+                      widget.initialSelectedKnowledgeBases!.map((item) => MapEntry(
+                        item.knowledgeBaseId,
+                        item.selectedCategories.map((cat) => cat.value).toList(),
+                      )),
+                    )
+                  : null;
+            }
+
             bloc.add(
               StartGenerationEvent(
                 initialPrompt: initialPrompt,
@@ -264,6 +334,16 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
                 usePublicTextModel: usePublic,
                 textPhasePublicProvider: publicProvider,
                 textPhasePublicModelId: publicModelId,
+                // 📚 知识库集成参数
+                knowledgeBaseMode: knowledgeBaseMode,
+                knowledgeBaseIds: knowledgeBaseIds,
+                knowledgeBaseCategories: knowledgeBaseCategories,
+                // 📚 混合模式专用参数
+                reuseKnowledgeBaseIds: reuseKnowledgeBaseIds,
+                referenceKnowledgeBaseIds: referenceKnowledgeBaseIds,
+                // 🔧 结构化输出循环模式参数（默认启用）
+                useStructuredOutput: true,
+                structuredIterations: 3,
               ),
             );
           } else {
@@ -738,6 +818,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
             } else if (s is SettingGenerationCompleted) {
               sid = s.activeSessionId;
             }
+            
             showGoldenThreeChaptersDialog(
               context,
               novel: null,
@@ -748,7 +829,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
               settingSessionId: sid,
               onStarted: () => setState(() {
                 _mainSection = 'results';
-                // 🔧 关键：显式标记“黄金三章生成中”，并清空就绪标志
+                // 🔧 关键：显式标记"黄金三章生成中"，并清空就绪标志
                 _composeGenerating = true;
                 _composeReady = null;
               }),
@@ -920,17 +1001,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
           label,
           style: const TextStyle(fontSize: 14),
         ),
-        style: ElevatedButton.styleFrom(
-          padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 8),
-          backgroundColor: enabled 
-              ? WebTheme.getPrimaryColor(context)
-              : WebTheme.getSecondaryTextColor(context),
-          foregroundColor: enabled 
-              ? Colors.white 
-              : WebTheme.getSecondaryTextColor(context),
-          elevation: 0,
-          shape: const RoundedRectangleBorder(),
-        ),
+        style: WebTheme.getPrimaryButtonStyle(context),
       );
     }
     
@@ -941,19 +1012,7 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
         label,
         style: const TextStyle(fontSize: 14),
       ),
-      style: OutlinedButton.styleFrom(
-        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 8),
-        foregroundColor: enabled 
-            ? WebTheme.getTextColor(context)
-            : WebTheme.getSecondaryTextColor(context),
-        side: BorderSide(
-          color: enabled 
-              ? WebTheme.getBorderColor(context)
-              : WebTheme.getSecondaryBorderColor(context),
-          width: 1,
-        ),
-        shape: const RoundedRectangleBorder(),
-      ),
+      style: WebTheme.getSecondaryButtonStyle(context),
     );
   }
 
@@ -1033,6 +1092,10 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
             initialPrompt: widget.initialPrompt,
             selectedModel: widget.selectedModel,
             initialStrategy: widget.selectedStrategy,
+            // 📚 传递知识库参数
+            initialKnowledgeBaseMode: widget.initialKnowledgeBaseMode,
+            initialSelectedKnowledgeBases: widget.initialSelectedKnowledgeBases,
+            initialReferenceKnowledgeBases: widget.initialReferenceKnowledgeBases,
             onGenerationStart: (prompt, strategy, modelConfigId) {
               setState(() {
                 _lastInitialPrompt = prompt;
@@ -1116,6 +1179,10 @@ class _NovelSettingsGeneratorScreenState extends State<NovelSettingsGeneratorScr
               initialPrompt: widget.initialPrompt,
               selectedModel: widget.selectedModel,
               initialStrategy: widget.selectedStrategy,
+              // 📚 传递知识库参数
+              initialKnowledgeBaseMode: widget.initialKnowledgeBaseMode,
+              initialSelectedKnowledgeBases: widget.initialSelectedKnowledgeBases,
+              initialReferenceKnowledgeBases: widget.initialReferenceKnowledgeBases,
               onGenerationStart: (prompt, strategy, modelConfigId) {
                 setState(() {
                   _lastInitialPrompt = prompt;

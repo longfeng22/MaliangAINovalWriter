@@ -1,6 +1,7 @@
 package com.ainovel.server.service;
 
 import java.util.List;
+import java.util.Date;
 
 import com.ainovel.server.domain.model.User;
 
@@ -74,4 +75,21 @@ public interface JwtService {
      * @return 是否过期
      */
     boolean isTokenExpired(String token);
+
+    /**
+     * 提取令牌的过期时间
+     * @param token JWT令牌
+     * @return 过期时间（Date）
+     */
+    Date extractExpiration(String token);
+
+    /**
+     * 提取JWT的唯一ID (jti)
+     */
+    String extractJti(String token);
+
+    /**
+     * 提取令牌中的tokenVersion（用户级版本号）
+     */
+    Integer extractTokenVersion(String token);
 } 

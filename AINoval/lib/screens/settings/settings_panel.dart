@@ -129,8 +129,15 @@ class _SettingsPanelState extends State<SettingsPanel> {
       borderRadius: BorderRadius.circular(16.0),
       color: Colors.transparent, // Make Material transparent
       child: Container(
-        width: 1440, // 增加宽度从800到960
-        height: 1080, // 增加高度从600到700
+        // 自适应：根据可用空间限制最大宽高，且在小屏下铺满
+        constraints: const BoxConstraints(
+          maxWidth: 1400,
+          maxHeight: 1000,
+          minWidth: 320,
+          minHeight: 400,
+        ),
+        width: MediaQuery.of(context).size.width.clamp(320, 1400),
+        height: MediaQuery.of(context).size.height.clamp(400, 1000),
         decoration: BoxDecoration(
           color: isDark
               ? theme.colorScheme.surface.withAlpha(217) // 0.85 opacity
@@ -158,7 +165,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
           children: [
             // Left Navigation Rail
             Container(
-              width: 200,
+              width: (MediaQuery.of(context).size.width <= 640)
+                  ? 140
+                  : (MediaQuery.of(context).size.width <= 1024 ? 180 : 220),
               padding: const EdgeInsets.symmetric(vertical: 16.0),
               decoration: BoxDecoration(
                 color: isDark
@@ -277,6 +286,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
                     children: [
                       // Listener for Feedback Toasts
                       BlocListener<AiConfigBloc, AiConfigState>(
+                        listenWhen: (previous, current) =>
+                            previous.actionStatus != current.actionStatus,
                         listener: (context, state) {
                           if (!mounted) return;
 
@@ -298,8 +309,12 @@ class _SettingsPanelState extends State<SettingsPanel> {
                           }
                         },
                         child: Padding(
-                          padding:
-                              const EdgeInsets.fromLTRB(32.0, 48.0, 32.0, 32.0),
+                          padding: EdgeInsets.fromLTRB(
+                            MediaQuery.of(context).size.width <= 480 ? 16.0 : 24.0,
+                            MediaQuery.of(context).size.width <= 480 ? 24.0 : 40.0,
+                            MediaQuery.of(context).size.width <= 480 ? 16.0 : 24.0,
+                            MediaQuery.of(context).size.width <= 480 ? 16.0 : 24.0,
+                          ),
                           child: AnimatedSwitcher(
                             duration: const Duration(milliseconds: 400),
                             switchInCurve: Curves.easeOutQuint,
@@ -384,29 +399,34 @@ class _SettingsPanelState extends State<SettingsPanel> {
       case '账户管理':
         return AccountManagementPanel(key: key);
       case '会员与订阅':
-        return SizedBox(
+        return LayoutBuilder(
           key: const ValueKey('membership_panel'),
-          child: const Padding(
-            padding: EdgeInsets.all(8.0),
-            child: SizedBox(
-              width: 820,
-              child: Card(
-                child: Padding(
-                  padding: EdgeInsets.all(12.0),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('会员计划', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                        SizedBox(height: 12),
-                        membership.MembershipPanel(),
-                      ],
+          builder: (context, constraints) {
+            final double horizontalPadding = constraints.maxWidth <= 480 ? 8 : 16;
+            final double cardPadding = constraints.maxWidth <= 480 ? 8 : 12;
+            final double titleSize = constraints.maxWidth <= 480 ? 18 : 20;
+            return SingleChildScrollView(
+              padding: EdgeInsets.all(horizontalPadding),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1000),
+                  child: Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(cardPadding),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('会员计划', style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 12),
+                          const membership.MembershipPanel(),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       case '编辑器设置':
         return EditorSettingsPanel(

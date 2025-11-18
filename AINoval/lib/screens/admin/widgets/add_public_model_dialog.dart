@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../../models/prompt_models.dart';
 import '../../../models/public_model_config.dart';
+import '../../../models/model_pricing.dart';
 import '../../../services/api_service/repositories/impl/admin_repository_impl.dart';
 import '../../../utils/logger.dart';
 import '../../../utils/web_theme.dart';
 import 'validation_results_dialog.dart';
+import 'pricing_info_dialog.dart';
 
 /// 添加公共模型对话框 - 直接配置表单
 class AddPublicModelDialog extends StatefulWidget {
@@ -151,6 +153,87 @@ class _AddPublicModelDialogState extends State<AddPublicModelDialog> {
     super.dispose();
   }
 
+  /// 检查定价信息
+  Future<void> _checkPricing() async {
+    if (_providerController.text.isEmpty || _modelIdController.text.isEmpty) {
+      _showSnackBar('请先填写提供商和模型ID', isError: true);
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final result = await _adminRepository.checkModelPricing(_providerController.text, _modelIdController.text);
+      
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => PricingInfoDialog(
+            provider: _providerController.text,
+            modelId: _modelIdController.text,
+            checkResult: result,
+            onPricingAdded: () {
+              _showSnackBar('定价信息添加成功！', isError: false);
+            },
+          ),
+        );
+      }
+    } catch (e) {
+      AppLogger.e(_tag, '检查定价失败', e);
+      _showSnackBar('检查定价失败: ${e.toString()}', isError: true);
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// 显示定价警告对话框
+  Future<bool> _showPricingWarningDialog() async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('缺少定价信息'),
+        content: const Text('该模型没有定价信息，这可能导致积分计算错误。是否继续创建？\n\n建议您先添加定价信息。'),
+        backgroundColor: WebTheme.getCardColor(context),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('继续创建'),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
+  /// 显示备选定价对话框
+  Future<bool> _showFallbackPricingDialog(PricingCheckResult result) async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('找到备选定价'),
+        content: Text('没有找到精确的定价信息，但找到了备选方案：\n\n${result.message}\n\n是否继续创建？系统将自动使用备选定价。'),
+        backgroundColor: WebTheme.getCardColor(context),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('使用备选定价'),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
   /// 保存配置
   Future<void> _saveConfig({required bool validate}) async {
     if (!_formKey.currentState!.validate()) {
@@ -177,6 +260,34 @@ class _AddPublicModelDialogState extends State<AddPublicModelDialog> {
     });
 
     try {
+      // 首先检查定价信息
+      PricingCheckResult? pricingCheck;
+      try {
+        pricingCheck = await _adminRepository.checkModelPricing(_providerController.text, _modelIdController.text);
+        
+        if (!pricingCheck.hasPricing) {
+          // 提示用户缺少定价信息
+          final shouldContinue = await _showPricingWarningDialog();
+          if (!shouldContinue) {
+            setState(() {
+              _isLoading = false;
+            });
+            return;
+          }
+        } else if (pricingCheck.status == 'fallback_available') {
+          // 有备选方案，询问用户
+          final shouldContinue = await _showFallbackPricingDialog(pricingCheck);
+          if (!shouldContinue) {
+            setState(() {
+              _isLoading = false;
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        AppLogger.w(_tag, '检查定价信息失败，继续创建', e);
+      }
+
       // 解析API Keys
       final apiKeyLines = _apiKeysController.text.split('\n').where((line) => line.trim().isNotEmpty).toList();
       final noteLines = _keyNotesController.text.split('\n');
@@ -512,6 +623,16 @@ class _AddPublicModelDialogState extends State<AddPublicModelDialog> {
                   ),
                 ),
                 const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  onPressed: _isLoading ? null : _checkPricing,
+                  icon: const Icon(Icons.attach_money, size: 16),
+                  label: const Text('检查定价'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.orange,
+                    side: const BorderSide(color: Colors.orange),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: _isLoading ? null : () => _saveConfig(validate: false),
                   style: ElevatedButton.styleFrom(
@@ -708,6 +829,14 @@ class _AddPublicModelDialogState extends State<AddPublicModelDialog> {
         return '设定编排（大纲/章节/组合）';
       case AIFeatureType.settingTreeGeneration:
         return '设定树生成';
+      case AIFeatureType.settingGenerationTool:
+        return '设定生成工具调用阶段';
+      case AIFeatureType.storyPlotContinuation:
+        return '故事剧情续写（总结当前剧情并生成下一个大纲）';
+      case AIFeatureType.knowledgeExtractionSetting:
+        return '知识库拆书 - 设定提取';
+      case AIFeatureType.knowledgeExtractionOutline:
+        return '知识库拆书 - 章节大纲生成';
     }
   }
 

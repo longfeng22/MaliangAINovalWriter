@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.http.codec.multipart.FilePart;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,7 +20,6 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.ainovel.server.common.security.CurrentUser;
 import com.ainovel.server.domain.model.Novel;
 import com.ainovel.server.domain.model.Scene;
 import com.ainovel.server.domain.model.Scene.HistoryEntry;
@@ -618,13 +618,13 @@ public class NovelController extends ReactiveBaseController {
     public Mono<ResponseEntity<JobIdResponse>> importNovel(
             @RequestPart("file") FilePart filePart,
             @RequestPart(value = "userId", required = false) String formUserId,
-            @CurrentUser String currentUserId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
 
         log.info("接收到小说导入请求: {}，大小: {}", filePart.filename(), filePart.headers().getContentLength());
 
         // 如果当前用户ID为空，尝试使用表单中的用户ID
         final String userIdFinal;
-        String userId = currentUserId;
+        String userId = currentUser != null ? currentUser.getId() : null;
         if (userId == null || userId.isEmpty()) {
             if (formUserId != null && !formUserId.isEmpty()) {
                 userId = formUserId;
@@ -708,12 +708,12 @@ public class NovelController extends ReactiveBaseController {
     public Mono<ResponseEntity<Map<String, String>>> uploadFileForPreview(
             @RequestPart("file") FilePart filePart,
             @RequestPart(value = "userId", required = false) String formUserId,
-            @CurrentUser String currentUserId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
 
         log.info("接收到小说预览上传请求: {}，大小: {}", filePart.filename(), filePart.headers().getContentLength());
 
         // 获取用户ID
-        String userId = currentUserId;
+        String userId = currentUser != null ? currentUser.getId() : null;
         if (userId == null || userId.isEmpty()) {
             if (formUserId != null && !formUserId.isEmpty()) {
                 userId = formUserId;
@@ -775,8 +775,9 @@ public class NovelController extends ReactiveBaseController {
     @PostMapping("/import/confirm")
     public Mono<ResponseEntity<JobIdResponse>> confirmAndStartImport(
             @RequestBody ImportConfirmRequest request,
-            @CurrentUser String currentUserId) {
+            @AuthenticationPrincipal com.ainovel.server.security.CurrentUser currentUser) {
 
+        String currentUserId = currentUser != null ? currentUser.getId() : null;
         log.info("接收到确认导入请求: 会话ID={}, 标题={}, 选中章节数={}, aiConfigId={}, enableAISummary={}, enableSmartContext={}, userId={}", 
                 request.getPreviewSessionId(), request.getFinalTitle(), 
                 request.getSelectedChapterIndexes() != null ? request.getSelectedChapterIndexes().size() : 0,
@@ -1283,6 +1284,7 @@ public class NovelController extends ReactiveBaseController {
     public Mono<Map<String, Object>> addChapterWithScene(@RequestBody Map<String, Object> requestData) {
         String novelId = (String) requestData.get("novelId");
         String actId = (String) requestData.get("actId");
+        String insertAfterChapterId = (String) requestData.get("insertAfterChapterId");
         String chapterTitle = (String) requestData.get("chapterTitle");
         String sceneTitle = (String) requestData.get("sceneTitle");
         String sceneSummary = (String) requestData.get("sceneSummary");
@@ -1300,10 +1302,14 @@ public class NovelController extends ReactiveBaseController {
             sceneTitle = "AI生成场景";
         }
         
-        log.info("原子化添加章节和场景: novelId={}, actId={}, chapterTitle={}, sceneTitle={}", 
-                novelId, actId, chapterTitle, sceneTitle);
+        log.info("原子化添加章节和场景: novelId={}, actId={}, afterChapterId={}, chapterTitle={}, sceneTitle={}", 
+                novelId, actId, insertAfterChapterId, chapterTitle, sceneTitle);
         
-        return novelService.addChapterWithScene(novelId, actId, chapterTitle, sceneTitle, sceneSummary, sceneContent)
+        Mono<Map<String, Object>> op = (insertAfterChapterId != null && !insertAfterChapterId.isBlank())
+                ? novelService.addChapterWithSceneAt(novelId, actId, insertAfterChapterId, chapterTitle, sceneTitle, sceneSummary, sceneContent)
+                : novelService.addChapterWithScene(novelId, actId, chapterTitle, sceneTitle, sceneSummary, sceneContent);
+
+        return op
                 .doOnSuccess(result -> log.info("原子化添加章节和场景成功: novelId={}, chapterId={}, sceneId={}", 
                         novelId, result.get("chapterId"), result.get("sceneId")))
                 .doOnError(e -> log.error("原子化添加章节和场景失败: novelId={}, actId={}, error={}", 

@@ -8,6 +8,7 @@ import 'package:ainoval/models/model_info.dart';
 import 'package:ainoval/models/user_ai_model_config_model.dart';
 import 'package:ainoval/services/api_service/base/api_exception.dart';
 import 'package:ainoval/services/auth_service.dart';
+import 'package:ainoval/services/api_service/base/sse_client.dart';
 import 'package:ainoval/utils/logger.dart';
 import 'package:dio/dio.dart';
 
@@ -15,8 +16,16 @@ import 'package:dio/dio.dart';
 ///
 /// 负责处理与后端API的基础通信，使用Dio包实现HTTP请求
 class ApiClient {
+  // 静态默认 AuthService，用于未显式注入的 ApiClient 实例
+  static AuthService? _defaultAuthService;
+
+  /// 注册一个全局默认的 AuthService，供未显式注入的 ApiClient 使用
+  static void registerDefaultAuthService(AuthService authService) {
+    _defaultAuthService = authService;
+  }
+
   ApiClient({Dio? dio, AuthService? authService}) {
-    _authService = authService;
+    _authService = authService ?? _defaultAuthService;
     _dio = dio ?? _createDio();
   }
   late final Dio _dio;
@@ -78,19 +87,39 @@ class ApiClient {
 
   /// 创建认证拦截器
   Interceptor _createAuthInterceptor() {
+    // 单飞刷新与冷却节流
+    // 单飞标志保留占位，后续可扩展为真正的队列/等待者机制
+    DateTime? lastRefreshAt;
+    final Duration cooldown = const Duration(seconds: 120);
+
     return InterceptorsWrapper(
-      onRequest: (options, handler) {
+      onRequest: (options, handler) async {
+        // 跳过不需要鉴权的请求或刷新接口本身
+        final path = options.path;
+        final isAuthRefresh = path.contains('/auth/refresh');
+        if (!isAuthRefresh) {
+          try {
+            // 仅在临期且不在冷却期时尝试单飞刷新
+            final token = AppConfig.authToken;
+            final now = DateTime.now();
+            final inCooldown = lastRefreshAt != null && now.difference(lastRefreshAt!) < cooldown;
+            if (!inCooldown && token != null && token.isNotEmpty && _authService != null) {
+              final ok = await _authService!.ensureAccessTokenFresh(minValidity: const Duration(seconds: 60));
+              if (ok) {
+                lastRefreshAt = DateTime.now();
+              }
+            }
+          } catch (_) {}
+        }
+
         final token = AppConfig.authToken;
         if (token != null) {
           options.headers['Authorization'] = 'Bearer $token';
         }
-        
-        // 添加用户ID头部（后端需要X-User-Id头部）
         final userId = AppConfig.userId;
         if (userId != null) {
           options.headers['X-User-Id'] = userId;
         }
-        
         return handler.next(options);
       },
     );
@@ -103,6 +132,12 @@ class ApiClient {
         // 检查是否为401未授权错误
         if (error.response?.statusCode == 401) {
           AppLogger.w('ApiClient', 'Token过期或无效，执行自动登出');
+          
+          // 先全局挂起并断开所有SSE，阻止插件侧自动重连风暴
+          try {
+            SseClient().suspendAll();
+            await SseClient().cancelAllConnections();
+          } catch (_) {}
           
           // 执行登出操作
           if (_authService != null) {
@@ -2445,7 +2480,7 @@ class ApiClient {
   
   /// 原子化添加章节和场景 - 在一个事务中同时创建章节和场景
   Future<Map<String, dynamic>> addChapterWithScene(String novelId, String actId, 
-      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent}) async {
+      String chapterTitle, String sceneTitle, {String? sceneSummary, String? sceneContent, String? insertAfterChapterId}) async {
     final data = {
       'novelId': novelId,
       'actId': actId,
@@ -2459,6 +2494,9 @@ class ApiClient {
     
     if (sceneContent != null) {
       data['sceneContent'] = sceneContent;
+    }
+    if (insertAfterChapterId != null) {
+      data['insertAfterChapterId'] = insertAfterChapterId;
     }
     
     return await post('/novels/add-chapter-with-scene', data: data);

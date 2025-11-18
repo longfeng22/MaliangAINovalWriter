@@ -280,14 +280,14 @@ class _ResultsPreviewPanelState extends State<ResultsPreviewPanel> with TickerPr
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: WebTheme.getPrimaryColor(context).withOpacity(0.1),
+        color: WebTheme.getTextColor(context).withOpacity(0.08),
       ),
       child: Text(
         title,
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w600,
-          color: WebTheme.getPrimaryColor(context),
+          color: WebTheme.getTextColor(context),
         ),
       ),
     );
@@ -299,6 +299,9 @@ class _ResultsPreviewPanelState extends State<ResultsPreviewPanel> with TickerPr
     required IconData icon,
   }) {
     final bool isSelected = index == _selectedTabIndex;
+    final Color textColor = WebTheme.getTextColor(context);
+    final Color bgColor = WebTheme.getBackgroundColor(context);
+    final Color selectedBg = textColor.withOpacity(0.12);
     
     return InkWell(
       onTap: () {
@@ -308,18 +311,14 @@ class _ResultsPreviewPanelState extends State<ResultsPreviewPanel> with TickerPr
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected 
-              ? WebTheme.getPrimaryColor(context)
-              : WebTheme.getBackgroundColor(context),
+          color: isSelected ? selectedBg : bgColor,
           border: Border.all(
-            color: isSelected 
-                ? WebTheme.getPrimaryColor(context)
-                : WebTheme.getBorderColor(context),
+            color: isSelected ? textColor : WebTheme.getBorderColor(context),
             width: 1,
           ),
           boxShadow: isSelected ? [
             BoxShadow(
-              color: WebTheme.getPrimaryColor(context).withOpacity(0.2),
+              color: textColor.withOpacity(0.15),
               blurRadius: 4,
               offset: const Offset(0, 2),
             ),
@@ -331,9 +330,7 @@ class _ResultsPreviewPanelState extends State<ResultsPreviewPanel> with TickerPr
             Icon(
               icon,
               size: 16,
-              color: isSelected 
-                  ? Colors.white 
-                  : WebTheme.getSecondaryTextColor(context),
+              color: isSelected ? textColor : WebTheme.getSecondaryTextColor(context),
             ),
             const SizedBox(width: 4),
             Text(
@@ -341,9 +338,7 @@ class _ResultsPreviewPanelState extends State<ResultsPreviewPanel> with TickerPr
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected 
-                    ? Colors.white 
-                    : WebTheme.getTextColor(context),
+                color: isSelected ? textColor : WebTheme.getTextColor(context),
               ),
             ),
           ],

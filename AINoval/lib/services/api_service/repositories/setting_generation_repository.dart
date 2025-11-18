@@ -17,6 +17,7 @@ abstract class SettingGenerationRepository {
 
   /// 启动设定生成
   Stream<SettingGenerationEvent> startGeneration({
+    required String sessionId,  // 🔧 前端生成的sessionId
     required String initialPrompt,
     required String promptTemplateId,
     String? novelId,
@@ -25,6 +26,16 @@ abstract class SettingGenerationRepository {
     bool? usePublicTextModel,
     String? textPhasePublicProvider,
     String? textPhasePublicModelId,
+    // 📚 知识库集成参数
+    String? knowledgeBaseMode,
+    List<String>? knowledgeBaseIds,
+    Map<String, List<String>>? knowledgeBaseCategories,
+    // 📚 混合模式专用参数
+    List<String>? reuseKnowledgeBaseIds,
+    List<String>? referenceKnowledgeBaseIds,
+    // 🔧 结构化输出循环模式参数
+    bool? useStructuredOutput,
+    int? structuredIterations,
   });
 
   /// 从小说设定创建编辑会话
@@ -66,6 +77,12 @@ abstract class SettingGenerationRepository {
     required String sessionId,
     required String nodeId,
     required String newContent,
+  });
+
+  /// 删除节点及其所有子节点
+  Future<Map<String, dynamic>> deleteNode({
+    required String sessionId,
+    required String nodeId,
   });
 
   /// 保存生成的设定
@@ -178,6 +195,7 @@ abstract class SettingGenerationRepository {
     required int expectedRootNodes,
     required int maxDepth,
     String? baseStrategyId,
+    bool? hidePrompts,
   });
 
   /// 基于现有策略创建新策略
@@ -222,6 +240,16 @@ abstract class SettingGenerationRepository {
 
   /// 删除策略
   Future<void> deleteStrategy({
+    required String strategyId,
+  });
+  
+  /// 点赞策略
+  Future<Map<String, dynamic>> likeStrategy({
+    required String strategyId,
+  });
+  
+  /// 收藏策略
+  Future<Map<String, dynamic>> favoriteStrategy({
     required String strategyId,
   });
 

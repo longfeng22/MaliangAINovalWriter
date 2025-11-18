@@ -34,7 +34,19 @@ enum AIFeatureType {
   novelCompose,
   
   /// 设定树生成功能
-  settingTreeGeneration
+  settingTreeGeneration,
+  
+  /// 设定生成工具调用阶段
+  settingGenerationTool,
+  
+  /// 故事剧情续写（总结当前剧情并生成下一个大纲）
+  storyPlotContinuation,
+  
+  /// 知识库拆书 - 设定提取
+  knowledgeExtractionSetting,
+  
+  /// 知识库拆书 - 章节大纲生成
+  knowledgeExtractionOutline
 }
 
 /// 提示词类型枚举
@@ -402,6 +414,8 @@ class PromptTemplate {
         return AIFeatureType.novelCompose;
       case 'SETTING_TREE_GENERATION':
         return AIFeatureType.settingTreeGeneration;
+      case 'STORY_PLOT_CONTINUATION':
+        return AIFeatureType.storyPlotContinuation;
       default:
         // 尝试直接匹配枚举的名称
         try {
@@ -439,6 +453,14 @@ class PromptTemplate {
         return 'NOVEL_COMPOSE';
       case AIFeatureType.settingTreeGeneration:
         return 'SETTING_TREE_GENERATION';
+      case AIFeatureType.settingGenerationTool:
+        return 'SETTING_GENERATION_TOOL';
+      case AIFeatureType.storyPlotContinuation:
+        return 'STORY_PLOT_CONTINUATION';
+      case AIFeatureType.knowledgeExtractionSetting:
+        return 'KNOWLEDGE_EXTRACTION_SETTING';
+      case AIFeatureType.knowledgeExtractionOutline:
+        return 'KNOWLEDGE_EXTRACTION_OUTLINE';
     }
   }
 }
@@ -495,6 +517,18 @@ class UserPromptTemplateDto {
       case 'SETTING_TREE_GENERATION':
         type = AIFeatureType.settingTreeGeneration;
         break;
+      case 'SETTING_GENERATION_TOOL':
+        type = AIFeatureType.settingGenerationTool;
+        break;
+      case 'STORY_PLOT_CONTINUATION':
+        type = AIFeatureType.storyPlotContinuation;
+        break;
+      case 'KNOWLEDGE_EXTRACTION_SETTING':
+        type = AIFeatureType.knowledgeExtractionSetting;
+        break;
+      case 'KNOWLEDGE_EXTRACTION_OUTLINE':
+        type = AIFeatureType.knowledgeExtractionOutline;
+        break;
       default:
         // 尝试直接匹配枚举的名称
         try {
@@ -549,6 +583,18 @@ class UserPromptTemplateDto {
         break;
       case AIFeatureType.settingTreeGeneration:
         featureTypeStr = 'SETTING_TREE_GENERATION';
+        break;
+      case AIFeatureType.settingGenerationTool:
+        featureTypeStr = 'SETTING_GENERATION_TOOL';
+        break;
+      case AIFeatureType.storyPlotContinuation:
+        featureTypeStr = 'STORY_PLOT_CONTINUATION';
+        break;
+      case AIFeatureType.knowledgeExtractionSetting:
+        featureTypeStr = 'KNOWLEDGE_EXTRACTION_SETTING';
+        break;
+      case AIFeatureType.knowledgeExtractionOutline:
+        featureTypeStr = 'KNOWLEDGE_EXTRACTION_OUTLINE';
         break;
     }
     
@@ -828,6 +874,9 @@ class UserPromptInfo {
   final DateTime createdAt;
   final DateTime? lastUsedAt;
   final DateTime updatedAt;
+  final String? reviewStatus; // 审核状态: DRAFT, PENDING, APPROVED, REJECTED
+  final bool hidePrompts; // 🆕 是否隐藏提示词（隐私保护）
+  final SettingGenerationConfig? settingGenerationConfig; // 🆕 设定生成配置（仅SETTING_TREE_GENERATION类型使用）
 
   const UserPromptInfo({
     required this.id,
@@ -852,6 +901,9 @@ class UserPromptInfo {
     required this.createdAt,
     this.lastUsedAt,
     required this.updatedAt,
+    this.reviewStatus,
+    this.hidePrompts = false, // 🆕 默认不隐藏
+    this.settingGenerationConfig, // 🆕 设定生成配置
   });
 
   factory UserPromptInfo.fromJson(Map<String, dynamic> json) {
@@ -887,6 +939,11 @@ class UserPromptInfo {
       updatedAt: json['updatedAt'] != null 
           ? parseBackendDateTime(json['updatedAt'])
           : DateTime.now(), // 提供默认值
+      reviewStatus: json['reviewStatus'] as String?,
+      hidePrompts: json['hidePrompts'] as bool? ?? false, // 🆕 解析hidePrompts字段
+      settingGenerationConfig: json['settingGenerationConfig'] != null
+          ? SettingGenerationConfig.fromJson(json['settingGenerationConfig'] as Map<String, dynamic>)
+          : null, // 🆕 解析设定生成配置
     );
   }
 
@@ -914,6 +971,9 @@ class UserPromptInfo {
       'createdAt': createdAt.toIso8601String(),
       'lastUsedAt': lastUsedAt?.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
+      'reviewStatus': reviewStatus,
+      'hidePrompts': hidePrompts,
+      'settingGenerationConfig': settingGenerationConfig?.toJson(),
     };
   }
 
@@ -941,6 +1001,9 @@ class UserPromptInfo {
     DateTime? createdAt,
     DateTime? lastUsedAt,
     DateTime? updatedAt,
+    String? reviewStatus,
+    bool? hidePrompts, // 🆕 添加hidePrompts参数
+    SettingGenerationConfig? settingGenerationConfig, // 🆕 添加settingGenerationConfig参数
   }) {
     return UserPromptInfo(
       id: id ?? this.id,
@@ -965,6 +1028,9 @@ class UserPromptInfo {
       createdAt: createdAt ?? this.createdAt,
       lastUsedAt: lastUsedAt ?? this.lastUsedAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      reviewStatus: reviewStatus ?? this.reviewStatus,
+      hidePrompts: hidePrompts ?? this.hidePrompts, // 🆕 支持hidePrompts字段
+      settingGenerationConfig: settingGenerationConfig ?? this.settingGenerationConfig, // 🆕 支持settingGenerationConfig字段
     );
   }
 }
@@ -990,6 +1056,8 @@ class PublicPromptInfo {
   final DateTime createdAt;
   final DateTime updatedAt;
   final DateTime? lastUsedAt;
+  final bool hidePrompts; // 🆕 是否隐藏提示词（隐私保护）
+  final SettingGenerationConfig? settingGenerationConfig; // 🆕 设定生成配置（仅SETTING_TREE_GENERATION类型使用）
 
   const PublicPromptInfo({
     required this.id,
@@ -1011,6 +1079,8 @@ class PublicPromptInfo {
     required this.createdAt,
     required this.updatedAt,
     this.lastUsedAt,
+    this.hidePrompts = false, // 🆕 是否隐藏提示词
+    this.settingGenerationConfig, // 🆕 设定生成配置
   });
 
   factory PublicPromptInfo.fromJson(Map<String, dynamic> json) {
@@ -1040,6 +1110,10 @@ class PublicPromptInfo {
       lastUsedAt: json['lastUsedAt'] != null 
           ? parseBackendDateTime(json['lastUsedAt'])
           : null,
+      hidePrompts: json['hidePrompts'] as bool? ?? false, // 🆕 解析hidePrompts字段
+      settingGenerationConfig: json['settingGenerationConfig'] != null
+          ? SettingGenerationConfig.fromJson(json['settingGenerationConfig'] as Map<String, dynamic>)
+          : null, // 🆕 解析设定生成配置
     );
   }
 
@@ -1064,6 +1138,8 @@ class PublicPromptInfo {
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
       'lastUsedAt': lastUsedAt?.toIso8601String(),
+      'hidePrompts': hidePrompts, // 🆕 序列化hidePrompts字段
+      'settingGenerationConfig': settingGenerationConfig?.toJson(), // 🆕 序列化设定生成配置
     };
   }
 }
@@ -1441,6 +1517,9 @@ class EnhancedUserPromptTemplate {
   final DateTime? reviewedAt;
   final String? reviewedBy;
   final String? reviewComment;
+  final String? reviewStatus; // 🆕 审核状态: DRAFT, PENDING, APPROVED, REJECTED
+  final bool hidePrompts; // 🆕 是否隐藏提示词（隐私保护）
+  final SettingGenerationConfig? settingGenerationConfig; // 🆕 设定生成配置（仅SETTING_TREE_GENERATION类型使用）
 
   const EnhancedUserPromptTemplate({
     required this.id,
@@ -1470,6 +1549,9 @@ class EnhancedUserPromptTemplate {
     this.reviewedAt,
     this.reviewedBy,
     this.reviewComment,
+    this.reviewStatus, // 🆕 审核状态
+    this.hidePrompts = false, // 🆕 是否隐藏提示词
+    this.settingGenerationConfig, // 🆕 设定生成配置
   });
 
   factory EnhancedUserPromptTemplate.fromJson(Map<String, dynamic> json) {
@@ -1512,6 +1594,11 @@ class EnhancedUserPromptTemplate {
           : null,
       reviewedBy: json['reviewedBy'] as String?,
       reviewComment: json['reviewComment'] as String?,
+      reviewStatus: json['reviewStatus'] as String?, // 🆕 解析reviewStatus字段
+      hidePrompts: json['hidePrompts'] as bool? ?? false, // 🆕 解析hidePrompts字段
+      settingGenerationConfig: json['settingGenerationConfig'] != null
+          ? SettingGenerationConfig.fromJson(json['settingGenerationConfig'] as Map<String, dynamic>)
+          : null, // 🆕 解析设定生成配置
     );
   }
 
@@ -1544,6 +1631,9 @@ class EnhancedUserPromptTemplate {
       'reviewedAt': reviewedAt?.toIso8601String(),
       'reviewedBy': reviewedBy,
       'reviewComment': reviewComment,
+      'reviewStatus': reviewStatus, // 🆕 序列化reviewStatus字段
+      'hidePrompts': hidePrompts, // 🆕 序列化hidePrompts字段
+      'settingGenerationConfig': settingGenerationConfig?.toJson(), // 🆕 序列化设定生成配置
     };
   }
 
@@ -1576,6 +1666,9 @@ class EnhancedUserPromptTemplate {
     DateTime? reviewedAt,
     String? reviewedBy,
     String? reviewComment,
+    String? reviewStatus, // 🆕 添加reviewStatus参数
+    bool? hidePrompts, // 🆕 添加hidePrompts参数
+    SettingGenerationConfig? settingGenerationConfig, // 🆕 添加settingGenerationConfig参数
   }) {
     return EnhancedUserPromptTemplate(
       id: id ?? this.id,
@@ -1605,6 +1698,9 @@ class EnhancedUserPromptTemplate {
       reviewedAt: reviewedAt ?? this.reviewedAt,
       reviewedBy: reviewedBy ?? this.reviewedBy,
       reviewComment: reviewComment ?? this.reviewComment,
+      reviewStatus: reviewStatus ?? this.reviewStatus, // 🆕 支持reviewStatus字段
+      hidePrompts: hidePrompts ?? this.hidePrompts, // 🆕 支持hidePrompts字段
+      settingGenerationConfig: settingGenerationConfig ?? this.settingGenerationConfig, // 🆕 支持settingGenerationConfig字段
     );
   }
 }
@@ -1714,6 +1810,14 @@ extension AIFeatureTypeExtension on AIFeatureType {
         return 'NOVEL_COMPOSE';
       case AIFeatureType.settingTreeGeneration:
         return 'SETTING_TREE_GENERATION';
+      case AIFeatureType.settingGenerationTool:
+        return 'SETTING_GENERATION_TOOL';
+      case AIFeatureType.storyPlotContinuation:
+        return 'STORY_PLOT_CONTINUATION';
+      case AIFeatureType.knowledgeExtractionSetting:
+        return 'KNOWLEDGE_EXTRACTION_SETTING';
+      case AIFeatureType.knowledgeExtractionOutline:
+        return 'KNOWLEDGE_EXTRACTION_OUTLINE';
     }
   }
 
@@ -1742,6 +1846,14 @@ extension AIFeatureTypeExtension on AIFeatureType {
         return '设定编排';
       case AIFeatureType.settingTreeGeneration:
         return '设定树生成';
+      case AIFeatureType.settingGenerationTool:
+        return '设定生成工具调用';
+      case AIFeatureType.storyPlotContinuation:
+        return '剧情续写';
+      case AIFeatureType.knowledgeExtractionSetting:
+        return '知识库拆书-设定';
+      case AIFeatureType.knowledgeExtractionOutline:
+        return '知识库拆书-大纲';
     }
   }
 
@@ -1770,6 +1882,14 @@ extension AIFeatureTypeExtension on AIFeatureType {
         return 'Novel Compose';
       case AIFeatureType.settingTreeGeneration:
         return 'Setting Tree Generation';
+      case AIFeatureType.settingGenerationTool:
+        return 'Setting Generation Tool';
+      case AIFeatureType.storyPlotContinuation:
+        return 'Story Plot Continuation';
+      case AIFeatureType.knowledgeExtractionSetting:
+        return 'Knowledge Extraction Setting';
+      case AIFeatureType.knowledgeExtractionOutline:
+        return 'Knowledge Extraction Outline';
     }
   }
 }
@@ -1801,6 +1921,14 @@ class AIFeatureTypeHelper {
         return AIFeatureType.novelCompose;
       case 'SETTING_TREE_GENERATION':
         return AIFeatureType.settingTreeGeneration;
+      case 'SETTING_GENERATION_TOOL':
+        return AIFeatureType.settingGenerationTool;
+      case 'STORY_PLOT_CONTINUATION':
+        return AIFeatureType.storyPlotContinuation;
+      case 'KNOWLEDGE_EXTRACTION_SETTING':
+        return AIFeatureType.knowledgeExtractionSetting;
+      case 'KNOWLEDGE_EXTRACTION_OUTLINE':
+        return AIFeatureType.knowledgeExtractionOutline;
       default:
         // 尝试直接匹配枚举的名称
         try {
@@ -1829,5 +1957,171 @@ class AIFeatureTypeHelper {
   /// 获取功能类型的API路径格式
   static String toPathString(AIFeatureType featureType) {
     return featureType.toString().split('.').last;
+  }
+}
+
+// ====================== 设定生成配置相关模型 ======================
+
+/// 设定生成配置
+/// 对应后端 SettingGenerationConfig
+class SettingGenerationConfig {
+  final String? strategyName;
+  final String? description;
+  final List<NodeTemplateConfig> nodeTemplates;
+  final GenerationRules? rules;
+  final int expectedRootNodes;
+  final int maxDepth;
+  final String? version;
+  final String? baseStrategyId;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+  final int usageCount;
+  final bool isSystemStrategy;
+
+  const SettingGenerationConfig({
+    this.strategyName,
+    this.description,
+    this.nodeTemplates = const [],
+    this.rules,
+    this.expectedRootNodes = -1,
+    this.maxDepth = 5,
+    this.version,
+    this.baseStrategyId,
+    this.createdAt,
+    this.updatedAt,
+    this.usageCount = 0,
+    this.isSystemStrategy = false,
+  });
+
+  factory SettingGenerationConfig.fromJson(Map<String, dynamic> json) {
+    return SettingGenerationConfig(
+      strategyName: json['strategyName'] as String?,
+      description: json['description'] as String?,
+      nodeTemplates: (json['nodeTemplates'] as List<dynamic>?)
+          ?.map((e) => NodeTemplateConfig.fromJson(e as Map<String, dynamic>))
+          .toList() ?? [],
+      rules: json['rules'] != null
+          ? GenerationRules.fromJson(json['rules'] as Map<String, dynamic>)
+          : null,
+      expectedRootNodes: (json['expectedRootNodes'] as num?)?.toInt() ?? -1,
+      maxDepth: (json['maxDepth'] as num?)?.toInt() ?? 5,
+      version: json['version'] as String?,
+      baseStrategyId: json['baseStrategyId'] as String?,
+      createdAt: json['createdAt'] != null
+          ? parseBackendDateTime(json['createdAt'])
+          : null,
+      updatedAt: json['updatedAt'] != null
+          ? parseBackendDateTime(json['updatedAt'])
+          : null,
+      usageCount: (json['usageCount'] as num?)?.toInt() ?? 0,
+      isSystemStrategy: json['isSystemStrategy'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'strategyName': strategyName,
+      'description': description,
+      'nodeTemplates': nodeTemplates.map((e) => e.toJson()).toList(),
+      'rules': rules?.toJson(),
+      'expectedRootNodes': expectedRootNodes,
+      'maxDepth': maxDepth,
+      'version': version,
+      'baseStrategyId': baseStrategyId,
+      'createdAt': createdAt?.toIso8601String(),
+      'updatedAt': updatedAt?.toIso8601String(),
+      'usageCount': usageCount,
+      'isSystemStrategy': isSystemStrategy,
+    };
+  }
+}
+
+/// 节点模板配置
+class NodeTemplateConfig {
+  final String nodeType;
+  final String? displayName;
+  final String? description;
+  final int priority;
+  final int minCount;
+  final int maxCount;
+  final List<String> allowedParentTypes;
+  final List<String> allowedChildTypes;
+
+  const NodeTemplateConfig({
+    required this.nodeType,
+    this.displayName,
+    this.description,
+    this.priority = 0,
+    this.minCount = 0,
+    this.maxCount = -1,
+    this.allowedParentTypes = const [],
+    this.allowedChildTypes = const [],
+  });
+
+  factory NodeTemplateConfig.fromJson(Map<String, dynamic> json) {
+    return NodeTemplateConfig(
+      nodeType: json['nodeType'] as String,
+      displayName: json['displayName'] as String?,
+      description: json['description'] as String?,
+      priority: (json['priority'] as num?)?.toInt() ?? 0,
+      minCount: (json['minCount'] as num?)?.toInt() ?? 0,
+      maxCount: (json['maxCount'] as num?)?.toInt() ?? -1,
+      allowedParentTypes: (json['allowedParentTypes'] as List<dynamic>?)?.cast<String>() ?? [],
+      allowedChildTypes: (json['allowedChildTypes'] as List<dynamic>?)?.cast<String>() ?? [],
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'nodeType': nodeType,
+      'displayName': displayName,
+      'description': description,
+      'priority': priority,
+      'minCount': minCount,
+      'maxCount': maxCount,
+      'allowedParentTypes': allowedParentTypes,
+      'allowedChildTypes': allowedChildTypes,
+    };
+  }
+}
+
+/// 生成规则配置
+class GenerationRules {
+  final int preferredBatchSize;
+  final int maxBatchSize;
+  final int minDescriptionLength;
+  final int maxDescriptionLength;
+  final bool requireInterConnections;
+  final bool allowDynamicStructure;
+
+  const GenerationRules({
+    this.preferredBatchSize = 20,
+    this.maxBatchSize = 200,
+    this.minDescriptionLength = 50,
+    this.maxDescriptionLength = 500,
+    this.requireInterConnections = true,
+    this.allowDynamicStructure = true,
+  });
+
+  factory GenerationRules.fromJson(Map<String, dynamic> json) {
+    return GenerationRules(
+      preferredBatchSize: (json['preferredBatchSize'] as num?)?.toInt() ?? 20,
+      maxBatchSize: (json['maxBatchSize'] as num?)?.toInt() ?? 200,
+      minDescriptionLength: (json['minDescriptionLength'] as num?)?.toInt() ?? 50,
+      maxDescriptionLength: (json['maxDescriptionLength'] as num?)?.toInt() ?? 500,
+      requireInterConnections: json['requireInterConnections'] as bool? ?? true,
+      allowDynamicStructure: json['allowDynamicStructure'] as bool? ?? true,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'preferredBatchSize': preferredBatchSize,
+      'maxBatchSize': maxBatchSize,
+      'minDescriptionLength': minDescriptionLength,
+      'maxDescriptionLength': maxDescriptionLength,
+      'requireInterConnections': requireInterConnections,
+      'allowDynamicStructure': allowDynamicStructure,
+    };
   }
 } 

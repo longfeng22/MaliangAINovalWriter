@@ -573,16 +573,19 @@ class _AIGenerationPanelState extends State<AIGenerationPanel> with AIDialogComm
               }
             },
             builder: (context, universalAIState) {
-              return Column(
-                children: [
-                  // 面板标题栏
-                  _buildHeader(context, editorState),
+              return SafeArea(
+                bottom: true,
+                child: Column(
+                  children: [
+                    // 面板标题栏
+                    _buildHeader(context, editorState),
 
-                  // 面板内容
-                  Expanded(
-                    child: _buildSceneGenerationPanel(context, editorState),
-                  ),
-                ],
+                    // 面板内容
+                    Expanded(
+                      child: _buildSceneGenerationPanel(context, editorState),
+                    ),
+                  ],
+                ),
               );
             },
           );
@@ -686,30 +689,20 @@ class _AIGenerationPanelState extends State<AIGenerationPanel> with AIDialogComm
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    '1. 填写场景摘要/大纲描述想要生成的内容',
-                                    style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context)),
-                                  ),
-                                  SizedBox(height: 6),
-                                  Text(
-                                    '2. 选择AI模型和配置参数',
-                                    style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context)),
-                                  ),
-                                  SizedBox(height: 6),
-                                  Text(
-                                    '3. 可选择启用智能上下文获取相关设定',
-                                    style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context)),
-                                  ),
-                                  SizedBox(height: 6),
-                                  Text(
-                                    '4. 点击"生成场景"按钮开始生成',
-                                    style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context)),
-                                  ),
-                                  SizedBox(height: 6),
-                                  Text(
-                                    '5. 生成完成后，可以编辑内容并添加为新场景',
-                                    style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context)),
-                                  ),
+                                  Text('1. 在上方填写摘要/大纲，并选择AI模型与智能上下文。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                  const SizedBox(height: 6),
+                                  Text('2. 可填写“风格指令”（如：多对话、悬疑风格）。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                  const SizedBox(height: 6),
+                                  Text('3. 需要时选择“目标章节”，有助于上下文更准确。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                  const SizedBox(height: 6),
+                                  Text('4. 点击“生成场景”，可实时查看生成过程。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                  const SizedBox(height: 6),
+                                  Text('5. 生成后可复制、重新生成，或直接“添加为新场景”。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                  const SizedBox(height: 10),
+                                  Text('小技巧：', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: WebTheme.getTextColor(context))),
+                                  const SizedBox(height: 4),
+                                  Text('· 小屏支持滚动查看完整表单与按钮。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
+                                  Text('· 可通过“关联提示词模板”提升生成质量。', style: TextStyle(fontSize: 12, color: WebTheme.getTextColor(context))),
                                 ],
                               ),
                             ),
@@ -774,238 +767,253 @@ class _AIGenerationPanelState extends State<AIGenerationPanel> with AIDialogComm
   /// 构建场景生成面板
   Widget _buildSceneGenerationPanel(BuildContext context, EditorLoaded state) {
     final hasGenerated = _generatedContentController.text.isNotEmpty;
+    final mq = MediaQuery.of(context);
+    final bool isSmallScreen = mq.size.width < 1200 || mq.size.height < 800;
+    final double outerPadding = isSmallScreen ? 8.0 : 10.0;
 
     return Padding(
-      padding: const EdgeInsets.all(10.0),
+      padding: EdgeInsets.all(outerPadding),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 模型配置区域
-          _buildModelConfigSection(context, state),
-          
-          const SizedBox(height: 10),
-          
-          // 摘要文本输入
-          const Text(
-            '场景摘要/大纲',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Container(
-            decoration: BoxDecoration(
-              color: WebTheme.getCardColor(context),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: WebTheme.getSecondaryBorderColor(context),
-                width: 1,
-              ),
-            ),
-            child: TextField(
-              controller: _summaryController,
-              maxLines: 4,
-              decoration: InputDecoration(
-                hintText: '请输入场景大纲或摘要，AI将根据此内容生成完整场景',
-                hintStyle: TextStyle(fontSize: 12, color: WebTheme.getSecondaryTextColor(context)),
-                contentPadding: const EdgeInsets.all(12),
-                border: InputBorder.none,
-                suffixIcon: _summaryController.text.isNotEmpty 
-                    ? IconButton(
-                        icon: Icon(
-                          Icons.clear,
-                          size: 16,
-                          color: WebTheme.getSecondaryTextColor(context),
+          // 顶部区域：可滚动，适配小屏幕
+          Flexible(
+            child: Scrollbar(
+              thumbVisibility: MediaQuery.of(context).size.height < 800,
+              child: SingleChildScrollView(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 模型配置区域
+                    _buildModelConfigSection(context, state),
+                    const SizedBox(height: 10),
+                    // 摘要文本输入
+                    const Text(
+                      '场景摘要/大纲',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: WebTheme.getCardColor(context),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: WebTheme.getSecondaryBorderColor(context),
+                          width: 1,
                         ),
-                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                        padding: const EdgeInsets.all(4),
-                        onPressed: () {
-                          setState(() {
-                            _summaryController.clear();
-                          });
-                        },
-                      )
-                    : null,
-              ),
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.4,
-                color: WebTheme.getTextColor(context),
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-          ),
-          const SizedBox(height: 10),
-
-          // 风格指令输入
-          const Text(
-            '风格指令（可选）',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Container(
-            decoration: BoxDecoration(
-              color: WebTheme.getCardColor(context),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: WebTheme.getSecondaryBorderColor(context),
-                width: 1,
-              ),
-            ),
-            child: TextField(
-              controller: _styleController,
-              decoration: InputDecoration(
-                hintText: '例如：多对话，少描写，悬疑风格',
-                hintStyle: TextStyle(fontSize: 12, color: WebTheme.getSecondaryTextColor(context)),
-                contentPadding: const EdgeInsets.all(12),
-                border: InputBorder.none,
-                suffixIcon: _styleController.text.isNotEmpty 
-                    ? IconButton(
-                        icon: Icon(
-                          Icons.clear,
-                          size: 16, 
-                          color: WebTheme.getSecondaryTextColor(context),
+                      ),
+                      child: TextField(
+                        controller: _summaryController,
+                        maxLines: 4,
+                        decoration: InputDecoration(
+                          hintText: '请输入场景大纲或摘要，AI将根据此内容生成完整场景',
+                          hintStyle: TextStyle(fontSize: 12, color: WebTheme.getSecondaryTextColor(context)),
+                          contentPadding: const EdgeInsets.all(12),
+                          border: InputBorder.none,
+                          suffixIcon: _summaryController.text.isNotEmpty 
+                              ? IconButton(
+                                  icon: Icon(
+                                    Icons.clear,
+                                    size: 16,
+                                    color: WebTheme.getSecondaryTextColor(context),
+                                  ),
+                                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                  padding: const EdgeInsets.all(4),
+                                  onPressed: () {
+                                    setState(() {
+                                      _summaryController.clear();
+                                    });
+                                  },
+                                )
+                              : null,
                         ),
-                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                        padding: const EdgeInsets.all(4),
-                        onPressed: () {
-                          setState(() {
-                            _styleController.clear();
-                          });
-                        },
-                      )
-                    : null,
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.4,
+                          color: WebTheme.getTextColor(context),
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    // 风格指令输入
+                    const Text(
+                      '风格指令（可选）',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: WebTheme.getCardColor(context),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: WebTheme.getSecondaryBorderColor(context),
+                          width: 1,
+                        ),
+                      ),
+                      child: TextField(
+                        controller: _styleController,
+                        decoration: InputDecoration(
+                          hintText: '例如：多对话，少描写，悬疑风格',
+                          hintStyle: TextStyle(fontSize: 12, color: WebTheme.getSecondaryTextColor(context)),
+                          contentPadding: const EdgeInsets.all(12),
+                          border: InputBorder.none,
+                          suffixIcon: _styleController.text.isNotEmpty 
+                              ? IconButton(
+                                  icon: Icon(
+                                    Icons.clear,
+                                    size: 16, 
+                                    color: WebTheme.getSecondaryTextColor(context),
+                                  ),
+                                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                  padding: const EdgeInsets.all(4),
+                                  onPressed: () {
+                                    setState(() {
+                                      _styleController.clear();
+                                    });
+                                  },
+                                )
+                              : null,
+                        ),
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: WebTheme.getTextColor(context),
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    // 章节选择（可选）
+                    if (state.novel.acts.isNotEmpty) ...[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            '目标章节（可选）',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          if (state.activeChapterId != null)
+                            OutlinedButton.icon(
+                              onPressed: () {
+                                // 查找当前章节信息
+                                String chapterTitle = "";
+                                for (final act in state.novel.acts) {
+                                  for (final chapter in act.chapters) {
+                                    if (chapter.id == state.activeChapterId) {
+                                      chapterTitle = chapter.title;
+                                      break;
+                                    }
+                                  }
+                                  if (chapterTitle.isNotEmpty) break;
+                                }
+                                
+                                if (chapterTitle.isNotEmpty) {
+                                  // 添加章节相关信息到摘要
+                                  final currentText = _summaryController.text;
+                                  final chapterContext = "本场景为《$chapterTitle》章节的一部分，";
+                                  if (currentText.isNotEmpty) {
+                                    _summaryController.text = '$chapterContext$currentText';
+                                  } else {
+                                    _summaryController.text = chapterContext;
+                                  }
+                                }
+                              },
+                              icon: Icon(Icons.add_box_outlined, size: 14, color: WebTheme.getTextColor(context)),
+                              label: Text(
+                                '添加到摘要',
+                                style: TextStyle(fontSize: 11, color: WebTheme.getTextColor(context)),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(color: WebTheme.getSecondaryBorderColor(context), width: 1),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                minimumSize: const Size(0, 28),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: WebTheme.getCardColor(context),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: WebTheme.getSecondaryBorderColor(context),
+                            width: 1,
+                          ),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            isExpanded: true,
+                            value: state.activeChapterId,
+                            items: _buildChapterDropdownItems(state.novel),
+                            onChanged: (chapterId) {
+                              if (chapterId != null) {
+                                // 查找选中章节所属的Act
+                                String? actId;
+                                for (final act in state.novel.acts) {
+                                  for (final chapter in act.chapters) {
+                                    if (chapter.id == chapterId) {
+                                      actId = act.id;
+                                      break;
+                                    }
+                                  }
+                                  if (actId != null) break;
+                                }
+
+                                if (actId != null) {
+                                  // 更新活跃章节
+                                  context.read<EditorBloc>().add(SetActiveChapter(
+                                    actId: actId,
+                                    chapterId: chapterId,
+                                  ));
+                                }
+                              }
+                            },
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: WebTheme.getTextColor(context),
+                            ),
+                            hint: Text(
+                              '选择一个目标章节',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: WebTheme.getSecondaryTextColor(context),
+                              ),
+                            ),
+                            icon: Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              size: 16,
+                              color: WebTheme.getSecondaryTextColor(context),
+                            ),
+                            dropdownColor: WebTheme.getCardColor(context),
+                            menuMaxHeight: 240,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
-              style: TextStyle(
-                fontSize: 13,
-                color: WebTheme.getTextColor(context),
-              ),
-              onChanged: (_) => setState(() {}),
             ),
           ),
-          const SizedBox(height: 10),
 
-          // 章节选择（可选）
-          if (state.novel.acts.isNotEmpty) ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  '目标章节（可选）',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-                if (state.activeChapterId != null)
-                  OutlinedButton.icon(
-                    onPressed: () {
-                      // 查找当前章节信息
-                      String chapterTitle = "";
-                      for (final act in state.novel.acts) {
-                        for (final chapter in act.chapters) {
-                          if (chapter.id == state.activeChapterId) {
-                            chapterTitle = chapter.title;
-                            break;
-                          }
-                        }
-                        if (chapterTitle.isNotEmpty) break;
-                      }
-                      
-                      if (chapterTitle.isNotEmpty) {
-                        // 添加章节相关信息到摘要
-                        final currentText = _summaryController.text;
-                        final chapterContext = "本场景为《$chapterTitle》章节的一部分，";
-                        if (currentText.isNotEmpty) {
-                          _summaryController.text = '$chapterContext$currentText';
-                        } else {
-                          _summaryController.text = chapterContext;
-                        }
-                      }
-                    },
-                    icon: Icon(Icons.add_box_outlined, size: 14, color: WebTheme.getTextColor(context)),
-                    label: Text(
-                      '添加到摘要',
-                      style: TextStyle(fontSize: 11, color: WebTheme.getTextColor(context)),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: WebTheme.getSecondaryBorderColor(context), width: 1),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      minimumSize: const Size(0, 28),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Container(
-            decoration: BoxDecoration(
-              color: WebTheme.getCardColor(context),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                color: WebTheme.getSecondaryBorderColor(context),
-                  width: 1,
-                ),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  value: state.activeChapterId,
-                  items: _buildChapterDropdownItems(state.novel),
-                  onChanged: (chapterId) {
-                    if (chapterId != null) {
-                      // 查找选中章节所属的Act
-                      String? actId;
-                      for (final act in state.novel.acts) {
-                        for (final chapter in act.chapters) {
-                          if (chapter.id == chapterId) {
-                            actId = act.id;
-                            break;
-                          }
-                        }
-                        if (actId != null) break;
-                      }
+          const SizedBox(height: 8),
 
-                      if (actId != null) {
-                        // 更新活跃章节
-                        context.read<EditorBloc>().add(SetActiveChapter(
-                          actId: actId,
-                          chapterId: chapterId,
-                        ));
-                      }
-                    }
-                  },
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: WebTheme.getTextColor(context),
-                  ),
-                  hint: Text(
-                    '选择一个目标章节',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: WebTheme.getSecondaryTextColor(context),
-                    ),
-                  ),
-                  icon: Icon(
-                    Icons.keyboard_arrow_down_rounded,
-                    size: 16,
-                    color: WebTheme.getSecondaryTextColor(context),
-                  ),
-                  dropdownColor: WebTheme.getCardColor(context),
-                  menuMaxHeight: 240,
-                ),
-              ),
-            ),
-          ],
-
-                                  // 生成结果或操作区域
+          // 生成结果或操作区域（底部区域，按钮始终可触达）
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1068,10 +1076,6 @@ class _AIGenerationPanelState extends State<AIGenerationPanel> with AIDialogComm
                                 onPressed: () {
                                   // 将生成内容应用到编辑器
                                   if (state.activeActId != null && state.activeChapterId != null) {
-                                    // 获取布局管理器
-                                    // 最初用于触发布局刷新，当前未使用
-                                    // final layoutManager = Provider.of<EditorLayoutManager>(context, listen: false);
-                                    
                                     // 创建新场景并使用生成内容
                                     final sceneId = 'scene_${DateTime.now().millisecondsSinceEpoch}';
                                     
@@ -1124,11 +1128,12 @@ class _AIGenerationPanelState extends State<AIGenerationPanel> with AIDialogComm
                     child: _buildGenerationResultSection(context, state),
                   ),
                 ],
-                
+
                 const SizedBox(height: 12),
-                
+
                 // 生成按钮区域
                 _buildGenerationButtons(context, state),
+                const SizedBox(height: 4),
               ],
             ),
           ),

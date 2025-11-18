@@ -49,6 +49,11 @@ public class AdminDashboardController {
         private java.util.List<ChartData> userGrowthData;
         private java.util.List<ChartData> requestsData;
         private java.util.List<ActivityItem> recentActivities;
+        private java.util.List<ChartData> dailyLoginData; // 每日登录统计
+        private java.util.List<ChartData> dailyRegistrationData; // 每日注册统计
+        private java.util.List<UserNovelStats> userNovelStats; // 用户创作小说统计
+        private int newUsersToday; // 今日新注册用户数
+        private int loginsToday; // 今日登录用户数
         
         public DashboardStats() {}
         
@@ -56,7 +61,12 @@ public class AdminDashboardController {
                            int aiRequestsToday, double creditsConsumed,
                            java.util.List<ChartData> userGrowthData,
                            java.util.List<ChartData> requestsData,
-                           java.util.List<ActivityItem> recentActivities) {
+                           java.util.List<ActivityItem> recentActivities,
+                           java.util.List<ChartData> dailyLoginData,
+                           java.util.List<ChartData> dailyRegistrationData,
+                           java.util.List<UserNovelStats> userNovelStats,
+                           int newUsersToday,
+                           int loginsToday) {
             this.totalUsers = totalUsers;
             this.activeUsers = activeUsers;
             this.totalNovels = totalNovels;
@@ -65,6 +75,11 @@ public class AdminDashboardController {
             this.userGrowthData = userGrowthData;
             this.requestsData = requestsData;
             this.recentActivities = recentActivities;
+            this.dailyLoginData = dailyLoginData;
+            this.dailyRegistrationData = dailyRegistrationData;
+            this.userNovelStats = userNovelStats;
+            this.newUsersToday = newUsersToday;
+            this.loginsToday = loginsToday;
         }
         
         // Getters and setters
@@ -91,6 +106,21 @@ public class AdminDashboardController {
         
         public java.util.List<ActivityItem> getRecentActivities() { return recentActivities; }
         public void setRecentActivities(java.util.List<ActivityItem> recentActivities) { this.recentActivities = recentActivities; }
+        
+        public java.util.List<ChartData> getDailyLoginData() { return dailyLoginData; }
+        public void setDailyLoginData(java.util.List<ChartData> dailyLoginData) { this.dailyLoginData = dailyLoginData; }
+        
+        public java.util.List<ChartData> getDailyRegistrationData() { return dailyRegistrationData; }
+        public void setDailyRegistrationData(java.util.List<ChartData> dailyRegistrationData) { this.dailyRegistrationData = dailyRegistrationData; }
+        
+        public java.util.List<UserNovelStats> getUserNovelStats() { return userNovelStats; }
+        public void setUserNovelStats(java.util.List<UserNovelStats> userNovelStats) { this.userNovelStats = userNovelStats; }
+        
+        public int getNewUsersToday() { return newUsersToday; }
+        public void setNewUsersToday(int newUsersToday) { this.newUsersToday = newUsersToday; }
+        
+        public int getLoginsToday() { return loginsToday; }
+        public void setLoginsToday(int loginsToday) { this.loginsToday = loginsToday; }
     }
     
     /**
@@ -164,5 +194,42 @@ public class AdminDashboardController {
         
         public String getMetadata() { return metadata; }
         public void setMetadata(String metadata) { this.metadata = metadata; }
+    }
+    
+    /**
+     * 用户小说统计DTO
+     */
+    public static class UserNovelStats {
+        private String userId;
+        private String username;
+        private String displayName;
+        private int novelCount;
+        private java.time.LocalDateTime lastCreatedAt;
+        
+        public UserNovelStats() {}
+        
+        public UserNovelStats(String userId, String username, String displayName, 
+                             int novelCount, java.time.LocalDateTime lastCreatedAt) {
+            this.userId = userId;
+            this.username = username;
+            this.displayName = displayName;
+            this.novelCount = novelCount;
+            this.lastCreatedAt = lastCreatedAt;
+        }
+        
+        public String getUserId() { return userId; }
+        public void setUserId(String userId) { this.userId = userId; }
+        
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+        
+        public String getDisplayName() { return displayName; }
+        public void setDisplayName(String displayName) { this.displayName = displayName; }
+        
+        public int getNovelCount() { return novelCount; }
+        public void setNovelCount(int novelCount) { this.novelCount = novelCount; }
+        
+        public java.time.LocalDateTime getLastCreatedAt() { return lastCreatedAt; }
+        public void setLastCreatedAt(java.time.LocalDateTime lastCreatedAt) { this.lastCreatedAt = lastCreatedAt; }
     }
 }

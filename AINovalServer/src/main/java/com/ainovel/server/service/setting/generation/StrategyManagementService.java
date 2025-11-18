@@ -2,6 +2,7 @@ package com.ainovel.server.service.setting.generation;
 
 import com.ainovel.server.domain.model.AIFeatureType;
 import com.ainovel.server.domain.model.EnhancedUserPromptTemplate;
+import com.ainovel.server.domain.model.ReviewStatusConstants;
 import com.ainovel.server.domain.model.settinggeneration.ReviewStatus;
 import com.ainovel.server.domain.model.settinggeneration.SettingGenerationConfig;
 import com.ainovel.server.repository.EnhancedUserPromptTemplateRepository;
@@ -123,14 +124,17 @@ public class StrategyManagementService {
                     return Mono.error(new IllegalArgumentException("Template is not for setting generation"));
                 }
                 
-                ReviewStatus reviewStatus = template.getSettingGenerationConfig().getReviewStatus();
-                if (!"DRAFT".equals(reviewStatus.getStatus()) && !"REJECTED".equals(reviewStatus.getStatus())) {
+                // 🆕 使用顶层统一的审核状态
+                String currentStatus = template.getReviewStatus();
+                if (currentStatus != null && 
+                    !ReviewStatusConstants.DRAFT.equals(currentStatus) && 
+                    !ReviewStatusConstants.REJECTED.equals(currentStatus)) {
                     return Mono.error(new IllegalStateException("Strategy cannot be submitted for review in current state"));
                 }
                 
-                // 更新审核状态
-                reviewStatus.setStatus(ReviewStatus.Status.PENDING);
-                reviewStatus.setSubmittedAt(LocalDateTime.now());
+                // 更新审核状态（使用顶层字段）
+                template.setReviewStatus(ReviewStatusConstants.PENDING);
+                template.setSubmittedAt(LocalDateTime.now());
                 template.setUpdatedAt(LocalDateTime.now());
                 
                 return templateRepository.save(template)
@@ -153,28 +157,29 @@ public class StrategyManagementService {
                     return Mono.error(new IllegalArgumentException("Template is not for setting generation"));
                 }
                 
-                ReviewStatus reviewStatus = template.getSettingGenerationConfig().getReviewStatus();
-                if (!ReviewStatus.Status.PENDING.equals(reviewStatus.getStatus())) {
+                // 🆕 使用顶层统一的审核状态
+                if (!ReviewStatusConstants.PENDING.equals(template.getReviewStatus())) {
                     return Mono.error(new IllegalStateException("Strategy is not pending review"));
                 }
                 
-                // 更新审核状态
-                reviewStatus.setStatus(decision.getStatus());
-                reviewStatus.setReviewerId(reviewerId);
-                reviewStatus.setReviewComment(decision.getComment());
-                reviewStatus.setReviewedAt(LocalDateTime.now());
+                // 更新审核状态（使用顶层字段）
+                template.setReviewStatus(decision.getStatus().name());
+                template.setReviewerId(reviewerId);
+                template.setReviewComment(decision.getComment());
+                template.setReviewedAt(LocalDateTime.now());
                 
                 if (decision.getRejectionReasons() != null) {
-                    reviewStatus.setRejectionReasons(decision.getRejectionReasons());
+                    template.setRejectionReasons(decision.getRejectionReasons());
                 }
                 
                 if (decision.getImprovementSuggestions() != null) {
-                    reviewStatus.setImprovementSuggestions(decision.getImprovementSuggestions());
+                    template.setImprovementSuggestions(decision.getImprovementSuggestions());
                 }
                 
                 // 如果审核通过，设置为公开
                 if (ReviewStatus.Status.APPROVED.equals(decision.getStatus())) {
                     template.setIsPublic(true);
+                    template.setSharedAt(LocalDateTime.now());
                 }
                 
                 template.setUpdatedAt(LocalDateTime.now());
@@ -218,13 +223,111 @@ public class StrategyManagementService {
      */
     public Flux<EnhancedUserPromptTemplate> getPendingReviews(Pageable pageable) {
         return templateRepository.findByFeatureType(AIFeatureType.SETTING_TREE_GENERATION)
-            .filter(template -> {
-                SettingGenerationConfig config = template.getSettingGenerationConfig();
-                return config != null && 
-                       ReviewStatus.Status.PENDING.equals(config.getReviewStatus().getStatus());
-            })
+            .filter(template -> ReviewStatusConstants.PENDING.equals(template.getReviewStatus()))
             .skip(pageable.getOffset())
             .take(pageable.getPageSize());
+    }
+    
+    /**
+     * 通过策略名称查找模板ID
+     * 优先查找系统策略，如果找不到则返回错误
+     */
+    public Mono<String> findTemplateIdByStrategyName(String strategyName) {
+        log.debug("Finding template ID by strategy name: {}", strategyName);
+        
+        return templateRepository.findByUserId("system")
+            .filter(template -> template.getFeatureType() == AIFeatureType.SETTING_TREE_GENERATION)
+            .filter(template -> {
+                SettingGenerationConfig config = template.getSettingGenerationConfig();
+                return config != null && strategyName.equals(config.getStrategyName());
+            })
+            .next()
+            .map(EnhancedUserPromptTemplate::getId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Strategy not found: " + strategyName)))
+            .doOnSuccess(id -> log.debug("Found template ID {} for strategy: {}", id, strategyName));
+    }
+    
+    /**
+     * 更新用户策略
+     */
+    public Mono<EnhancedUserPromptTemplate> updateStrategy(String templateId, String userId, UpdateStrategyRequest request) {
+        log.info("Updating strategy: {} for user: {}", templateId, userId);
+        
+        return templateRepository.findByIdAndUserId(templateId, userId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Template not found or no permission")))
+            .flatMap(template -> {
+                if (!template.isSettingGenerationTemplate()) {
+                    return Mono.error(new IllegalArgumentException("Template is not for setting generation"));
+                }
+                
+                // 如果策略已经是公开的（审核通过），不允许修改
+                if (Boolean.TRUE.equals(template.getIsPublic())) {
+                    return Mono.error(new IllegalStateException("Cannot modify published strategy"));
+                }
+                
+                // 更新基本信息
+                if (request.getName() != null) {
+                    template.setName(request.getName());
+                }
+                if (request.getDescription() != null) {
+                    template.setDescription(request.getDescription());
+                }
+                if (request.getSystemPrompt() != null) {
+                    template.setSystemPrompt(request.getSystemPrompt());
+                }
+                if (request.getUserPrompt() != null) {
+                    template.setUserPrompt(request.getUserPrompt());
+                }
+                
+                // 更新配置
+                if (request.getNodeTemplates() != null || request.getExpectedRootNodes() != null || request.getMaxDepth() != null) {
+                    SettingGenerationConfig config = template.getSettingGenerationConfig();
+                    SettingGenerationConfig.SettingGenerationConfigBuilder builder = SettingGenerationConfig.builder()
+                        .strategyName(config.getStrategyName())
+                        .description(config.getDescription())
+                        .nodeTemplates(request.getNodeTemplates() != null ? request.getNodeTemplates() : config.getNodeTemplates())
+                        .expectedRootNodes(request.getExpectedRootNodes() != null ? request.getExpectedRootNodes() : config.getExpectedRootNodes())
+                        .maxDepth(request.getMaxDepth() != null ? request.getMaxDepth() : config.getMaxDepth())
+                        .rules(config.getRules())
+                        .metadata(config.getMetadata())
+                        .baseStrategyId(config.getBaseStrategyId())
+                        .isSystemStrategy(false)
+                        .createdAt(config.getCreatedAt())
+                        .updatedAt(LocalDateTime.now());
+                    
+                    template.setSettingGenerationConfig(builder.build());
+                }
+                
+                template.setUpdatedAt(LocalDateTime.now());
+                template.setVersion(template.getVersion() + 1);
+                
+                return templateRepository.save(template)
+                    .doOnSuccess(savedTemplate -> 
+                        log.info("Strategy updated successfully: {}", savedTemplate.getId()));
+            });
+    }
+    
+    /**
+     * 删除用户策略
+     */
+    public Mono<Void> deleteStrategy(String templateId, String userId) {
+        log.info("Deleting strategy: {} for user: {}", templateId, userId);
+        
+        return templateRepository.findByIdAndUserId(templateId, userId)
+            .switchIfEmpty(Mono.error(new IllegalArgumentException("Template not found or no permission")))
+            .flatMap(template -> {
+                if (!template.isSettingGenerationTemplate()) {
+                    return Mono.error(new IllegalArgumentException("Template is not for setting generation"));
+                }
+                
+                // 如果策略已经是公开的（审核通过），不允许删除
+                if (Boolean.TRUE.equals(template.getIsPublic())) {
+                    return Mono.error(new IllegalStateException("Cannot delete published strategy"));
+                }
+                
+                return templateRepository.delete(template)
+                    .doOnSuccess(v -> log.info("Strategy deleted successfully: {}", templateId));
+            });
     }
     
     private SettingGenerationConfig buildGenerationConfig(CreateStrategyRequest request) {
@@ -235,9 +338,6 @@ public class StrategyManagementService {
             .expectedRootNodes(request.getExpectedRootNodes())
             .maxDepth(request.getMaxDepth())
             .baseStrategyId(request.getBaseStrategyId())
-            .reviewStatus(ReviewStatus.builder()
-                .status(ReviewStatus.Status.DRAFT)
-                .build())
             .isSystemStrategy(false)
             .createdAt(LocalDateTime.now())
             .updatedAt(LocalDateTime.now())
@@ -271,13 +371,10 @@ public class StrategyManagementService {
             builder.description(baseConfig.getDescription());
         }
         
-        // 设置审核状态为草稿
-        builder.reviewStatus(ReviewStatus.builder()
-            .status(ReviewStatus.Status.DRAFT)
-            .build());
-        
         return builder.build();
     }
+    
+    // ==================== 静态内部类 ====================
 }
 
 // DTO类
@@ -328,6 +425,32 @@ class CreateFromBaseRequest {
     public void setUserPrompt(String userPrompt) { this.userPrompt = userPrompt; }
     public Map<String, Object> getModifications() { return modifications; }
     public void setModifications(Map<String, Object> modifications) { this.modifications = modifications; }
+}
+
+class UpdateStrategyRequest {
+    private String name;
+    private String description;
+    private String systemPrompt;
+    private String userPrompt;
+    private java.util.List<com.ainovel.server.domain.model.settinggeneration.NodeTemplateConfig> nodeTemplates;
+    private Integer expectedRootNodes;
+    private Integer maxDepth;
+    
+    // getters and setters
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+    public String getSystemPrompt() { return systemPrompt; }
+    public void setSystemPrompt(String systemPrompt) { this.systemPrompt = systemPrompt; }
+    public String getUserPrompt() { return userPrompt; }
+    public void setUserPrompt(String userPrompt) { this.userPrompt = userPrompt; }
+    public java.util.List<com.ainovel.server.domain.model.settinggeneration.NodeTemplateConfig> getNodeTemplates() { return nodeTemplates; }
+    public void setNodeTemplates(java.util.List<com.ainovel.server.domain.model.settinggeneration.NodeTemplateConfig> nodeTemplates) { this.nodeTemplates = nodeTemplates; }
+    public Integer getExpectedRootNodes() { return expectedRootNodes; }
+    public void setExpectedRootNodes(Integer expectedRootNodes) { this.expectedRootNodes = expectedRootNodes; }
+    public Integer getMaxDepth() { return maxDepth; }
+    public void setMaxDepth(Integer maxDepth) { this.maxDepth = maxDepth; }
 }
 
 class ReviewDecision {

@@ -18,3 +18,29 @@ class LoadNovelStructure extends SidebarEvent {
   @override
   List<Object> get props => [novelId];
 }
+
+// 增量应用结构更新（本地合并）
+class ApplyIncrementalStructureUpdate extends SidebarEvent {
+  final String novelId;
+  final String? actId;
+  final String? chapterId;
+  final String? chapterTitle;
+  final String? sceneId;
+
+  const ApplyIncrementalStructureUpdate({
+    required this.novelId,
+    this.actId,
+    this.chapterId,
+    this.chapterTitle,
+    this.sceneId,
+  });
+
+  @override
+  List<Object> get props => [
+    novelId,
+    actId ?? '',
+    chapterId ?? '',
+    chapterTitle ?? '',
+    sceneId ?? '',
+  ];
+}
