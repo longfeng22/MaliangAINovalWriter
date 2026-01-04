@@ -18,35 +18,39 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # 3. 设置 Flutter 环境 (关键调整)
-      # 之前的 3.19.0 (Dart 3.3.0) 无法满足 >=3.3.3
-      # 之前的 3.24.0 (Dart 3.5.x) 太新，导致代码编译失败
-      # ✅ 修正为 3.19.6 (Dart 3.3.4)，这是最完美的兼容版本
+      # 3. 设置 Flutter 环境
+      # 使用 3.19.6 (Dart 3.3.4) 以保持对项目代码的最佳兼容性
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.19.6'
           channel: 'stable'
 
-      # 4. 编译前端 Web (增加代码生成步骤)
+      # 4. 编译前端 Web (含依赖自动修复 + 代码生成)
       - name: Build Frontend (Flutter Web)
         run: |
           echo "Starting Flutter Web Build..."
           cd AINoval
           
-          # 清理旧的依赖
+          # ---------------------------------------------------------
+          # 👇【关键修复】强制降级 intl 依赖以匹配 Flutter SDK
+          # 你的 pubspec.yaml 请求 intl ^0.20.2，但 SDK 需要 0.18.1
+          # 我们在这里使用命令强制修改它，解决 "Version solving failed" 错误
+          # ---------------------------------------------------------
+          echo "Fixing dependency conflict..."
+          flutter pub add intl:^0.18.1
+          
+          # 清理并获取依赖
           flutter clean
           flutter pub get
           
-          # 👇【核心修复】运行代码生成器
-          # 项目使用了 Hive，必须生成 .g.dart 适配器文件，否则编译必挂
-          # --delete-conflicting-outputs 用于自动覆盖冲突文件
+          # 👇【代码生成】运行 build_runner
+          # 用于生成 Hive 适配器等 .g.dart 文件
           echo "Running build_runner..."
           flutter pub run build_runner build --delete-conflicting-outputs
           
           # 编译 Web 版本
-          # 使用 html 渲染器 (兼容性最强，防止 Canvaskit 在构建时内存溢出)
-          # 增加 --verbose 以便如果再次失败，我们可以看到具体的报错代码行
+          # 使用 html 渲染器以获得最佳兼容性
           flutter build web --release --web-renderer html --verbose
           
           echo "Frontend build complete."
@@ -59,14 +63,14 @@ jobs:
           # 移动编译好的前端文件
           mv AINoval/build/web deploy/dist/web
           
-          # 兼容性复制
+          # 兼容性复制 (防止部分代码引用 admin_web 路径)
           cp -r deploy/dist/web deploy/dist/admin_web
           
           # 下载后端 JAR
           echo "Downloading Backend JAR..."
           wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/v1.0.0/ainovel.jar
           
-          # 验证目录
+          # 验证目录结构
           ls -R deploy/dist/
 
       # 6. 登录 Docker Hub
