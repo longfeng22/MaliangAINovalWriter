@@ -18,7 +18,7 @@ jobs:
         run: |
           mkdir -p deploy/dist
           # 下面的链接是 v1.0.0 版本的示例，请去 Release 页面确认最新链接
-          wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/v1.0.0/ainovel.jar
+          wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/1.0.0/ainoval-server.jar
           echo "JAR file downloaded successfully."
 
       # 3. 登录 Docker Hub
