@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拉取源码
+      # 1. 拉取完整源码
       - name: Checkout code
         uses: actions/checkout@v3
 
@@ -18,52 +18,55 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # 3. 设置 Flutter 环境
-      # 保持使用 3.24.0 以解决 flutter_syntax_view 的问题
+      # 3. 设置 Flutter 环境 (关键调整)
+      # 之前的 3.19.0 (Dart 3.3.0) 无法满足 >=3.3.3
+      # 之前的 3.24.0 (Dart 3.5.x) 太新，导致代码编译失败
+      # ✅ 修正为 3.19.6 (Dart 3.3.4)，这是最完美的兼容版本
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: '3.19.6'
           channel: 'stable'
 
-      # 4. 编译前端 Web (修复依赖冲突的关键步骤)
+      # 4. 编译前端 Web (增加代码生成步骤)
       - name: Build Frontend (Flutter Web)
         run: |
           echo "Starting Flutter Web Build..."
           cd AINoval
           
-          # 👇【关键修复】强制指定 intl 版本，解决 dependencies conflict
-          echo "Fixing intl dependency conflict..."
-          flutter pub add intl:^0.19.0
-          
-          # 清理缓存并获取依赖
+          # 清理旧的依赖
           flutter clean
           flutter pub get
           
+          # 👇【核心修复】运行代码生成器
+          # 项目使用了 Hive，必须生成 .g.dart 适配器文件，否则编译必挂
+          # --delete-conflicting-outputs 用于自动覆盖冲突文件
+          echo "Running build_runner..."
+          flutter pub run build_runner build --delete-conflicting-outputs
+          
           # 编译 Web 版本
-          # 使用 auto 渲染器：电脑用 CanvasKit (高性能)，手机用 HTML (加载快，兼容iOS)
-          flutter build web --release --web-renderer auto
+          # 使用 html 渲染器 (兼容性最强，防止 Canvaskit 在构建时内存溢出)
+          # 增加 --verbose 以便如果再次失败，我们可以看到具体的报错代码行
+          flutter build web --release --web-renderer html --verbose
+          
           echo "Frontend build complete."
 
-      # 5. 组装文件结构 (匹配 Dockerfile 要求)
+      # 5. 组装文件结构
       - name: Prepare Build Directory
         run: |
-          # 创建目标目录
           mkdir -p deploy/dist
           
-          # A. 移动编译好的前端文件到 web 目录
+          # 移动编译好的前端文件
           mv AINoval/build/web deploy/dist/web
           
-          # 复制一份 admin_web 以防万一 (兼容不同 Dockerfile 写法)
+          # 兼容性复制
           cp -r deploy/dist/web deploy/dist/admin_web
           
-          # B. 下载后端 JAR 包
+          # 下载后端 JAR
           echo "Downloading Backend JAR..."
-          # 下载 v1.0.0 正式版 JAR
           wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/v1.0.0/ainovel.jar
           
-          # C. 打印目录结构验证
-          echo "Final Build Context Structure:"
+          # 验证目录
           ls -R deploy/dist/
 
       # 6. 登录 Docker Hub
@@ -80,14 +83,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      # 8. 构建并推送最终镜像
+      # 8. 构建并推送
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
           context: .
           file: deploy/open/Dockerfile
           push: true
-          # 强制指定架构为 linux/amd64 (确保群晖能跑)
           platforms: linux/amd64
-          # 镜像标签
           tags: ${{ secrets.DOCKER_USERNAME }}/maliang-writer:latest
