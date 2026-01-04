@@ -16,11 +16,8 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # -------------------------------------------------------------------
-      # ✅ 根本性修复：使用 Flutter 3.22.2
-      # 这个版本内置 Dart 3.4.3，原声支持 firebase_core 3.x 和 lucide 1.3+
-      # 不需要任何 sed 补丁，这是符合逻辑的“正规军”做法
-      # -------------------------------------------------------------------
+      # 1. 坚持使用 Flutter 3.22.2
+      # 理由：它提供了 Dart 3.4 环境，已经成功解决了 Firebase 和 Lucide 的依赖问题。
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -32,20 +29,23 @@ jobs:
           echo "Starting Flutter Web Build..."
           cd AINoval
           
-          # 1. 清理旧缓存 (确保无残留)
-          flutter clean
+          # -----------------------------------------------------------------------
+          # 👇【最后的修正】对齐 intl 版本
+          # 既然使用了 Flutter 3.22.2，我们必须遵守它对 intl 0.19.0 的强制锁定。
+          # 使用 sed 快速修正，这是解决 SDK Pinning 冲突的标准手段。
+          # -----------------------------------------------------------------------
+          echo "Aligning intl version with Flutter SDK..."
+          sed -i 's/intl: .*/intl: ^0.19.0/' pubspec.yaml
           
-          # 2. 获取依赖
-          # 因为环境匹配了，这里不再会报 Version solving failed
+          # 清理与获取依赖
+          flutter clean
           flutter pub get
           
-          # 3. 代码生成 (Hive/Freezed 必需)
+          # 代码生成 (Hive/Freezed 适配器)
           echo "Running build_runner..."
           flutter pub run build_runner build --delete-conflicting-outputs
           
-          # 4. 编译
-          # 使用 --web-renderer html 保证最大兼容性
-          # --no-tree-shake-icons 防止某些图标库在构建时报错
+          # 编译 Web
           echo "Building Web Release..."
           flutter build web --release --web-renderer html --no-tree-shake-icons --verbose
           
