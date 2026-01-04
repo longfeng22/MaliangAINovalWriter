@@ -1,69 +1,56 @@
 name: Build Perfect Maliang Image (Full UI)
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拉取完整源码
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. 设置 Java 环境
       - name: Set up JDK
         uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # 3. 设置 Flutter 环境 (3.19.6)
+      # -------------------------------------------------------------------
+      # ✅ 根本性修复：使用 Flutter 3.22.2
+      # 这个版本内置 Dart 3.4.3，原声支持 firebase_core 3.x 和 lucide 1.3+
+      # 不需要任何 sed 补丁，这是符合逻辑的“正规军”做法
+      # -------------------------------------------------------------------
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'
+          flutter-version: '3.22.2'
           channel: 'stable'
 
-      # 4. 编译前端 Web (修复依赖版本)
       - name: Build Frontend (Flutter Web)
         run: |
           echo "Starting Flutter Web Build..."
           cd AINoval
           
-          # ---------------------------------------------------------
-          # 👇【修正依赖】使用已知存在的兼容版本
-          # ---------------------------------------------------------
-          echo "Forcefully modifying pubspec.yaml..."
-          
-          # 1. 修复 intl (匹配 Flutter SDK 3.19)
-          sed -i 's/intl: .*/intl: ^0.18.1/' pubspec.yaml
-          
-          # 2. 修复 flutter_lucide
-          # 之前错误的 0.4.0 不存在，改为 1.0.0 (兼容 Dart 3.1+)
-          sed -i 's/flutter_lucide: .*/flutter_lucide: ^1.0.0/' pubspec.yaml
-          
-          # 打印修改后的文件以确认
-          cat pubspec.yaml | grep -E "intl:|flutter_lucide:"
-          
-          # ---------------------------------------------------------
-          
-          # 清理缓存
+          # 1. 清理旧缓存 (确保无残留)
           flutter clean
           
-          # 重新获取依赖
+          # 2. 获取依赖
+          # 因为环境匹配了，这里不再会报 Version solving failed
           flutter pub get
           
-          # 👇【代码生成】运行 build_runner
+          # 3. 代码生成 (Hive/Freezed 必需)
           echo "Running build_runner..."
           flutter pub run build_runner build --delete-conflicting-outputs
           
-          # 编译 Web 版本
-          flutter build web --release --web-renderer html --verbose
+          # 4. 编译
+          # 使用 --web-renderer html 保证最大兼容性
+          # --no-tree-shake-icons 防止某些图标库在构建时报错
+          echo "Building Web Release..."
+          flutter build web --release --web-renderer html --no-tree-shake-icons --verbose
           
           echo "Frontend build complete."
 
-      # 5. 组装文件结构
       - name: Prepare Build Directory
         run: |
           mkdir -p deploy/dist
@@ -73,21 +60,18 @@ jobs:
           wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/v1.0.0/ainovel.jar
           ls -R deploy/dist/
 
-      # 6. 登录 Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 7. 设置构建工具
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      # 8. 构建并推送
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
