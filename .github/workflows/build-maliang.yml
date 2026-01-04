@@ -1,62 +1,87 @@
-name: Build and Push Maliang Image
+name: Build Perfect Maliang Image (Full UI)
 
 on:
-  workflow_dispatch:  # 允许手动点击按钮触发构建
+  workflow_dispatch:  # 允许手动触发
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拉取代码
+      # 1. 拉取完整源码
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. 修复文件缺失问题 (这是本次修复的核心)
-      # 报错原因：Dockerfile 需要复制 /dist/admin_web 目录，但源码里没有。
-      # 解决方案：我们手动创建这个目录结构，并下载 JAR 包。
-      - name: Prepare Build Files
+      # 2. 设置 Java 环境 (后端需要) - 虽然我们直接下载JAR，但设置环境是个好习惯
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # 3. 设置 Flutter 环境 (前端编译必须)
+      # 根据源文件 [1]，前端是基于 Flutter Web 开发的
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0' # 使用较新的稳定版
+          channel: 'stable'
+
+      # 4. 编译前端 Web (这是解决您 "not found" 报错的根本方法)
+      # 源文件 [2] 显示前端源码在 AINoval 文件夹中
+      - name: Build Frontend (Flutter Web)
         run: |
-          # 创建后端 JAR 目录
+          echo "Starting Flutter Web Build..."
+          cd AINoval
+          flutter pub get
+          # 编译 Web 版本，渲染器使用 canvaskit (性能更好) 或 html
+          flutter build web --release --web-renderer canvaskit
+          echo "Frontend build complete."
+
+      # 5. 组装文件结构 (匹配 Dockerfile 的要求)
+      # 源文件 [3] 指出 Dockerfile 期望结构：deploy/dist/web 和 deploy/dist/ainovel-server.jar
+      - name: Prepare Build Directory
+        run: |
+          # 创建目标目录
           mkdir -p deploy/dist
           
-          # 创建前端 Web 目录 (修复 "/dist/admin_web: not found" 报错)
-          # 注意：为了让构建通过，我们创建一个空目录。
-          # 如果您需要后台管理界面 UI，请确认官方是否提供了 web.zip，
-          # 否则这里生成的镜像只有后端 API 功能（通常足够配合第三方 UI 或仅使用 API）。
-          mkdir -p deploy/dist/admin_web
-          # 创建一个占位文件，防止 Docker 因为目录为空而报错
-          echo "<html><body>Maliang Backend is Running</body></html>" > deploy/dist/admin_web/index.html
+          # A. 移动刚才编译好的前端文件到 Dockerfile 预期的 web 目录
+          # Flutter 默认输出在 AINoval/build/web
+          mv AINoval/build/web deploy/dist/web
           
-          echo "Downloading JAR from Release..."
-          # 下载后端 JAR 包 (请确保链接是最新的)
+          # ⚠️ 关键修复：针对您报错 "/dist/admin_web not found"
+          # 有些版本的 Dockerfile 可能将前端目录命名为 admin_web，我们复制一份以防万一
+          cp -r deploy/dist/web deploy/dist/admin_web
+          
+          # B. 下载后端 JAR 包
+          echo "Downloading Backend JAR..."
+          # 注意：这里使用 v1.0.0 正式版，如有更新请修改链接
           wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/v1.0.0/ainovel.jar
           
-          # 打印目录结构以供调试
-          echo "Listing deploy/dist contents:"
+          # C. 打印目录结构进行验证
+          echo "Final Build Context Structure:"
           ls -R deploy/dist/
 
-      # 3. 登录 Docker Hub (保持不变)
+      # 6. 登录 Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 4. 设置构建环境 (保持不变)
+      # 7. 设置构建工具
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      # 5. 构建并推送 (保持不变)
+      # 8. 构建并推送最终镜像
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
           context: .
           file: deploy/open/Dockerfile
           push: true
-          # 强制指定架构为 amd64，确保群晖 DSM 6.2 能运行
+          # 强制指定架构为 linux/amd64 (群晖通用)
           platforms: linux/amd64
-          # 镜像标签：自动使用您的用户名
           tags: ${{ secrets.DOCKER_USERNAME }}/maliang-writer:latest
