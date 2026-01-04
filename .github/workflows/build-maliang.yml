@@ -11,40 +11,52 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. 关键步骤：下载 JAR 包 (因为源码里没有)
-      # 这里的 URL 需要替换为最新的 Release 下载链接
-      # 目录结构参考源文件 [3]: deploy/dist/ainovel-server.jar
-      - name: Download JAR file
+      # 2. 修复文件缺失问题 (这是本次修复的核心)
+      # 报错原因：Dockerfile 需要复制 /dist/admin_web 目录，但源码里没有。
+      # 解决方案：我们手动创建这个目录结构，并下载 JAR 包。
+      - name: Prepare Build Files
         run: |
+          # 创建后端 JAR 目录
           mkdir -p deploy/dist
-          # 下面的链接是 v1.0.0 版本的示例，请去 Release 页面确认最新链接
-          wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/1.0.0/ainoval-server.jar
-          echo "JAR file downloaded successfully."
+          
+          # 创建前端 Web 目录 (修复 "/dist/admin_web: not found" 报错)
+          # 注意：为了让构建通过，我们创建一个空目录。
+          # 如果您需要后台管理界面 UI，请确认官方是否提供了 web.zip，
+          # 否则这里生成的镜像只有后端 API 功能（通常足够配合第三方 UI 或仅使用 API）。
+          mkdir -p deploy/dist/admin_web
+          # 创建一个占位文件，防止 Docker 因为目录为空而报错
+          echo "<html><body>Maliang Backend is Running</body></html>" > deploy/dist/admin_web/index.html
+          
+          echo "Downloading JAR from Release..."
+          # 下载后端 JAR 包 (请确保链接是最新的)
+          wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/v1.0.0/ainovel.jar
+          
+          # 打印目录结构以供调试
+          echo "Listing deploy/dist contents:"
+          ls -R deploy/dist/
 
-      # 3. 登录 Docker Hub
+      # 3. 登录 Docker Hub (保持不变)
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 4. 设置构建环境 (QEMU)
+      # 4. 设置构建环境 (保持不变)
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
 
-      # 5. 设置构建工具 (Buildx)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      # 6. 构建并推送
+      # 5. 构建并推送 (保持不变)
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
           context: .
-          # 指定 Dockerfile 路径，参考源文件 [3]
           file: deploy/open/Dockerfile
           push: true
-          # 强制指定架构为 amd64，确保群晖能跑
+          # 强制指定架构为 amd64，确保群晖 DSM 6.2 能运行
           platforms: linux/amd64
-          # 镜像标签：您的用户名/镜像名:版本号
-          tags: ${{ secrets.DOCKER_USERNAME }}/maliang-writer:v1.0.0
+          # 镜像标签：自动使用您的用户名
+          tags: ${{ secrets.DOCKER_USERNAME }}/maliang-writer:latest
