@@ -7,39 +7,42 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拉取完整源码
+      # 1. 拉取源码
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2. 设置 Java 环境 (后端建议配置)
+      # 2. 设置 Java 环境 (后端需要)
       - name: Set up JDK
         uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # 3. 设置 Flutter 环境 (关键修复步骤)
-      # 之前报错是因为 3.19.0 的 Dart SDK 版本太低 (3.3.0 < 3.3.3)
-      # 这里升级到 3.24.0 (包含 Dart 3.5+)，完美解决 flutter_syntax_view 兼容性问题
+      # 3. 设置 Flutter 环境
+      # 保持使用 3.24.0 以解决 flutter_syntax_view 的问题
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      # 4. 编译前端 Web
+      # 4. 编译前端 Web (修复依赖冲突的关键步骤)
       - name: Build Frontend (Flutter Web)
         run: |
           echo "Starting Flutter Web Build..."
           cd AINoval
+          
+          # 👇【关键修复】强制指定 intl 版本，解决 dependencies conflict
+          echo "Fixing intl dependency conflict..."
+          flutter pub add intl:^0.19.0
           
           # 清理缓存并获取依赖
           flutter clean
           flutter pub get
           
           # 编译 Web 版本
-          # 使用 canvaskit 渲染器以获得更好性能
-          flutter build web --release --web-renderer canvaskit
+          # 使用 auto 渲染器：电脑用 CanvasKit (高性能)，手机用 HTML (加载快，兼容iOS)
+          flutter build web --release --web-renderer auto
           echo "Frontend build complete."
 
       # 5. 组装文件结构 (匹配 Dockerfile 要求)
@@ -56,7 +59,7 @@ jobs:
           
           # B. 下载后端 JAR 包
           echo "Downloading Backend JAR..."
-          # 下载 v1.0.0 正式版 JAR [1][2]
+          # 下载 v1.0.0 正式版 JAR
           wget -O deploy/dist/ainovel-server.jar https://github.com/Deng-m1/MaliangAINovalWriter/releases/download/v1.0.0/ainovel.jar
           
           # C. 打印目录结构验证
@@ -82,10 +85,9 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          # 指定 Dockerfile 路径 [3]
           file: deploy/open/Dockerfile
           push: true
           # 强制指定架构为 linux/amd64 (确保群晖能跑)
           platforms: linux/amd64
-          # 镜像标签：自动使用您的 Docker 用户名
+          # 镜像标签
           tags: ${{ secrets.DOCKER_USERNAME }}/maliang-writer:latest
